@@ -550,6 +550,16 @@ function mapToCardPaymentMethod(raw: RawRegistrationRow): SfRecord | null {
   const id = str(raw.ID).trim();
   if (!id) return null;
 
+  // Card detail fields are blank on refund/follow-up rows (confirmed by
+  // direct data review, 2026-10-09 — only the original charge row carries
+  // CC_Last_Four/CC_Exp_Date/CC_Card_Type). Without this guard, every one of
+  // those rows would still produce a CardPaymentMethod record with
+  // Status="Active" but no actual card on it. Skip when there's nothing to
+  // identify a card by.
+  const hasCardData =
+    str(raw.CC_Card_Type) || str(raw.CC_Last_Four) || str(raw.CC_Exp_Date);
+  if (!hasCardData) return null;
+
   // Status and ProcessingMode are both required (confirmed via `sf sobject
   // describe`) and not in the workbook at all — every CardPaymentMethod
   // upload failed with REQUIRED_FIELD_MISSING before these were added.
@@ -688,7 +698,12 @@ function mapToOrder(
   if (discountAmt !== undefined) record.Discount_Amount__c = discountAmt;
 
   const discountType = str(raw.Discount_Type);
-  if (discountType) {
+  // "not" is a real, common value in this column meaning "no discount" —
+  // confirmed by direct data review, 2026-10-09 (it sits alongside STAP,
+  // 65+, SAA, etc. as one of the 22 actual Discount_Type values, present on
+  // the majority of rows). Not a typo or an invalid picklist attempt, so
+  // skip silently rather than logging it as an unmatched value every time.
+  if (discountType && discountType.toLowerCase() !== "not") {
     const resolved = resolveTaDiscountType(discountType);
     if (resolved) {
       record.TA_Discount_Type__c = resolved;
@@ -735,9 +750,35 @@ function mapToOrder(
 // before any record is sent to Salesforce — never actually uploaded.
 const TEMP_STUDENT_ID_KEY = "_studentId4D";
 
-function mapToPayment(raw: RawRegistrationRow): SfRecord | null {
+function mapToPayment(
+  raw: RawRegistrationRow,
+  logger: { warn: (m: string) => void },
+): SfRecord | null {
   const id = str(raw.ID).trim();
   if (!id) return null;
+
+  // CC_Amt == 0 — no money actually moved on this row (e.g. STAP fully
+  // covering the charge, NOFEE rows, or a drop where no refund was ever
+  // processed — confirmed by direct data review, 2026-10-09: 892 of 8,440
+  // rows). Creating a "Capture"/"Processed" Payment of $0 would be wrong
+  // regardless of how negative (refund) amounts end up being handled, so
+  // this is skipped unconditionally rather than left as an open question.
+  const amount = parseCurrency(raw.CC_Amt);
+  if (amount === undefined || amount === 0) return null;
+
+  // CC_Amt < 0 — a card refund (1,191 "Drop w/Refund" rows). Still creating
+  // this as Type="Capture" with a negative Amount for now — NOT a confirmed
+  // decision. `sf sobject describe Payment` shows this org's Type picklist
+  // only has "Sale"/"Capture" available, no "Refund" value, so there's no
+  // clean way to represent a refund here yet. See OPEN ITEMS: needs an
+  // architect answer (new Type value needed, or skip refund rows entirely).
+  if (amount < 0) {
+    logger.warn(
+      `[Registration Import][Payment] Registration ${id} has a negative CC_Amt (${amount}) ` +
+        `— refund. Payment.Type picklist has no "Refund" option in this org; ` +
+        `creating as Type="Capture" with negative Amount pending architect guidance.`,
+    );
+  }
 
   const record: SfRecord = {
     [EXT_ID_FIELD]: id,
@@ -748,6 +789,7 @@ function mapToPayment(raw: RawRegistrationRow): SfRecord | null {
     // before this was added. "External" — CONFIRMED correct by the
     // architect (2026-10-01), same as CardPaymentMethod.
     ProcessingMode: "External",
+    Amount: amount,
   };
 
   // AccountId — resolved by Salesforce during the Bulk API job via
@@ -760,9 +802,6 @@ function mapToPayment(raw: RawRegistrationRow): SfRecord | null {
     record["Account.Student_ID_4D__c"] = studentId;
     record[TEMP_STUDENT_ID_KEY] = studentId;
   }
-
-  const amount = parseCurrency(raw.CC_Amt);
-  if (amount !== undefined) record.Amount = amount;
 
   const effectiveDate = toDate(raw.CC_Transaction_ID_Date_Entered);
   if (effectiveDate) record.EffectiveDate = effectiveDate;
@@ -917,7 +956,7 @@ async function streamAndMapWindow(
         const order = mapToOrder(row, logger);
         if (order) orders.push(order);
 
-        const payment = mapToPayment(row);
+        const payment = mapToPayment(row, logger);
         if (payment) payments.push(payment);
 
         lastCompletedCursor = rowEndByte;

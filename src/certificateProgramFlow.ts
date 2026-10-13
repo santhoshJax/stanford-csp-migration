@@ -5,7 +5,7 @@
  * (each phase's parent must exist before the next phase links to it):
  *   0. Learning             — one per TSV row; upsert key: External_ID_4D__c = ID.
  *                             Type hardcoded "LearningProgram" (no space — matches
- *                             the API-name convention already used in courseFlow.ts's
+ *                             the API-name convention already used in coursesImport2Year.ts's
  *                             Learning.Type = "LearningCourse", not the doc's literal
  *                             "Learning Program" wording). IsActive is the *inverse*
  *                             of source Inactive (source stores it backwards per
@@ -27,7 +27,7 @@
  *   LearningProgram.Inactive → IsActive — not mapped per spec (Learning.IsActive
  *   IS mapped, inverted, per phase 0 above — the two objects are handled differently)
  *
- * NOTE — Learning is also written by courseFlow.ts (keyed by course base code,
+ * NOTE — Learning is also written by coursesImport2Year.ts (keyed by course base code,
  * e.g. "OWC 101"), sharing this same External_ID_4D__c field on the same object.
  * No prefix applied here: course base codes are always letter-prefixed while
  * Certificate_Program IDs are bare small integers, so the two key spaces don't
@@ -212,7 +212,7 @@ export const certificateProgramImport = flow({
         External_ID_4D__c: externalId,
         Name: name,
         IsActive: !toBool(raw.Inactive),
-        Type: "LearningProgram", // no space — matches courseFlow.ts's Type: "LearningCourse" convention
+        Type: "LearningProgram", // no space — matches coursesImport2Year.ts's Type: "LearningCourse" convention
       };
       if (description) learning.Description = description;
       learningRecords.push(learning);

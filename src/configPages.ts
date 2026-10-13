@@ -286,12 +286,15 @@ export const configPages = {
         dataType: "string",
         description:
           "Google Drive file ID of the TSV that contains Alert records. " +
-          "Only rows with Created_Date >= 2024-10-06 (2-year window) are " +
-          "migrated. Migrates RecordAlert records; WhatId resolves to a " +
-          "PersonAccount via Student_ID, Associate_ID, or Instructor_ID, so " +
-          "Student/Associate/Instructor flows must run first. Course_RecID " +
-          "resolves to a CourseOffering lookup via the 'Course File ID' " +
-          "config var (Course Configuration page), so the Course flow must " +
+          "Only rows with Created_Date >= 2024-03-29 (2-year window, " +
+          "anchored to the latest Created_Date in the source data, not the " +
+          "run date) are migrated. Migrates RecordAlert records; " +
+          "ParentId/WhatId resolve to a PersonAccount's Account/" +
+          "PersonContactId via Student_ID, Associate_ID, or Instructor_ID, " +
+          "so Student/Associate/Instructor flows must run first. " +
+          "Course_RecID resolves to a CourseOffering/LearningCourse lookup " +
+          "via the 'Course File ID' config var (Course Configuration page), " +
+          "so the Course flow must " +
           "also run first.",
       }),
       "Account Login File ID": configVar({

@@ -755,6 +755,18 @@ export function toDate(v: string | undefined): string {
   // Already YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
 
+  // Excel serial date (e.g. "46174" = 2026-06-01) — some source date columns
+  // mix real text dates with raw Excel serials. A bare 5-digit number isn't
+  // valid in any other date format this function accepts, so it's safe to
+  // special-case: without this, the native Date fallback below misreads it
+  // as a literal 5-digit year (new Date("46174") -> year 46173) instead of
+  // the real calendar date. Day 0 = 1899-12-30 (Excel's leap-year bug epoch).
+  if (/^\d{5}$/.test(s)) {
+    const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
+    const parsed = new Date(EXCEL_EPOCH_MS + Number(s) * 86_400_000);
+    return isNaN(parsed.getTime()) ? "" : parsed.toISOString().slice(0, 10);
+  }
+
   // Fallback to native Date
   const parsed = new Date(s);
   return isNaN(parsed.getTime()) ? "" : parsed.toISOString().slice(0, 10);
@@ -840,8 +852,7 @@ export function getAccessToken(conn: Connection): string {
 export function getSfInstanceUrl(sfConn: Connection): string {
   const url = (
     ((sfConn.token as Record<string, unknown> | undefined)?.instance_url as
-      | string
-      | undefined) ?? ""
+      string | undefined) ?? ""
   ).replace(/\/$/, "");
   if (!url)
     throw new Error(
@@ -987,6 +998,9 @@ export interface EmailMatchAccount {
   Associate_ID_4D__c: string;
   Instructor_ID_4D__c: string;
   University_ID__pc: string;
+  /** Self-reported cross-reference ID (Number field in Salesforce) — distinct
+   * from Student_ID_4D__c, the real upsert key. Null when unset. */
+  Student_ID__pc: number | null;
 }
 
 /**
@@ -1010,7 +1024,7 @@ export async function queryAccountsByEmail(
     const chunk = emails.slice(i, i + CHUNK_SIZE);
     const inClause = chunk.map((e) => `'${e.replace(/'/g, "\\'")}'`).join(",");
     const soql =
-      `SELECT Id, PersonEmail, FirstName, LastName, Student_ID_4D__c, Associate_ID_4D__c, Instructor_ID_4D__c, University_ID__pc ` +
+      `SELECT Id, PersonEmail, FirstName, LastName, Student_ID_4D__c, Associate_ID_4D__c, Instructor_ID_4D__c, University_ID__pc, Student_ID__pc ` +
       `FROM Account WHERE IsPersonAccount = true AND PersonEmail IN (${inClause})`;
     const { data } = await axios.get(
       `${instanceUrl}/services/data/${SF_API_VERSION}/query`,

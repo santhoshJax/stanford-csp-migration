@@ -14,9 +14,9 @@ import instructorFlows from "./instructorFlow";
 import associateFlows from "./associateFlow";
 import departmentFlows from "./departmentFlow";
 import quarterFlows from "./quarterFlow";
-import courseFlows from "./courseFlow";
-import course32Flows from "./course32fieldsFlow";
-import courseFilterByQuarter from "./courseFilterByQuarter";
+import coursesImport2YearFlows from "./coursesImport2Year";
+import coursesImport5YearFlows from "./coursesImport5Year";
+import coursesImportAllTimeFlows from "./coursesImportAllTime";
 import tuitionRuleFlows from "./tuitionruleFlow";
 import unitRuleFlows from "./unitRuleFlow";
 import courseAssociateInstructorFlows from "./courseAssociateInstructorFlow";
@@ -25,6 +25,7 @@ import courseTimecardFlows from "./courseTimecardFlow";
 import courseworkFlows from "./courseworkFlow";
 import registrationFlows from "./registrationFlow";
 import enrollmentFlows from "./enrollmentFlow";
+import enrollmentsImportAllTimeFlows from "./enrollmentsImportAllTime";
 import enrollmentWaiverFlows from "./enrollmentWaiverFlow";
 import transcriptRequestFlows from "./transcriptRequestFlow";
 import textbookFlows from "./textbookFlow";
@@ -46,30 +47,31 @@ export default integration({
   iconPath: "icon.png",
   documentation,
   flows: [
-    ...studentFlows,               // 1. Student
-    ...instructorFlows,            // 2. Instructor
-    ...associateFlows,             // 3. Associate
-    ...quarterFlows,               // 4. Quarter
-    ...departmentFlows,            // 5. Department
-    ...unitRuleFlows,              // 6. Unit Rule
-    ...tuitionRuleFlows,           // 7. Tuition Rule
-    ...courseFlows,                // 8. Course
+    ...studentFlows, // 1. Student
+    ...instructorFlows, // 2. Instructor
+    ...associateFlows, // 3. Associate
+    ...quarterFlows, // 4. Quarter
+    ...departmentFlows, // 5. Department
+    ...unitRuleFlows, // 6. Unit Rule
+    ...tuitionRuleFlows, // 7. Tuition Rule
+    ...coursesImport2YearFlows, // 8. Course Import - 2 Year
     ...courseAssociateInstructorFlows, // 9. Course Associate Instructor
-    ...courseOtherCostFlows,       // 10. Course Other Cost
-    ...courseTimecardFlows,        // 11. Course Timecard
-    ...enrollmentFlows,            // 12. Enrollment
-    ...enrollmentWaiverFlows,      // 13. Enrollment Waiver
-    ...transcriptRequestFlows,     // 14. Transcript Request
-    ...courseworkFlows,            // 15. Coursework
-    ...textbookFlows,              // 16. Textbook
-    ...certificateProgramFlows,    // 17. Certificate Program
-    ...certificateCourseFlows,     // 18. Certificate Course
-    ...studentCertificateFlows,    // 19. Student Certificate
-    ...registrationFlows,          // 20. Registration
-    ...alertFlows,                 // 21. Alert
-    ...accountLoginFlows,          // 22. Account Login
-    ...course32Flows,              // 23. Course 32 Fields
-    ...courseFilterByQuarter,      // 24. Course Filter By Quarter
+    ...courseOtherCostFlows, // 10. Course Other Cost
+    ...courseTimecardFlows, // 11. Course Timecard
+    ...enrollmentFlows, // 12. Enrollment
+    ...enrollmentWaiverFlows, // 13. Enrollment Waiver
+    ...transcriptRequestFlows, // 14. Transcript Request
+    ...courseworkFlows, // 15. Coursework
+    ...textbookFlows, // 16. Textbook
+    ...certificateProgramFlows, // 17. Certificate Program
+    ...certificateCourseFlows, // 18. Certificate Course
+    ...studentCertificateFlows, // 19. Student Certificate
+    ...registrationFlows, // 20. Registration
+    ...alertFlows, // 21. Alert
+    ...accountLoginFlows, // 22. Account Login
+    ...coursesImport5YearFlows, // 23. Course Import - 5 Year
+    ...coursesImportAllTimeFlows, // 24. Course Import - All
+    ...enrollmentsImportAllTimeFlows, // 25. Enrollment Import All Time
   ],
   configPages,
   componentRegistry,

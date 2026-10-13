@@ -198,7 +198,7 @@ export const certificateCourseImport = flow({
     // Need both Id (for Course_Code_4D__c + LearningAchievement.Learning_Course__c)
     // and Name (for requirement Name + achievement Name).
     // NOT "Code" — confirmed via a real query (Sep 2026) that LearningCourse has
-    // no such field; CourseNumber is the real one (matches courseFlow.ts, which
+    // no such field; CourseNumber is the real one (matches coursesImport2Year.ts, which
     // already writes CourseNumber = baseCode with all whitespace stripped, e.g.
     // "OWC 101" → "OWC101" — every real CourseNumber value sampled is exactly
     // this shape: letters immediately followed by digits, no spaces).
@@ -304,11 +304,11 @@ export const certificateCourseImport = flow({
       // "OWC101" (architect confirmed, Sep 2026):
       //   1. Strip "@" — confirmed junk, safe to discard.
       //   2. Strip the trailing section letter ("N") via the same
-      //      stripSectionSuffix() courseFlow.ts already uses for this exact
+      //      stripSectionSuffix() coursesImport2Year.ts already uses for this exact
       //      pattern — it saves that letter separately on
       //      CourseOffering.SectionNumber there, but this flow only needs to
       //      match the base course, not preserve the section.
-      //   3. Strip remaining whitespace, matching how courseFlow.ts writes
+      //   3. Strip remaining whitespace, matching how coursesImport2Year.ts writes
       //      CourseNumber itself ("OWC 101" → "OWC101").
       const courseCodeRaw = str(raw.Course_Code).trim();
       const courseCodeNoAt = courseCodeRaw.replace(/@/g, "").trim();

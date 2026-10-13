@@ -45,7 +45,7 @@ const YEARS_BACK = 2;
 
 function buildValidQuarters(anchor: string, yearsBack: number): Set<string> {
   const seasons = ["wi", "sp", "su", "fa"];
-  const m = anchor.toLowerCase().match(/^([a-z]+)(\d+)$/);
+  const m = /^([a-z]+)(\d+)$/.exec(anchor.toLowerCase());
   if (!m) throw new Error(`Invalid ANCHOR_QUARTER: "${anchor}"`);
   const anchorYear = parseInt(m[2], 10);
   const set = new Set<string>();
@@ -452,7 +452,7 @@ async function loadCourseAssociates(
     headers: { Authorization: `Bearer ${token}` },
     responseType: "text",
   });
-  const content = data.replace(/^﻿/, "");
+  const content = data.charCodeAt(0) === 0xfeff ? data.slice(1) : data;
   const { data: rows } = papaParse<CourseAssociateRow>(content, {
     header: true,
     skipEmptyLines: true,
@@ -491,7 +491,7 @@ async function loadCourseSubmissions(
     headers: { Authorization: `Bearer ${token}` },
     responseType: "text",
   });
-  const content = data.replace(/^﻿/, "");
+  const content = data.charCodeAt(0) === 0xfeff ? data.slice(1) : data;
   const { data: rows } = papaParse<CourseSubmissionRow>(content, {
     header: true,
     skipEmptyLines: true,
@@ -527,7 +527,7 @@ async function loadCourseDepartments(
     headers: { Authorization: `Bearer ${token}` },
     responseType: "text",
   });
-  const content = data.replace(/^﻿/, "");
+  const content = data.charCodeAt(0) === 0xfeff ? data.slice(1) : data;
   const { data: rows } = papaParse<CourseDepartmentRow>(content, {
     header: true,
     skipEmptyLines: true,
@@ -552,7 +552,7 @@ function buildDeptByBaseCourseMap(
 
   const byBase = new Map<
     string,
-    Array<{ quarterNum: number; row: CourseDepartmentRow }>
+    { quarterNum: number; row: CourseDepartmentRow }[]
   >();
 
   for (const [courseId, rows] of deptMap) {
@@ -922,8 +922,8 @@ function sfErrMsg(err: unknown): string {
 
 // ── Flow ──────────────────────────────────────────────────────────────────────
 
-export const courseImport = flow({
-  name: "Course Import",
+export const coursesImport2Year = flow({
+  name: "Course Import - 2 Year",
   stableKey: "c1d2e3f4-1a2b-4c3d-8e4f-aa11bb22cc33",
   description:
     "Streams the course TSV from Google Drive one window at a time and upserts " +
@@ -1261,7 +1261,7 @@ export const courseImport = flow({
     const errorRows: ErrorRow[] = [];
 
     // Post-offering tasks collected during the row loop, fired all at once after.
-    const postOfferingTasks: Array<() => Promise<void>> = [];
+    const postOfferingTasks: (() => Promise<void>)[] = [];
 
     // ── Row loop ──────────────────────────────────────────────────────────────
     for (let i = 0; i < rows.length; i++) {
@@ -2217,7 +2217,7 @@ export const courseImport = flow({
         });
 
         const sheet = await createPerObjectResultsSheet({
-          flowName: "Course Import",
+          flowName: "Course Import - 2 Year",
           objects: objectData,
           accessToken: gdToken,
           folderId: failedFolderId,
@@ -2255,7 +2255,7 @@ export const courseImport = flow({
         context as unknown as {
           invokeFlow(name: string, payload: unknown): Promise<void>;
         }
-      ).invokeFlow("Course Import", {
+      ).invokeFlow("Course Import - 2 Year", {
         startRow: nextStartRow,
         courseSheetId: nextSheetId,
       });
@@ -2267,4 +2267,4 @@ export const courseImport = flow({
   },
 });
 
-export default [courseImport];
+export default [coursesImport2Year];

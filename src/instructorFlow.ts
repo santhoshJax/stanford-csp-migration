@@ -229,6 +229,8 @@ const MERGE_OVERLAY_FIELDS: (keyof SalesforceInstructorAccount)[] = [
   "Suffix",
   "SUNet_Id__pc",
   "Username_4D__pc",
+  "First_Quarter__pc",
+  "Most_Recent_Quarter__pc",
 ];
 
 // ── PersonEmployment shape ─────────────────────────────────────────────────────
@@ -348,7 +350,11 @@ function mapInstructorToAccount(
   (record as Record<string, unknown>).Student_ID__pc =
     !isNaN(studentId) && studentId > 0 ? studentId : "";
   // setBool("Out_Of_State_Fee__pc", raw.Out_Of_State_Fee); // moved to PersonEmployment
-  setBool("Alert_Flag__pc", raw.Alert_Flag);
+  // Alert_Flag — client notes (Sep 2026): "Not needed" under "Instructor
+  // Additional Fields (assuming no matching Student record exists)" — i.e.
+  // not needed on a fresh/no-match insert. Already excluded from
+  // MERGE_OVERLAY_FIELDS, so this also keeps it out of the matched path.
+  // setBool("Alert_Flag__pc", raw.Alert_Flag);
   setStr("University_ID__pc", raw.University_ID);
   // setStr("Legal_Name__pc", raw.Legal_Name); // moved to PersonEmployment
   setStr("First_Quarter__pc", raw.First_Quarter);

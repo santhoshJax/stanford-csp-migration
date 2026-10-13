@@ -290,20 +290,27 @@ function mapToAccount(
   if (universityId) record.University_ID__pc = universityId;
   // setStr("Legal_Name__pc", raw.Legal_Name); // moved to PersonEmployment
 
-  const firstQ = str(raw.First_Quarter).replace(/\.0$/, "");
-  if (firstQ) record.First_Quarter__pc = firstQ;
-  const mostRecentQ = str(raw.Most_Recent_Quarter).replace(/\.0$/, "");
-  if (mostRecentQ) record.Most_Recent_Quarter__pc = mostRecentQ;
+  // First_Quarter, Most_Recent_Quarter, Course_Solicitations, Alert_Flag,
+  // Total_Courses — client notes (Sep 2026): "Not needed" under "Associate
+  // Additional Fields (assuming no matching Student/Instructor record
+  // exists)" — i.e. not needed on a fresh/no-match insert. Commented out of
+  // the fresh-insert mapping for now rather than removed outright, since
+  // whether they're needed on the MATCHED path (MERGE_OVERLAY_FIELDS) is
+  // still pending confirmation with the architect.
+  // const firstQ = str(raw.First_Quarter).replace(/\.0$/, "");
+  // if (firstQ) record.First_Quarter__pc = firstQ;
+  // const mostRecentQ = str(raw.Most_Recent_Quarter).replace(/\.0$/, "");
+  // if (mostRecentQ) record.Most_Recent_Quarter__pc = mostRecentQ;
 
   // if (hasValue(raw.Out_Of_State_Fee)) // moved to PersonEmployment
   //   record.Out_Of_State_Fee__pc = toBool(raw.Out_Of_State_Fee);
-  if (hasValue(raw.Course_Solicitations))
-    record.Course_Solicitations__pc = toBool(raw.Course_Solicitations);
-  if (hasValue(raw.Alert_Flag)) record.Alert_Flag__pc = toBool(raw.Alert_Flag);
+  // if (hasValue(raw.Course_Solicitations))
+  //   record.Course_Solicitations__pc = toBool(raw.Course_Solicitations);
+  // if (hasValue(raw.Alert_Flag)) record.Alert_Flag__pc = toBool(raw.Alert_Flag);
 
-  const totalCourses = parseInt(str(raw.Total_Courses), 10);
-  if (!isNaN(totalCourses) && totalCourses !== 0)
-    record.Total_Courses__pc = totalCourses;
+  // const totalCourses = parseInt(str(raw.Total_Courses), 10);
+  // if (!isNaN(totalCourses) && totalCourses !== 0)
+  //   record.Total_Courses__pc = totalCourses;
 
   return record;
 }
@@ -870,6 +877,20 @@ export const associateImport = flow({
             ? { University_ID__pc: normalizedAssociateUniversityId }
             : {};
 
+        // Student_ID__pc backfill (Sep 2026 architect update, 9/18): this is
+        // the self-reported cross-reference field, distinct from
+        // Student_ID_4D__c. Student's own flow never sets it (no source
+        // column for it there), so it starts blank on every Student account.
+        // Only fill it from this Associate row's own value when the matched
+        // account doesn't already have one — never overwrite an existing
+        // value. Unlike Instructor, which still always skips this field on
+        // a match (unchanged, older rule) — this fill-if-blank rule is
+        // Associate-specific per the 9/18 update.
+        const studentIdFill =
+          !sfRecord.Student_ID__pc && account.Student_ID__pc
+            ? { Student_ID__pc: account.Student_ID__pc }
+            : {};
+
         if (sfRecord.Student_ID_4D__c) {
           // Matched to existing Student — add Associate_ID_4D__c, plus the
           // overlay fields UNLESS an Instructor match also exists (in which
@@ -881,6 +902,7 @@ export const associateImport = flow({
             Associate_ID_4D__pc: account.Associate_ID_4D__pc,
             ...overlay,
             ...universityIdFill,
+            ...studentIdFill,
           } as Record<string, unknown>);
         } else if (sfRecord.Instructor_ID_4D__c) {
           // Matched to existing Instructor, no Student — add only
@@ -893,6 +915,7 @@ export const associateImport = flow({
             Associate_ID_4D__c: account.Associate_ID_4D__c,
             Associate_ID_4D__pc: account.Associate_ID_4D__pc,
             ...universityIdFill,
+            ...studentIdFill,
           } as Record<string, unknown>);
         } else {
           // Matched to existing associate OR no typed ID yet — this is the

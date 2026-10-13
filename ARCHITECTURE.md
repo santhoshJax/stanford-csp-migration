@@ -413,7 +413,7 @@ Same pattern as instructor. Only created if `Salary_Category` has a value.
 
 ### 4.6 Course Flow
 
-**File:** `src/courseFlow.ts`  
+**File:** `src/coursesImport2Year.ts`  
 **Source:** Course Google Sheet (TSV) — streamed in 20–100 row windows (REST API, row by row)  
 **Purpose:** Most complex flow. Creates the full course catalog: Learning → LearningCourse → CourseOffering → Schedule, Departments, Participants.
 

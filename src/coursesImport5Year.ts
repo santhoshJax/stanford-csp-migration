@@ -1,11 +1,11 @@
 /**
  * Stanford CSP Migration – Course 32-Field Import flow (Tier 2).
  *
- * Same processing as the Course Import flow (courseFlow.ts), but maps only the
+ * Same processing as the Course Import flow (coursesImport2Year.ts), but maps only the
  * 32 Tier 2 course fields and covers the three academic years before Tier 1.
  *
  * Course data tiers (Julia / architect, Sep 2026):
- *   Tier 1 – all fields      – AY 2024-25, 2025-26 (courseFlow.ts)
+ *   Tier 1 – all fields      – AY 2024-25, 2025-26 (coursesImport2Year.ts)
  *   Tier 2 – 32 fields       – AY 2021-22, 2022-23, 2023-24 (this flow)
  *   Tier 3 – minimal fields  – AY 2020-21 and older (not built yet)
  * The number in a 4D quarter code is the academic year (starts in Fall), so
@@ -55,7 +55,7 @@ const TEST_MAX_ROWS = 100;
 const SF_API = "v60.0";
 
 // ── Quarter filter ────────────────────────────────────────────────────────────
-// Tier 2 = the 3 academic years before Tier 1 (courseFlow: wi25, 2 years → 24–25).
+// Tier 2 = the 3 academic years before Tier 1 (coursesImport2Year: wi25, 2 years → 24–25).
 // ANCHOR_QUARTER="wi23", YEARS_BACK=3 → fa/wi/sp/su 21, 22, 23
 const ANCHOR_QUARTER = "wi23";
 const YEARS_BACK = 3;
@@ -195,7 +195,7 @@ function normaliseInstructorPrefs(v: string | undefined): string | null {
 /**
  * Splits a raw display name into (first, last) parts for matching against
  * Salesforce's separate FirstName/LastName fields — ignoring any middle
- * name/initial. See courseFlow.ts for the full rationale.
+ * name/initial. See coursesImport2Year.ts for the full rationale.
  */
 function splitName(raw: string): { first: string; last: string } | null {
   const s = raw.trim();
@@ -565,8 +565,8 @@ function sfErrMsg(err: unknown): string {
 
 // ── Flow ──────────────────────────────────────────────────────────────────────
 
-export const course32fieldsImport = flow({
-  name: "course32fields",
+export const coursesImport5Year = flow({
+  name: "Course Import - 5 Year",
   stableKey: "d4e5f6a7-2b3c-4d5e-9f6a-bb22cc33dd44",
   description:
     "Tier 2 course import: streams the course TSV, keeps academic years 2021-22 " +
@@ -1191,7 +1191,7 @@ export const course32fieldsImport = flow({
                   continue;
                 }
                 // Null/placeholder Speaking_Date = Course Support Specialist,
-                // real date = Guest Speaker (same rule as courseFlow.ts).
+                // real date = Guest Speaker (same rule as coursesImport2Year.ts).
                 const affiliation =
                   parseCourseDate(jRow.Speaking_Date) !== null
                     ? "Guest Speaker"
@@ -1407,7 +1407,7 @@ export const course32fieldsImport = flow({
         });
 
         const sheet = await createPerObjectResultsSheet({
-          flowName: "course32fields",
+          flowName: "Course Import - 5 Year",
           objects: objectData,
           accessToken: gdToken,
           folderId: failedFolderId,
@@ -1442,7 +1442,7 @@ export const course32fieldsImport = flow({
         context as unknown as {
           invokeFlow(name: string, payload: unknown): Promise<void>;
         }
-      ).invokeFlow("course32fields", {
+      ).invokeFlow("Course Import - 5 Year", {
         startRow: nextStartRow,
         courseSheetId: nextSheetId,
       });
@@ -1454,4 +1454,4 @@ export const course32fieldsImport = flow({
   },
 });
 
-export default [course32fieldsImport];
+export default [coursesImport5Year];
