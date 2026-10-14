@@ -11,7 +11,9 @@
  * implements.
  *
  * Field mapping (source → target):
- *   Student_ID  → User.FederationIdentifier   (Direct Map)
+ *   Student_ID  → User.Federation_Identifier__c (Direct Map — custom field per
+ *                                               updated mapping doc; NOT the
+ *                                               standard User.FederationIdentifier)
  *   Student_ID  → User.ContactId              (Conversion — lookup Contact via
  *                                               the Account matching Student_ID_4D__c)
  *   Inactive    → User.IsActive               (see note below)
@@ -46,8 +48,11 @@
  * flag already encodes it.
  *
  * PREREQUISITES (Salesforce setup, not covered by this flow):
- *   - User.FederationIdentifier must be usable as an upsert key (Salesforce
- *     natively supports upsert-by-FederationIdentifier for User).
+ *   - A custom field User.Federation_Identifier__c must exist and be marked
+ *     as an External ID in Salesforce Setup, so Bulk API 2.0 can upsert on it
+ *     (same convention as Student_ID_4D__c / Instructor_ID_4D__c / Associate_ID_4D__c
+ *     elsewhere in this project). This is NOT the standard User.FederationIdentifier
+ *     field — the mapping doc was corrected to point at the custom field instead.
  *   - The Profile named in the "Account Login Profile Name" config var
  *     (default "Student_Profile" — DEFAULT_PROFILE_NAME below) must exist
  *     in this org under that exact name. Confirmed failing in the "Student_Profile"
@@ -72,6 +77,12 @@ import { createResultsSheetFromContacts } from "./reportResults";
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const MAX_ROWS = 2000; // rows per execution window
+
+// Sandbox testing only. When TEST_MODE is true, the flow processes at most
+// TEST_RECORD_LIMIT records total and stops — no recursion through the rest
+// of the file. Set TEST_MODE back to false before running the full file.
+const TEST_MODE = true;
+const TEST_RECORD_LIMIT = 2;
 
 const DEFAULT_PROFILE_NAME = "Student_Profile";
 const DEFAULT_LOCALE_SID_KEY = "en_US";
@@ -100,7 +111,7 @@ interface PendingLoginRow {
 // ── Salesforce User shape ─────────────────────────────────────────────────────
 
 interface SalesforceUserRecord {
-  FederationIdentifier: string;
+  Federation_Identifier__c: string;
   ContactId: string;
   IsActive: boolean;
   FirstName?: string;
@@ -345,7 +356,7 @@ export const accountLoginImport = flow({
   description:
     "Streams the Account Login TSV from Google Drive, resolves each Student_ID " +
     "against the Account created by Student Import, and upserts Salesforce User " +
-    "records (FederationIdentifier as the upsert key) via Bulk API 2.0. Must run " +
+    "records (Federation_Identifier__c as the upsert key) via Bulk API 2.0. Must run " +
     "after Student Import. Recurses until the full file is processed.",
 
   onTrigger: async (_context, payload) => {
@@ -397,21 +408,33 @@ export const accountLoginImport = flow({
     logger.info(
       `[Account Login Import] Streaming from byte ${byteOffset} of Drive file ${fileId}…`,
     );
-    const {
-      rows,
-      hasMore,
-      nextByteOffset,
-      parsedHeaders,
-      firstId,
-      lastId,
-      skippedCount,
-    } = await streamAndParseTsv(
+    const parsed = await streamAndParseTsv(
       fileId,
       gdToken,
       byteOffset,
       MAX_ROWS,
       knownHeaders,
     );
+    const { nextByteOffset, parsedHeaders, firstId, lastId, skippedCount } =
+      parsed;
+    let rows = parsed.rows;
+    let hasMore = parsed.hasMore;
+
+    if (TEST_MODE && rows.length > TEST_RECORD_LIMIT) {
+      logger.info(
+        `[Account Login Import] TEST MODE — TEST_RECORD_LIMIT is ${TEST_RECORD_LIMIT}; ` +
+          `trimming ${rows.length} parsed rows down to the first ${TEST_RECORD_LIMIT} and skipping recursion.`,
+      );
+      rows = rows.slice(0, TEST_RECORD_LIMIT);
+      hasMore = false;
+    } else if (TEST_MODE) {
+      logger.info(
+        `[Account Login Import] TEST MODE — TEST_RECORD_LIMIT is ${TEST_RECORD_LIMIT}; ` +
+          `this window parsed ${rows.length} row(s), at or under the limit, so no recursion either way.`,
+      );
+      hasMore = false;
+    }
+
     logger.info(
       `[Account Login Import] Parsed ${rows.length} rows` +
         ` (hasMore=${hasMore}, nextByte=${nextByteOffset}, skipped=${skippedCount},` +
@@ -434,20 +457,45 @@ export const accountLoginImport = flow({
         );
       }
 
-      // ── 5. Resolve Student_ID → Contact/Email/Name via the migrated Account ─
-      const studentIds = [...new Set(rows.map((r) => r.studentId))];
+      // ── 5. Collapse duplicate Student_ID rows within this window ───────────
+      // The source table can carry more than one Account Login row per
+      // Student_ID (e.g. a stale row plus the live one). Username/Email/
+      // FirstName/LastName/Alias all come from the matched Contact — identical
+      // regardless of which row triggered the lookup — so IsActive is the only
+      // field that actually varies between duplicate rows. Rule (confirmed
+      // against real data, 2026-10-13): if ANY row for a Student_ID has
+      // Inactive = FALSE, the person is active — that's the one live record;
+      // Inactive = TRUE rows are the stale duplicates. Collapsing here also
+      // avoids sending more than one row per external ID in the same Bulk API
+      // batch, which Salesforce doesn't guarantee a deterministic result for.
+      const isActiveByStudentId = new Map<string, boolean>();
+      for (const row of rows) {
+        isActiveByStudentId.set(
+          row.studentId,
+          (isActiveByStudentId.get(row.studentId) ?? false) || row.isActive,
+        );
+      }
+      const dedupedStudentIds = [...isActiveByStudentId.keys()];
+      const duplicateRowCount = rows.length - dedupedStudentIds.length;
+      if (duplicateRowCount > 0) {
+        logger.info(
+          `[Account Login Import] ${duplicateRowCount} duplicate Student_ID row(s) collapsed in this window.`,
+        );
+      }
+
+      // ── 6. Resolve Student_ID → Contact/Email/Name via the migrated Account ─
       const contactsByStudentId = await resolveContactsByStudentId(
         sfInstanceUrl,
         sfToken,
-        studentIds,
+        dedupedStudentIds,
       );
 
       let droppedNoContact = 0;
       let droppedNoEmail = 0;
       const records: SalesforceUserRecord[] = [];
 
-      for (const row of rows) {
-        const contact = contactsByStudentId.get(row.studentId);
+      for (const studentId of dedupedStudentIds) {
+        const contact = contactsByStudentId.get(studentId);
         if (!contact) {
           droppedNoContact++;
           continue;
@@ -460,9 +508,9 @@ export const accountLoginImport = flow({
         }
 
         records.push({
-          FederationIdentifier: row.studentId,
+          Federation_Identifier__c: studentId,
           ContactId: contact.contactId,
-          IsActive: row.isActive,
+          IsActive: isActiveByStudentId.get(studentId) ?? false,
           FirstName: contact.firstName || undefined,
           LastName: contact.lastName,
           Alias: buildAlias(contact.firstName, contact.lastName),
@@ -493,7 +541,7 @@ export const accountLoginImport = flow({
           sfInstanceUrl,
           sfToken,
           "User",
-          "FederationIdentifier",
+          "Federation_Identifier__c",
           records as unknown as Record<string, unknown>[],
           logger,
           "[Account Login Import]",
@@ -504,7 +552,7 @@ export const accountLoginImport = flow({
             flowName: "Account Login Import",
             objectName: "User",
             contacts: records as unknown as Record<string, unknown>[],
-            externalIdField: "FederationIdentifier",
+            externalIdField: "Federation_Identifier__c",
             failedExternalIds: jobResult.failedExternalIds,
             successfulCsv: jobResult.successfulCsv,
             failedCsv: jobResult.failedCsv,

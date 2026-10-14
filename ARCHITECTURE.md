@@ -298,11 +298,11 @@ Upsert key: `Student_ID_4D__c`
 #### Objects Created
 
 **User**
-Upsert key: `FederationIdentifier`
+Upsert key: `Federation_Identifier__c` (custom field — not the standard `FederationIdentifier`; corrected in the v3 mapping doc)
 
 | Field | Source | Notes |
 |---|---|---|
-| `FederationIdentifier` | `Student_ID` | Direct map |
+| `Federation_Identifier__c` | `Student_ID` | Direct map |
 | `ContactId` | `Student_ID` | Conversion — lookup via `Account.Student_ID_4D__c` → `PersonContactId` |
 | `IsActive` | `Inactive` | **Inverted** — see note below |
 | `Username`, `Email` | — | Conversion — the matched Contact's email (not the source `Username` column) |
@@ -320,7 +320,7 @@ Upsert key: `FederationIdentifier`
 
 **Open item — Active/Inactive semantics:** the mapping doc calls this "Direct Map" from source `Inactive` to target `Active`, noting "records are only marked as inactive if they are duplicate." A literal same-value copy would leave every normal (non-duplicate) record `IsActive = false`, so this flow inverts the value (`IsActive = !Inactive`) to match the note's evident intent. **Needs architect confirmation before go-live.**
 
-**Prerequisites:** a Profile named `Student_Profile` must exist in the org; `User.FederationIdentifier` is used as the Bulk API 2.0 upsert key (Salesforce natively supports this for User).
+**Prerequisites:** a Profile named `Student_Profile` must exist in the org (configurable via the "Account Login Profile Name" config var); a custom field `User.Federation_Identifier__c` must exist and be marked as an External ID in Salesforce Setup, so Bulk API 2.0 can upsert on it (same convention as `Student_ID_4D__c` / `Instructor_ID_4D__c` / `Associate_ID_4D__c` elsewhere in this project).
 
 ---
 
@@ -840,7 +840,7 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | `CDEPT-{id}` | Course_Department__c | `CDEPT-3001` |
 | `ENR-{id}` | CourseOfferingParticipant (student enrollment) | `ENR-80001` |
 | `NOISBN_{slug}` | Textbook__c (no ISBN) | `NOISBN_intro-to-python_smith` |
-| (raw 4D `Student_ID`) | User (`FederationIdentifier` — not `External_ID_4D__c`) | Account Login |
+| (raw 4D `Student_ID`) | User (`Federation_Identifier__c` — not `External_ID_4D__c`) | Account Login |
 | (raw 4D ID) | All other objects | `"6001"` |
 
 ---
@@ -860,9 +860,11 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | 9 | **Legacy_Enrollment_Status__c** (drop/refund detail preservation) | Division of responsibility between Holly/Amy TBD |
 | 10 | **Enrollment `TA_Discount__c`** | Stored as negative value per architect decision; confirm with business |
 | 11 | **Account Login — `Inactive`→`Active` mapping** | ~~Doc says "Direct Map" but names are semantic opposites~~ **Resolved:** confirmed with architect — source `Inactive` flag IS the duplicate marker (4D only sets it true for duplicates), so `IsActive = !Inactive` is correct; no separate dedup logic needed |
-| 12 | **Account Login — `Student_Profile` Profile must exist** | Flow throws if not found; confirm exact Profile name/API value with org admin |
-| 13 | **Account Login — scope of `Instructor_ID`/`Associate_ID` rows** | Source table carries these columns (marked "Do Not Map") suggesting non-student logins may exist; current flow only processes rows with a usable `Student_ID` and silently skips the rest — confirm instructor/associate logins are out of scope for this table |
-| 14 | **Account Login — duplicate `Student_ID` rows** | If more than one Account Login row shares a `Student_ID`, whichever streams last wins the upsert with no tie-break; confirm this is acceptable or define a tie-break rule (e.g. `Last_Modified_Date`) |
-| 15 | **Account Login — `Student_Profile` license type** | Unconfirmed whether this is a standard internal-user Profile or an Experience Cloud/Community license Profile; the latter needs additional Contact/community-membership setup beyond `ProfileId` for the login to actually work |
-| 16 | **Account Login — Username global uniqueness** | Username is set to the Contact's raw email; Salesforce Usernames must be globally unique across all orgs, so sandbox/UAT runs may collide — confirm whether an environment suffix convention is needed |
-| 17 | **Account Login — welcome/password-reset email on User insert** | Bulk-creating `User` records normally triggers Salesforce's welcome email; confirm whether this should be suppressed during the migration load |
+| 12 | **Account Login — `Student_Profile` Profile must exist** | **Resolved:** confirmed by architect — `Student_Profile` is the correct name, set in the "Account Login Profile Name" config var |
+| 13 | **Account Login — scope of `Instructor_ID`/`Associate_ID` rows** | **Resolved:** confirmed by architect — instructor/associate login info is not needed for this import; rows without a usable `Student_ID` are correctly skipped |
+| 14 | **Account Login — duplicate `Student_ID` rows** | **Resolved (fixed in code, 2026-10-13):** same source as #11 — the mapping doc's note "Records are only marked as inactive if they are duplicate" already answers this directly, no separate confirmation needed. Confirmed against real data that one `Student_ID` can have multiple Account Login rows (e.g. 2× `Inactive=TRUE` + 1× `Inactive=FALSE`); since Username/Email/Name all come from the matched Contact (identical across duplicate rows), `IsActive` was the only field actually at risk — flow now aggregates all rows per `Student_ID` within a window and sets `IsActive = true` if *any* row has `Inactive = FALSE`, instead of relying on arbitrary file order |
+| 15 | **Account Login — `Student_Profile` license type** | **Confirmed by architect: it is a portal/Experience Cloud login**, not an internal profile. This surfaces a new risk (see #18 below) rather than fully closing the item |
+| 16 | **Account Login — Username global uniqueness** | **Resolved (2026-10-14):** confirmed real via direct query against Stanford_UAT — 1,200 emails shared by 2+ Person Accounts (1,292 accounts affected). Architect decision: let these fail naturally into the existing failed-records report rather than proactively skip/flag them — no code change needed, this is already the flow's default behavior. CSP's intended username convention for *future* self-registrations (not migration) is a separate open question, tracked for the Data Ceremony meeting, not this flow |
+| 17 | **Account Login — welcome/password-reset email on User insert** | **Resolved (2026-10-14):** architect confirmed suppression is required until go-live. Bulk API 2.0 has no job-level option for this — confirmed via Salesforce docs that `EmailHeader.triggerUserEmail` is a SOAP API header, not available on Bulk API 2.0's `jobs/ingest` endpoint. Resolution: set Setup → Email → Deliverability → Access Level = "System email only" for the duration of the migration load, then restore before go-live. This is an org-wide Setup toggle, not a code change — **must be flipped back before go-live** or all org email stays blocked |
+| 18 | **Account Login — `Federation_Identifier__c` not marked as External ID** | **Resolved (2026-10-14):** marked as External ID in Stanford_UAT |
+| 19 | **Account Login — Bulk API support for Community/portal Users** | **New risk (2026-10-13):** since `Student_Profile` is confirmed to be a portal/Experience Cloud license (#15), worth a small sandbox test before the full run — Salesforce has had org-specific restrictions around creating licensed Community/Partner users via Bulk API that don't show up with internal-profile Users. If it fails, the fallback is the standard REST/Composite API instead of Bulk API 2.0 for this one object |
