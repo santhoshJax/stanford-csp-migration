@@ -24,6 +24,10 @@ import courseOtherCostFlows from "./courseOtherCostFlow";
 import courseTimecardFlows from "./courseTimecardFlow";
 import courseworkFlows from "./courseworkFlow";
 import registrationFlows from "./registrationFlow";
+import purchaseInventoryFlows from "./purchaseInventoryFlow";
+import purchaseFlows from "./purchaseFlow";
+import purchaseItemFlows from "./purchaseItemFlow";
+import paymentsFlows from "./paymentsFlow";
 import enrollmentFlows from "./enrollmentFlow";
 import enrollmentsImportAllTimeFlows from "./enrollmentsImportAllTime";
 import enrollmentWaiverFlows from "./enrollmentWaiverFlow";
@@ -72,6 +76,10 @@ export default integration({
     ...coursesImport5YearFlows, // 23. Course Import - 5 Year
     ...coursesImportAllTimeFlows, // 24. Course Import - All
     ...enrollmentsImportAllTimeFlows, // 25. Enrollment Import All Time
+    ...purchaseInventoryFlows, // 26. Purchase Inventory
+    ...purchaseFlows, // 27. Purchase
+    ...purchaseItemFlows, // 28. Purchase Item
+    ...paymentsFlows, // 29. Payments
   ],
   configPages,
   componentRegistry,

@@ -28,6 +28,7 @@
    - [Tuition Rule Flow](#414-tuition-rule-flow)
    - [Unit Rule Flow](#415-unit-rule-flow)
    - [Textbook Flow](#416-textbook-flow)
+   - [Commerce Flows — Purchase Inventory / Purchase / Purchase Item / Payments](#417-commerce-flows)
 5. [Cross-Cutting Patterns](#5-cross-cutting-patterns)
 6. [External ID Strategy](#6-external-id-strategy)
 7. [Known Open Items & Decisions](#7-known-open-items--decisions)
@@ -176,6 +177,13 @@ Group 5 — Depends on Group 4
 
 Group 6 — Standalone (can run any time after Group 1)
   └── Transcript Request Flow → CSP_Transcript_Request__c
+
+Group 7 — Commerce (Student flow first; see 4.17 for the internal order)
+  ├── Purchase Inventory Flow → Product2, PricebookEntry
+  ├── Registration Flow       → CardPaymentMethod, Order, PaymentGroup, Payment
+  ├── Purchase Flow           → CardPaymentMethod, Order, PaymentGroup, Payment   (PUR- ids)
+  ├── Purchase Item Flow      → OrderItem        (needs Purchase Inventory + Purchase)
+  └── Payments Flow           → Payment, Refund  (needs Registration; PAY- ids)
 ```
 
 ---
@@ -790,6 +798,23 @@ Upsert key: `External_ID_4D__c` = source row ID
 
 ---
 
+### 4.17 Commerce Flows
+
+**Files:** `src/purchaseInventoryFlow.ts`, `src/purchaseFlow.ts`, `src/purchaseItemFlow.ts`, `src/paymentsFlow.ts`, shared helpers in `src/commerceShared.ts`
+**Sources:** the Purchase Inventory, Purchase, Purchase Item and Payments tabs of the mapping workbook (Registration is documented in its own file header).
+**Status:** added 2026-10-14, `TEST_MODE = true` (one window, 50 records) — not yet run against an org. Open questions and unverified fields: `reports/registration-mapping-review-2026-10-14.md`.
+
+| Flow | Writes | External ID | Depends on |
+|---|---|---|---|
+| Purchase Inventory | Product2, PricebookEntry (Standard Price Book, insert-only) | `{id}` on Product2 | — |
+| Purchase | CardPaymentMethod, Order (Draft, Standard Price Book), PaymentGroup, Payment | `PUR-{id}` | Student |
+| Purchase Item | OrderItem | `PI-{id}` (Order via `Order.External_ID_4D__c = PUR-{Purchase_ID}`; product via `Product2.Name` → PricebookEntry) | Purchase Inventory, Purchase |
+| Payments | Payment, Refund (Referenced) | `PAY-{id}` (PaymentGroup via `External_ID_4D__c = Registration_ID`) | Student, Registration |
+
+External IDs are **prefixed** because Registration writes the raw `Registration.ID` into the same objects and the id ranges overlap. Purchase / Purchase Item / Payments reuse Registration's windowed-stream + 4-phase (CardPaymentMethod → Order → PaymentGroup → Payment) pattern.
+
+---
+
 ## 5. Cross-Cutting Patterns
 
 ### 5.1 Streaming (HTTP Range Windows)
@@ -841,6 +866,10 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | `ENR-{id}` | CourseOfferingParticipant (student enrollment) | `ENR-80001` |
 | `NOISBN_{slug}` | Textbook__c (no ISBN) | `NOISBN_intro-to-python_smith` |
 | (raw 4D `Student_ID`) | User (`Federation_Identifier__c` — not `External_ID_4D__c`) | Account Login |
+| `PUR-{id}` | Order, CardPaymentMethod, PaymentGroup, Payment (Purchase) | `PUR-2` |
+| `PI-{id}` | OrderItem (Purchase Item) | `PI-101` |
+| `PAY-{id}` | Payment, Refund (Payments) | `PAY-1` |
+| (raw Registration ID) | Order, CardPaymentMethod, PaymentGroup, Payment (Registration) | `560585` |
 | (raw 4D ID) | All other objects | `"6001"` |
 
 ---

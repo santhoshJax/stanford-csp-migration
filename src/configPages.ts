@@ -281,6 +281,37 @@ export const configPages = {
           "Google Drive file ID of the TSV that contains Registration records. " +
           "Migrates CardPaymentMethod, Order, and Payment records. Must run after Student flow.",
       }),
+      "Purchase Inventory File ID": configVar({
+        stableKey: "pinv2026-1014-4b01-8c20-1b2c3d4e5f01",
+        dataType: "string",
+        description:
+          "Google Drive file ID of the TSV that contains Purchase Inventory records. " +
+          "Migrates Product2 and Standard Price Book PricebookEntry records. " +
+          "Must run before Purchase Item Import.",
+      }),
+      "Purchase File ID": configVar({
+        stableKey: "purc2026-1014-4b02-8c20-1b2c3d4e5f02",
+        dataType: "string",
+        description:
+          "Google Drive file ID of the TSV that contains Purchase records. " +
+          "Migrates CardPaymentMethod, Order, PaymentGroup, and Payment records " +
+          "(External IDs prefixed PUR-). Must run after Student flow.",
+      }),
+      "Purchase Item File ID": configVar({
+        stableKey: "pitm2026-1014-4b03-8c20-1b2c3d4e5f03",
+        dataType: "string",
+        description:
+          "Google Drive file ID of the TSV that contains Purchase Item records. " +
+          "Migrates OrderItem records. Must run after Purchase Inventory Import and Purchase Import.",
+      }),
+      "Payments File ID": configVar({
+        stableKey: "pays2026-1014-4b04-8c20-1b2c3d4e5f04",
+        dataType: "string",
+        description:
+          "Google Drive file ID of the TSV that contains Payments records. " +
+          "Migrates Payment and Refund records (External IDs prefixed PAY-). " +
+          "Must run after Student and Registration Import.",
+      }),
       "Alert File ID": configVar({
         stableKey: "al001122-3344-4556-7788-aabbccddeeff",
         dataType: "string",
