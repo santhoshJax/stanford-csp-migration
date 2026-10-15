@@ -14,6 +14,7 @@ import instructorFlows from "./instructorFlow";
 import associateFlows from "./associateFlow";
 import departmentFlows from "./departmentFlow";
 import quarterFlows from "./quarterFlow";
+import quarterBefore2013Flows from "./quarterBefore2013Flow";
 import coursesImport2YearFlows from "./coursesImport2Year";
 import coursesImport5YearFlows from "./coursesImport5Year";
 import coursesImportAllTimeFlows from "./coursesImportAllTime";
@@ -55,6 +56,7 @@ export default integration({
     ...instructorFlows, // 2. Instructor
     ...associateFlows, // 3. Associate
     ...quarterFlows, // 4. Quarter
+    ...quarterBefore2013Flows, // 4b. Quarter Import Before 2013
     ...departmentFlows, // 5. Department
     ...unitRuleFlows, // 6. Unit Rule
     ...tuitionRuleFlows, // 7. Tuition Rule

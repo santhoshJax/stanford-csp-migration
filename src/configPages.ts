@@ -58,6 +58,14 @@ export const configPages = {
         description:
           "Google Drive file ID of the Google Sheet that contains quarter/academic term records.",
       }),
+      "Quarter Before 2013 File ID": configVar({
+        stableKey: "ffa273e0-57a3-4b2b-951e-7c9a9ecbbe7c",
+        dataType: "string",
+        description:
+          "Google Drive file ID of the Excel workbook (or Google Sheet) with the " +
+          "pre-2013 quarter abbreviations and class start and end dates. Used by " +
+          "the Quarter Import Before 2013 flow.",
+      }),
       "Department File ID": configVar({
         stableKey: "a1b2c3d4-1111-4a1b-8c2d-aabbcc001111",
         dataType: "string",
