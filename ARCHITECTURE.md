@@ -322,13 +322,16 @@ Upsert key: `Federation_Identifier__c` (custom field — not the standard `Feder
 | `TimeZoneSidKey` | — | Direct map, default `"America/Los_Angeles"` |
 | `EmailEncodingKey` | — | Direct map, default `"UTF-8"` |
 
+**PermissionSetAssignment** (added 2026-10-15)
+Every User the upsert accepts, whether created or updated, is assigned these permission sets: **Buyer**, **CSP Stap API Access**, **CSP Student Education Cloud PS**. The list comes from the "Account Login Permission Sets" config var (comma-separated; each entry can be an API Name or a unique Label). The permission sets are looked up before the upsert, and the run stops if any is missing or its Label is ambiguous. Assignments that already exist are skipped, so re-running the flow also adds the permission sets to Users imported before this step existed. Inserted through the sObject Collections API with allOrNone=false. Per-row failures are logged and do not undo the User upsert.
+
 **Do Not Map:** `Instructor_ID`, `Associate_ID`, `ID`, `Last_Login_Date`, `Password_Hash_Char`, `Created_Date/Time/By`, `Last_Modified_Date/Time/By`, `Student_ID_Previous`, `Override_Hash_Storage/Start_Date/Start_Time/History`, `Previous_Hash_Chars`.
 
 **Row-skip rules:** no `Student_ID` or `Student_ID = 0`; no matching Account found for `Student_ID`; matched Contact has no usable email.
 
 **Open item — Active/Inactive semantics:** the mapping doc calls this "Direct Map" from source `Inactive` to target `Active`, noting "records are only marked as inactive if they are duplicate." A literal same-value copy would leave every normal (non-duplicate) record `IsActive = false`, so this flow inverts the value (`IsActive = !Inactive`) to match the note's evident intent. **Needs architect confirmation before go-live.**
 
-**Prerequisites:** a Profile named `Student_Profile` must exist in the org (configurable via the "Account Login Profile Name" config var); a custom field `User.Federation_Identifier__c` must exist and be marked as an External ID in Salesforce Setup, so Bulk API 2.0 can upsert on it (same convention as `Student_ID_4D__c` / `Instructor_ID_4D__c` / `Associate_ID_4D__c` elsewhere in this project).
+**Prerequisites:** a Profile named `Student_Profile` must exist in the org (configurable via the "Account Login Profile Name" config var); a custom field `User.Federation_Identifier__c` must exist and be marked as an External ID in Salesforce Setup, so Bulk API 2.0 can upsert on it (same convention as `Student_ID_4D__c` / `Instructor_ID_4D__c` / `Associate_ID_4D__c` elsewhere in this project). Each permission set in "Account Login Permission Sets" must exist and be assignable to the Experience Cloud license on that Profile; otherwise the assignment fails with a license mismatch.
 
 ---
 
@@ -897,3 +900,4 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | 17 | **Account Login — welcome/password-reset email on User insert** | **Resolved (2026-10-14):** architect confirmed suppression is required until go-live. Bulk API 2.0 has no job-level option for this — confirmed via Salesforce docs that `EmailHeader.triggerUserEmail` is a SOAP API header, not available on Bulk API 2.0's `jobs/ingest` endpoint. Resolution: set Setup → Email → Deliverability → Access Level = "System email only" for the duration of the migration load, then restore before go-live. This is an org-wide Setup toggle, not a code change — **must be flipped back before go-live** or all org email stays blocked |
 | 18 | **Account Login — `Federation_Identifier__c` not marked as External ID** | **Resolved (2026-10-14):** marked as External ID in Stanford_UAT |
 | 19 | **Account Login — Bulk API support for Community/portal Users** | **New risk (2026-10-13):** since `Student_Profile` is confirmed to be a portal/Experience Cloud license (#15), worth a small sandbox test before the full run — Salesforce has had org-specific restrictions around creating licensed Community/Partner users via Bulk API that don't show up with internal-profile Users. If it fails, the fallback is the standard REST/Composite API instead of Bulk API 2.0 for this one object |
+| 20 | **Account Login — permission sets for imported Users** | **Decision (2026-10-15):** every imported User also gets Buyer, CSP Stap API Access and CSP Student Education Cloud PS. Implemented in the flow (configurable via "Account Login Permission Sets"); re-running the flow back-fills Users already imported |

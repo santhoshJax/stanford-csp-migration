@@ -26,6 +26,13 @@
  *   —           → User.LanguageLocaleKey      (Direct Map — default "en_US")
  *   —           → User.TimeZoneSidKey         (Direct Map — default "America/Los_Angeles")
  *   —           → User.EmailEncodingKey       (Direct Map — default "UTF-8")
+ *   —           → PermissionSetAssignment     (decision 2026-10-15 — every
+ *                                               successfully upserted User gets
+ *                                               Buyer, CSP Stap API Access and
+ *                                               CSP Student Education Cloud PS;
+ *                                               configurable via "Account Login
+ *                                               Permission Sets". Existing
+ *                                               assignments are skipped.)
  *
  * Do Not Map (per mapping doc): Instructor_ID, Associate_ID, ID, Last_Login_Date,
  * Password_Hash_Char, Created_Date/Time/By, Last_Modified_Date/Time/By,
@@ -57,6 +64,10 @@
  *     (default "Student_Profile" — DEFAULT_PROFILE_NAME below) must exist
  *     in this org under that exact name. Confirmed failing in the "Student_Profile"
  *     org run on 2026-10-05 — set the config var to the real Profile Name before re-running.
+ *   - Every permission set in "Account Login Permission Sets" must exist (by
+ *     API Name, or by a Label that is unique) and be assignable to the
+ *     Experience Cloud license on that Profile. The flow throws before the
+ *     upsert if a name is missing or ambiguous.
  */
 
 import { flow } from "@prismatic-io/spectral";
@@ -73,6 +84,11 @@ import {
   SF_API_VERSION,
 } from "./utils";
 import { createResultsSheetFromContacts } from "./reportResults";
+import {
+  sfQueryAll,
+  insertViaComposite,
+  parseSuccessfulSfIds,
+} from "./commerceShared";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -85,6 +101,14 @@ const TEST_MODE = true;
 const TEST_RECORD_LIMIT = 2;
 
 const DEFAULT_PROFILE_NAME = "Student_Profile";
+// Permission sets assigned to every imported User (decision 2026-10-15).
+// Each entry may be a Permission Set API Name or its Label. Overridable via
+// the "Account Login Permission Sets" config var (comma-separated).
+export const DEFAULT_PERMISSION_SETS = [
+  "Buyer",
+  "CSP Stap API Access",
+  "CSP Student Education Cloud PS",
+];
 const DEFAULT_LOCALE_SID_KEY = "en_US";
 const DEFAULT_LANGUAGE_LOCALE_KEY = "en_US";
 const DEFAULT_TIME_ZONE_SID_KEY = "America/Los_Angeles";
@@ -161,6 +185,173 @@ async function resolveProfileId(
   );
   const records = data.records as { Id: string }[];
   return records[0]?.Id ?? null;
+}
+
+/** Splits the comma-separated config var into trimmed, de-duplicated names. */
+export function parsePermissionSetNames(raw: string | undefined): string[] {
+  const source = raw?.trim() ? raw.split(",") : DEFAULT_PERMISSION_SETS;
+  return [...new Set(source.map((n) => n.trim()).filter((n) => n.length > 0))];
+}
+
+interface PermissionSetRow {
+  Id: string;
+  Name: string;
+  Label: string;
+}
+
+/**
+ * Picks one permission set per configured name. An exact API Name match wins;
+ * otherwise a single Label match is used. Returns the unmatched and ambiguous
+ * names so the caller can fail with a clear message.
+ */
+export function matchPermissionSets(
+  configuredNames: string[],
+  available: PermissionSetRow[],
+): {
+  matched: Map<string, PermissionSetRow>;
+  missing: string[];
+  ambiguous: string[];
+} {
+  const matched = new Map<string, PermissionSetRow>();
+  const missing: string[] = [];
+  const ambiguous: string[] = [];
+
+  for (const configuredName of configuredNames) {
+    const wanted = configuredName.toLowerCase();
+    const byName = available.filter((p) => p.Name.toLowerCase() === wanted);
+
+    if (byName.length === 1) {
+      matched.set(configuredName, byName[0]);
+      continue;
+    }
+
+    const byLabel = available.filter((p) => p.Label.toLowerCase() === wanted);
+
+    if (byLabel.length === 1) {
+      matched.set(configuredName, byLabel[0]);
+    } else if (byLabel.length > 1) {
+      ambiguous.push(
+        `"${configuredName}" (API Names: ${byLabel.map((p) => p.Name).join(", ")})`,
+      );
+    } else {
+      missing.push(`"${configuredName}"`);
+    }
+  }
+
+  return { matched, missing, ambiguous };
+}
+
+/**
+ * Resolves every configured permission set to its Id. Throws before any User
+ * is written if a name is missing or matches more than one permission set.
+ */
+async function resolvePermissionSets(
+  instanceUrl: string,
+  accessToken: string,
+  configuredNames: string[],
+): Promise<PermissionSetRow[]> {
+  if (configuredNames.length === 0) return [];
+
+  const inClause = configuredNames
+    .map((n) => `'${n.replace(/'/g, "\\'")}'`)
+    .join(",");
+  const soql =
+    `SELECT Id, Name, Label FROM PermissionSet ` +
+    `WHERE IsOwnedByProfile = false AND (Name IN (${inClause}) OR Label IN (${inClause}))`;
+  const available = await sfQueryAll<PermissionSetRow>(
+    instanceUrl,
+    accessToken,
+    soql,
+  );
+
+  const { matched, missing, ambiguous } = matchPermissionSets(
+    configuredNames,
+    available,
+  );
+
+  if (missing.length > 0 || ambiguous.length > 0) {
+    const problems: string[] = [];
+    if (missing.length > 0) {
+      problems.push(`not found: ${missing.join(", ")}`);
+    }
+    if (ambiguous.length > 0) {
+      problems.push(
+        `label matches more than one permission set (use the API Name instead): ${ambiguous.join("; ")}`,
+      );
+    }
+    throw new Error(
+      `[Account Login Import] Permission set lookup failed — ${problems.join(" | ")}. ` +
+        `Fix the "Account Login Permission Sets" config var.`,
+    );
+  }
+
+  // De-duplicate in case a Name and a Label pointed at the same permission set.
+  return [...new Map([...matched.values()].map((p) => [p.Id, p])).values()];
+}
+
+/**
+ * Assigns each permission set to each User, skipping assignments that already
+ * exist so a re-run (or re-upsert of an existing User) is safe.
+ */
+async function assignPermissionSets(
+  instanceUrl: string,
+  accessToken: string,
+  userIds: string[],
+  permissionSets: PermissionSetRow[],
+  logger: {
+    info: (m: string) => void;
+    warn: (m: string) => void;
+    error: (m: string) => void;
+  },
+): Promise<{ created: number; alreadyAssigned: number; failed: number }> {
+  if (userIds.length === 0 || permissionSets.length === 0) {
+    return { created: 0, alreadyAssigned: 0, failed: 0 };
+  }
+
+  const permissionSetIdList = permissionSets.map((p) => `'${p.Id}'`).join(",");
+  const existing = new Set<string>();
+  const CHUNK_SIZE = 200;
+
+  for (let i = 0; i < userIds.length; i += CHUNK_SIZE) {
+    const userIdList = userIds
+      .slice(i, i + CHUNK_SIZE)
+      .map((id) => `'${id}'`)
+      .join(",");
+    const rows = await sfQueryAll<{
+      AssigneeId: string;
+      PermissionSetId: string;
+    }>(
+      instanceUrl,
+      accessToken,
+      `SELECT AssigneeId, PermissionSetId FROM PermissionSetAssignment ` +
+        `WHERE AssigneeId IN (${userIdList}) AND PermissionSetId IN (${permissionSetIdList})`,
+    );
+    for (const row of rows) {
+      existing.add(`${row.AssigneeId}:${row.PermissionSetId}`);
+    }
+  }
+
+  const toInsert: Record<string, unknown>[] = [];
+  for (const userId of userIds) {
+    for (const permissionSet of permissionSets) {
+      if (existing.has(`${userId}:${permissionSet.Id}`)) continue;
+      toInsert.push({
+        attributes: { type: "PermissionSetAssignment" },
+        AssigneeId: userId,
+        PermissionSetId: permissionSet.Id,
+      });
+    }
+  }
+
+  const { created, failed } = await insertViaComposite(
+    toInsert,
+    instanceUrl,
+    accessToken,
+    logger,
+    "[Account Login Import] PermissionSetAssignment",
+  );
+
+  return { created, alreadyAssigned: existing.size, failed };
 }
 
 interface StudentContactInfo {
@@ -397,6 +588,9 @@ export const accountLoginImport = flow({
     const profileName =
       (configVars["Account Login Profile Name"] as string | undefined) ||
       DEFAULT_PROFILE_NAME;
+    const permissionSetNames = parsePermissionSetNames(
+      configVars["Account Login Permission Sets"] as string | undefined,
+    );
 
     if (!fileId) throw new Error("Account Login File ID config var is empty.");
 
@@ -456,6 +650,20 @@ export const accountLoginImport = flow({
             `Set the correct value in the "Account Login Profile Name" config var.`,
         );
       }
+
+      // ── 4b. Resolve the permission sets once per window ───────────────────
+      // Done before the upsert so a wrong name stops the run before any User
+      // is created without its permission sets.
+      const permissionSets = await resolvePermissionSets(
+        sfInstanceUrl,
+        sfToken,
+        permissionSetNames,
+      );
+      logger.info(
+        `[Account Login Import] Permission sets to assign: ` +
+          (permissionSets.map((p) => `${p.Label} (${p.Name})`).join(", ") ||
+            "(none)"),
+      );
 
       // ── 5. Collapse duplicate Student_ID rows within this window ───────────
       // The source table can carry more than one Account Login row per
@@ -547,6 +755,44 @@ export const accountLoginImport = flow({
           "[Account Login Import]",
         );
 
+        // ── 7. Assign permission sets to every User the upsert accepted ──────
+        // successfulResults covers both newly created and updated Users, so a
+        // re-run also back-fills Users imported before this step existed.
+        const userIds = [
+          ...parseSuccessfulSfIds(
+            jobResult.successfulCsv,
+            "Federation_Identifier__c",
+          ).values(),
+        ];
+        try {
+          const assignment = await assignPermissionSets(
+            sfInstanceUrl,
+            sfToken,
+            userIds,
+            permissionSets,
+            logger,
+          );
+          logger.info(
+            `[Account Login Import] Permission sets — ${userIds.length} User(s): ` +
+              `${assignment.created} assignment(s) created, ` +
+              `${assignment.alreadyAssigned} already in place, ${assignment.failed} failed.`,
+          );
+          if (assignment.failed > 0) {
+            logger.warn(
+              `[Account Login Import] Some permission set assignments failed (see errors above). ` +
+                `A common cause is a permission set whose license does not match the Users' ` +
+                `Experience Cloud license. Re-running the flow retries only the missing ones.`,
+            );
+          }
+        } catch (err: unknown) {
+          const e = err as { response?: { status?: number; data?: unknown } };
+          logger.error(
+            `[Account Login Import] Permission set assignment failed.\n` +
+              `  Status : ${e.response?.status ?? "unknown"}\n` +
+              `  Details: ${JSON.stringify(e.response?.data ?? String(err), null, 2)}`,
+          );
+        }
+
         try {
           const sheet = await createResultsSheetFromContacts({
             flowName: "Account Login Import",
@@ -578,7 +824,7 @@ export const accountLoginImport = flow({
       );
     }
 
-    // ── 7. Recurse if more rows remain ─────────────────────────────────────────
+    // ── 8. Recurse if more rows remain ─────────────────────────────────────────
     if (hasMore) {
       logger.info(
         `[Account Login Import] More rows remain — invoking next iteration at byte ${nextByteOffset}`,

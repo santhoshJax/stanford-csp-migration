@@ -344,6 +344,16 @@ export const configPages = {
           "User. Must match an existing Profile in this org exactly (case-sensitive) — " +
           "the flow throws if no Profile with this Name is found.",
       }),
+      "Account Login Permission Sets": configVar({
+        stableKey: "6f1a3c5e-7b9d-4e2f-8a0c-1d3e5f7a9b0c",
+        dataType: "string",
+        default: "Buyer, CSP Stap API Access, CSP Student Education Cloud PS",
+        description:
+          "Comma-separated permission sets assigned to every User the Account Login " +
+          "import creates or updates. Each entry can be the API Name or the Label " +
+          "(Label must be unique). Existing assignments are skipped. The flow throws " +
+          "before creating Users if any entry is not found.",
+      }),
       "Failed Records Folder ID": configVar({
         stableKey: "e5f6a7b8-5555-4e8f-3b4c-eeff00223344",
         dataType: "string",
