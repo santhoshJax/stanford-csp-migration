@@ -44,9 +44,11 @@
  * code. If one already exists in Salesforce it is left untouched, so older
  * Tier 3 title/description data never overwrites newer catalog data.
  *
- * AcademicSession lookup remaps pre-2013 quarters to their 2013 equivalent
- * (fa08 → fa13, wi11 → wi13, etc.), same as Tier 1 — carried over here
- * specifically because Tier 3 is where most pre-2013 rows actually live.
+ * AcademicSession is looked up by the offering's own quarter abbreviation
+ * (fa08 → the fa08 session). The earlier pre-2013 → 2013 remap was removed
+ * once the Quarter Import Before 2013 flow loaded the fa88–sp12 sessions.
+ * Quarters older than fa88 have no AcademicSession, so those offerings fail
+ * the lookup and are reported in the CourseOffering failed-records sheet.
  *
  * Recurses via context.invokeFlow until the full file is processed.
  */
@@ -77,16 +79,19 @@ const SF_API = "v60.0";
 
 // ── Quarter filter ────────────────────────────────────────────────────────────
 // Tier 3 = everything NOT already owned by Tier 1 (24-25) or Tier 2 (21-23) —
-// i.e. any quarter whose 2-digit year is 20 or lower. Open-ended on the old
-// end (earliest source data seen so far is fa08).
-const MAX_TIER3_YEAR = 20;
+// i.e. any academic year 2020 or earlier. Open-ended on the old end.
+// Two-digit years use the same pivot as the Quarter flows: 50-99 are 19xx and
+// 00-49 are 20xx, so 1900s quarters (e.g. fa95) are Tier 3, not "year 95".
+const MAX_TIER3_YEAR = 2020;
 
-function isTier3Quarter(quarter: string): boolean {
+export function isTier3Quarter(quarter: string): boolean {
   const m = /^([a-z]+)(\d{2})$/.exec(quarter.trim().toLowerCase());
   if (!m) return false;
   const seasons = ["wi", "sp", "su", "fa"];
   if (!seasons.includes(m[1])) return false;
-  return parseInt(m[2], 10) <= MAX_TIER3_YEAR;
+  const yy = parseInt(m[2], 10);
+  const fullYear = yy >= 50 ? 1900 + yy : 2000 + yy;
+  return fullYear <= MAX_TIER3_YEAR;
 }
 
 // ── Salesforce REST helpers ───────────────────────────────────────────────────
@@ -531,14 +536,9 @@ export const coursesImportAllTime = flow({
 
       // 3. CourseOffering
       const isCancelled = parseBool(row.Cancelled) === true;
-      // Remap pre-2013 quarters to their 2013 equivalent (fa08 → fa13, wi11 →
-      // wi13, etc.) — same as Tier 1, carried over here since Tier 3 is where
-      // most pre-2013 rows actually live.
-      const effectiveQuarter = (() => {
-        const m = /^([a-z]+)(\d+)$/i.exec(quarter);
-        if (m && parseInt(m[2], 10) < 13) return `${m[1].toLowerCase()}13`;
-        return quarter;
-      })();
+      // Link to the offering's own quarter (fa08 → fa08). The old pre-2013 →
+      // 2013 remap was removed once the pre-2013 sessions were imported.
+      const effectiveQuarter = quarter.trim().toLowerCase();
       const co: Record<string, unknown> = {
         Name: code || sourceId,
         ...(sectionSuffix ? { SectionNumber: sectionSuffix } : {}),
