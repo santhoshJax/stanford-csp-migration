@@ -42,14 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-16
-**Status:** at risk — Mapping review complete: 2 critical gaps (EnrolleeCount, CourseOffering.Status), 7 field-name mismatches, quarter-window misalignment needs…
+**Status:** blocked — I re-read the sheet's tier flag columns and the three flows.
 
 **Done this session**
-- Reviewed all 6 mapping tabs + Course against flows on stanford-csp-orchestrate
-- Identified 2 flagged fields not written: Enrollment_Count (read-only conflict) and Cancelled (Status vs Enrollment_Status__c)
-- Found 7 object/field name mismatches between sheet and code (Other Cost, Timecard, Waiver, IP_GradeEnteredDate__c)
-- Confirmed Staff Detail complete; Tier 2/3 Other Cost, Staff Detail, Timecard missing
-- Documented 60k enrollment rows skipped (grades S, NG, AU, P, W unmapped)
+- I re-read the sheet's tier flag columns and the three flows. You're right that my earlier answer blended the tiers. Here are the questions for each tier. Each tier has its own field list: Tier 1 maps all fields, Tier 2 maps the 32 fields f…
 
 **Open items**
 - Resolve EnrolleeCount: sheet says map directly, flows say read-only — which is correct?
@@ -77,7 +73,7 @@
 - Build Tier 2/3 Other Cost, Staff Detail, Timecard flows once course tiers validated
 - Verify all 7 field-name mismatches exist in target org before Tier 2 run
 
-**Checked live on 2026-10-16:** Google Workspace, the repository
+**Checked live on 2026-10-16:** the repository, Google Workspace
 ### Last session — 2026-10-16
 | | |
 |---|---|
@@ -87,21 +83,18 @@
 | Name | Stanford-Data-Migration-CourseFlow-Review |
 | Session | `7429b002-74d0-4757-ae64-31c1acd5195f` |
 **In its own words (excerpt):**
-I reviewed all six tabs, plus the Course tab I could already read, against the flows on `stanford-csp-orchestrate`. Most of the mapping is in place. The gaps below need a decision or a check before sign-off.
+I re-read the sheet's tier flag columns and the three flows. You're right that my earlier answer blended the tiers. Here are the questions for each tier. Each tier has its own field list: Tier 1 maps all fields, Tier 2 maps the 32 fields flagged "5-year", and Tier 3 maps the 22 fields flagged "All Courses".
 
-**How I checked.** I matched every non-"Do Not Map" row's target API name against each flow. I then read the field-building code for the three course tiers, Staff Detail, Timecard, Waiver and Enrollment. I did not read all 8,500 lines of the flows line by line.
+Two points from my earlier answer were wrong or too broad:
+- **Staff_Notes in Tier 2:** this is not a gap. The sheet says Staff_Notes is not combined with anything, so loading it on its own is correct.
+- **Quarter windows:** the three course flows don't overlap or leave gaps between them. Tier 1 loads wi24 to fa25, Tier 2 loads years 21 to 23, and Tier 3 loads year 20 and older. The doubt I raised applies to the other flows (Other Cost, Staff Detail, Timecard). I did not re-check those this turn.
 
-**No org was attached to this session.** I could not verify that any object or field API name exists in Salesforce.
+## Tier 1 (all fields, 2-year flow)
 
-## 1. Course flows (Tier 1 = "2 year" file, Tier 2 = "5 year" file, Tier 3 = "all time" file)
-The flag columns in the sheet say which fields each tier should carry.
-
-- **Tier 2:** all 32 flagged fields are covered except the two gaps below.
-- **Tier 3:** all 22 flagged fields are covered except the same two gaps.
-- **Tier 1:** I found no mapped field that is missing.
-
-Two flagged mappings are not written by any tier:
-- **`Enrollment_Count`:** the sheet says to map it directly to `EnrolleeCount`. The flows skip it, saying the field is read-only. The sheet and the code disagree on this, and neither tab tel
+| # | Field | Question |
+|---|---|---|
+| 1 | Enrollment_Count | The sheet says to map it to `EnrolleeCount`. The flow skips it as read-only. Should the sheet change to "don't load", or does the org field need to be writable? |
+| 2 | Cancelled | The sheet says to set `Status` = Cancelled. The flow only sets `Enrollment_Status__c`. Should `Status` al
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
