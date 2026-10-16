@@ -73,7 +73,7 @@ import {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const MAX_ROWS = 100;
-const TEST_MODE = true; // set true to limit a run while testing
+const TEST_MODE = false; // set true to limit a run while testing
 const TEST_MAX_ROWS = 100;
 const SF_API = "v60.0";
 
