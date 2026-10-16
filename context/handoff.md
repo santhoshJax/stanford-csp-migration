@@ -42,59 +42,68 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-16
-**Status:** blocked — I re-read the sheet's tier flag columns and the three flows.
+**Status:** at risk — Course flows validated; 4 architect decisions + 1 data test remain before Tier 2 run
 
 **Done this session**
-- I re-read the sheet's tier flag columns and the three flows. You're right that my earlier answer blended the tiers. Here are the questions for each tier. Each tier has its own field list: Tier 1 maps all fields, Tier 2 maps the 32 fields f…
+- Validated all three course tiers cover 20211–20254 with no gaps or overlaps
+- Confirmed Enrollment_Count is read-only; sheet row needs 'don't load'
+- Confirmed Cancelled maps only to Enrollment_Status__c; Status field doesn't exist
+- Confirmed Units/DurationUnit: only Units__c correct; Tier 3 lacks Duration_Unit__c write
+- Confirmed Tuition_Rule_ID lookup by External_ID_4D__c is correct
+- Closed Web_Registration_Closed, Do_Not_Show_On_Web, Reg_Open_Date as no-change
 
 **Open items**
-- Resolve EnrolleeCount: sheet says map directly, flows say read-only — which is correct?
-- Resolve Cancelled: sheet says CourseOffering.Status, flows only set Enrollment_Status__c — architect decision needed
-- Verify quarter-code windows: Tier 1 loads wi24–fa25, but Other Cost/Staff/Timecard filter on 2024–2025 prefixes (fa24–su26) — test one quarter code
-- Confirm extract contains no quarters from fa26 onward, or add Tier 4
-- Build Tier 2 and Tier 3 versions of Other Cost, Staff Detail, Timecard flows (currently 2-year only)
-- Reconcile 7 field-name mismatches in org before sign-off (Other Cost, Timecard, Waiver, Grade_Entered_Date)
-- Architect decision: Grade result mapping (Pass/Fail vs Final; 60k unmapped grades S/NG/AU/P/W)
-- Resolve 5 open sheet items: Web_Registration_Closed, Contract_Template decode, Waiver Verification IP logic, Timecard University_ID/Employee_Name, Course_RecID crosswalk
+- Test one quarter code to confirm wi24 = 20242 (all flows depend on this)
+- Course_RecID: confirm it equals CourseOffering.External_ID_4D__c or provide crosswalk
+- Contract_Template: business must supply decode mapping for Tier 1
+- Tier 3 gaps: confirm no schedules, instructors, Duration_Unit__c, tuition rule is intended
+- Resolve EnrolleeCount sheet row: change to 'don't load'
+- Resolve Cancelled sheet row: change from Status to Enrollment_Status__c only
+- Update Tier 2 header comment (still says Tier 3 'not built yet')
+- Fix Tier 1 anchor comment (wi25 should clarify it means AY 2024-25)
 
 **Decisions**
 - Tier 2 can run now; Tier 3 changes do not touch Tier 2 logic
 - Execution order locked: Tier 1 → Tier 2 → Tier 3 (newest first)
 - All-time Enrollment flow must run after All-time Course flow; Waiver after Enrollment
+- Other Cost, Staff Detail, Timecard flows filter on Tier 1 range (2024–2025 prefixes)
 
 **Blockers**
-- Quarter-window misalignment: Tier 1 wi24–fa25 vs Other Cost/Staff/Timecard 2024–2025 prefix filter — needs verification before those flows run
+- Quarter-code convention unverified: wi24 = 20242 assumption blocks all three flows until tested
 
 **Next**
-- Architect review: EnrolleeCount (read-only?), Cancelled field (Status vs Enrollment_Status__c), Grade result mapping (Pass/Fail scope)
-- Test one quarter code to confirm window alignment (e.g., is 20241 = fa24 or wi24?)
-- Confirm extract has no fa26+ quarters, or scope Tier 4
-- Decide: Excel gap matrix (field-by-field) or Word summary of open decisions for architect
-- Build Tier 2/3 Other Cost, Staff Detail, Timecard flows once course tiers validated
-- Verify all 7 field-name mismatches exist in target org before Tier 2 run
+- Test one quarter code (e.g., wi24) in source data to confirm it maps to 20242
+- Architect decision: Tier 3 intentional gaps (no schedules, instructors, Duration_Unit__c, tuition rule)?
+- Business supplies Contract_Template decode mapping
+- Confirm Course_RecID = External_ID_4D__c or provide RecID-to-CourseID crosswalk
+- Update sheet rows: Enrollment_Count → 'don't load', Cancelled → Enrollment_Status__c only
+- Fix Tier 2 header and Tier 1 anchor comments in flows
 
-**Checked live on 2026-10-16:** the repository, Google Workspace
+**Checked live on 2026-10-16:** the repository
 ### Last session — 2026-10-16
 | | |
 |---|---|
 | Type | REVIEW |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-CourseFlow-Review |
+| Name | Stanford-Data-Migration-CourseFlows-Review |
 | Session | `7429b002-74d0-4757-ae64-31c1acd5195f` |
 **In its own words (excerpt):**
-I re-read the sheet's tier flag columns and the three flows. You're right that my earlier answer blended the tiers. Here are the questions for each tier. Each tier has its own field list: Tier 1 maps all fields, Tier 2 maps the 32 fields flagged "5-year", and Tier 3 maps the 22 fields flagged "All Courses".
+I checked the three flows against your answers. They cover all your quarter ranges, and one thing in the Tier 3 flow is worth a look.
 
-Two points from my earlier answer were wrong or too broad:
-- **Staff_Notes in Tier 2:** this is not a gap. The sheet says Staff_Notes is not combined with anything, so loading it on its own is correct.
-- **Quarter windows:** the three course flows don't overlap or leave gaps between them. Tier 1 loads wi24 to fa25, Tier 2 loads years 21 to 23, and Tier 3 loads year 20 and older. The doubt I raised applies to the other flows (Other Cost, Staff Detail, Timecard). I did not re-check those this turn.
+## Your answers
 
-## Tier 1 (all fields, 2-year flow)
+| Item | Result |
+|---|---|
+| Enrollment_Count | Agreed. It's a read-only rollup, so all three flows rightly skip it. The sheet should say "don't load". |
+| Cancelled / Status | There is no `Status` field on Course Offering, so only `Enrollment_Status__c` is right. The sheet row needs updating, and the flow stays as is. |
+| Units / DurationUnit | `DurationUnit` doesn't exist on Course Offering, so only `Units__c` is correct. Tier 1 and Tier 2 also write `Duration_Unit__c` from the Duration value. Tier 3 doesn't (see Coverage below). |
+| Web_Registration_Closed, Do_Not_Show_On_Web, Reg_Open_Date | Keep them as they are. I'll treat these rows as closed. |
+| Tuition_Rule_ID | Done in Tier 1. The flow looks it up by `External_ID_4D__c` on the tuition rule, and the tuition rule flow upserts on that same key. Because you've already imported the tuition rules, the lookup should resolve. |
 
-| # | Field | Question |
-|---|---|---|
-| 1 | Enrollment_Count | The sheet says to map it to `EnrolleeCount`. The flow skips it as read-only. Should the sheet change to "don't load", or does the org field need to be writable? |
-| 2 | Cancelled | The sheet says to set `Status` = Cancelled. The flow only sets `Enrollment_Status__c`. Should `Status` al
+## Other-cost items
+These belong to the Course Other Cost tab, not the course flows. Two things are open:
+- **Course_RecID crosswalk.** The other-cost f
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
