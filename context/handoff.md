@@ -42,44 +42,42 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-16
-**Status:** at risk — Course flows validated; 4 architect decisions + 1 data test remain before Tier 2 run
+**Status:** at risk — Course flows: 4 sheet rows need updates, Tier 3 gaps confirmed intentional, quarter-code test still blocks Tier 2 run
 
 **Done this session**
-- Validated all three course tiers cover 20211–20254 with no gaps or overlaps
-- Confirmed Enrollment_Count is read-only; sheet row needs 'don't load'
-- Confirmed Cancelled maps only to Enrollment_Status__c; Status field doesn't exist
-- Confirmed Units/DurationUnit: only Units__c correct; Tier 3 lacks Duration_Unit__c write
-- Confirmed Tuition_Rule_ID lookup by External_ID_4D__c is correct
-- Closed Web_Registration_Closed, Do_Not_Show_On_Web, Reg_Open_Date as no-change
+- Confirmed Contract_Template is on Course Associate/Instructor tab, not Course tab
+- Closed Course_RecID: already imported, no action needed
+- Confirmed Tier 3 intentional gaps match sheet flags (no schedules, instructors, Duration_Unit__c, tuition rule)
+- Identified duplicate Tuition_Rule_ID row 123 to mark 'Done (duplicate)'
 
 **Open items**
-- Test one quarter code to confirm wi24 = 20242 (all flows depend on this)
-- Course_RecID: confirm it equals CourseOffering.External_ID_4D__c or provide crosswalk
-- Contract_Template: business must supply decode mapping for Tier 1
-- Tier 3 gaps: confirm no schedules, instructors, Duration_Unit__c, tuition rule is intended
-- Resolve EnrolleeCount sheet row: change to 'don't load'
-- Resolve Cancelled sheet row: change from Status to Enrollment_Status__c only
-- Update Tier 2 header comment (still says Tier 3 'not built yet')
-- Fix Tier 1 anchor comment (wi25 should clarify it means AY 2024-25)
+- Test quarter code wi24 in source data to confirm it equals 20242 (blocks all three flows)
+- Update sheet: Enrollment_Count row → 'don't load'
+- Update sheet: Cancelled target → Enrollment_Status__c only (remove Status)
+- Update sheet: Units target → Units__c only (remove DurationUnit)
+- Update sheet: Web_Registration_Closed Map Type → Direct Map (was SA Decision)
+- Mark sheet row 123 Tuition_Rule_ID 'Done (duplicate)' of row 89
+- Course Associate/Instructor Salary_Category mappings pending with Holly (instructor vendor, emeritus prof)
+- Timecard University_ID and Employee_Name: Map Type and Conversion Logic contradict
 
 **Decisions**
 - Tier 2 can run now; Tier 3 changes do not touch Tier 2 logic
 - Execution order locked: Tier 1 → Tier 2 → Tier 3 (newest first)
 - All-time Enrollment flow must run after All-time Course flow; Waiver after Enrollment
 - Other Cost, Staff Detail, Timecard flows filter on Tier 1 range (2024–2025 prefixes)
+- Tier 3 intentional gaps confirmed: no schedules, instructors, Duration_Unit__c, tuition rule per sheet flags
 
 **Blockers**
-- Quarter-code convention unverified: wi24 = 20242 assumption blocks all three flows until tested
+- Quarter-code convention unverified: wi24 = 20242 assumption blocks all three flows until tested in source data
 
 **Next**
 - Test one quarter code (e.g., wi24) in source data to confirm it maps to 20242
-- Architect decision: Tier 3 intentional gaps (no schedules, instructors, Duration_Unit__c, tuition rule)?
-- Business supplies Contract_Template decode mapping
-- Confirm Course_RecID = External_ID_4D__c or provide RecID-to-CourseID crosswalk
-- Update sheet rows: Enrollment_Count → 'don't load', Cancelled → Enrollment_Status__c only
-- Fix Tier 2 header and Tier 1 anchor comments in flows
+- Update four sheet rows: Enrollment_Count, Cancelled, Units, Web_Registration_Closed, mark row 123 duplicate
+- Holly to supply Salary_Category mappings (instructor vendor, emeritus prof)
+- Resolve Timecard University_ID and Employee_Name Map Type vs. Conversion Logic contradiction
+- Confirm Enrollment Grade_Entered_Date field name: Grade_Entered_Date__c (Date) or IP_GradeEnteredDate__c (DateTime)
 
-**Checked live on 2026-10-16:** the repository
+**Checked live on 2026-10-16:** Google Workspace
 ### Last session — 2026-10-16
 | | |
 |---|---|
@@ -89,21 +87,22 @@
 | Name | Stanford-Data-Migration-CourseFlows-Review |
 | Session | `7429b002-74d0-4757-ae64-31c1acd5195f` |
 **In its own words (excerpt):**
-I checked the three flows against your answers. They cover all your quarter ranges, and one thing in the Tier 3 flow is worth a look.
+You're right on both points, and I got the first one wrong.
 
-## Your answers
+- **Contract_Template** isn't on the Course tab. It's on the **Course Associate/Course Instructor** tab, where its Map Type is "SA Decision", not Direct Map or Conversion. I wrongly listed it under Course, so please ignore it there.
+- **Course_RecID** on Course Other Cost is closed, since you've already imported it.
 
-| Item | Result |
-|---|---|
-| Enrollment_Count | Agreed. It's a read-only rollup, so all three flows rightly skip it. The sheet should say "don't load". |
-| Cancelled / Status | There is no `Status` field on Course Offering, so only `Enrollment_Status__c` is right. The sheet row needs updating, and the flow stays as is. |
-| Units / DurationUnit | `DurationUnit` doesn't exist on Course Offering, so only `Units__c` is correct. Tier 1 and Tier 2 also write `Duration_Unit__c` from the Duration value. Tier 3 doesn't (see Coverage below). |
-| Web_Registration_Closed, Do_Not_Show_On_Web, Reg_Open_Date | Keep them as they are. I'll treat these rows as closed. |
-| Tuition_Rule_ID | Done in Tier 1. The flow looks it up by `External_ID_4D__c` on the tuition rule, and the tuition rule flow upserts on that same key. Because you've already imported the tuition rules, the lookup should resolve. |
+Below are only the fields whose Map Type is Direct Map or Conversion. For the Course tab I re-read it this turn. The other tabs below are from my earlier review.
 
-## Other-cost items
-These belong to the Course Other Cost tab, not the course flows. Two things are open:
-- **Course_RecID crosswalk.** The other-cost f
+## Course tab (Tier 1, 2 and 3)
+
+| Field | Map Type | Tiers flagged | What's pending |
+|---|---|---|---|
+| Enrollment_Count | Direct Map | 1, 2, 3 | It's a read-only rollup, so the flows skip it. Change the sheet row to "don't load". |
+| Cancelled | Conversion | 1, 2, 3 | The sheet target `Status` doesn't exist. Change it to `Enrollment_Status__c` only, which is what the flows already write. |
+| Units | Conversion | 1, 2, 3 | The sheet target says `DurationUnit / Units__c`. Change it to `Units__c` only. |
+| Tuition_Rule_ID (row 123) | Conversion | none | This row is a duplicate of row 89 and still says "Not Started". Mark it "Done (duplicate)". |
+| 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
