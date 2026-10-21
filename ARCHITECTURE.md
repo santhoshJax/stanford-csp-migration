@@ -303,6 +303,10 @@ Upsert key: `Student_ID_4D__c`
 **Purpose:** Creates one Salesforce `User` per portal login credential, for the Student community/portal profile. **Must run after Student Flow** — every row is resolved against the Account created there.
 **Reference:** "CSP Data Migration Mapping Workbook - Account Login.pdf"
 
+#### Enrollment filter (added 2026-10-21)
+
+Only students who are enrolled in a course get a User. For each window, after duplicate `Student_ID` rows are collapsed, the flow streams the Enrollment TSV (the "Enrollment File ID" config var on the Enrollment Configuration page) and keeps a `Student_ID` only if it has at least one Enrollment row with `Status = "Enrolled"` (case-insensitive; `12345.0` is read as `12345`). Wait List, Drop, Cancelled and every other status do not count. The check reads the source file, not Salesforce, so it does not depend on the Enrollment Import having run. The scan stops as soon as every student in the window has been found. The run stops with an error if "Enrollment File ID" is empty or the file has no `Student_ID` or `Status` column. Skipped students are counted in the log.
+
 #### Objects Created
 
 **User**
@@ -901,3 +905,4 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | 18 | **Account Login — `Federation_Identifier__c` not marked as External ID** | **Resolved (2026-10-14):** marked as External ID in Stanford_UAT |
 | 19 | **Account Login — Bulk API support for Community/portal Users** | **New risk (2026-10-13):** since `Student_Profile` is confirmed to be a portal/Experience Cloud license (#15), worth a small sandbox test before the full run — Salesforce has had org-specific restrictions around creating licensed Community/Partner users via Bulk API that don't show up with internal-profile Users. If it fails, the fallback is the standard REST/Composite API instead of Bulk API 2.0 for this one object |
 | 20 | **Account Login — permission sets for imported Users** | **Decision (2026-10-15):** every imported User also gets Buyer, CSP Stap API Access and CSP Student Education Cloud PS. Implemented in the flow (configurable via "Account Login Permission Sets"); re-running the flow back-fills Users already imported |
+| 21 | **Account Login — only enrolled students get a User** | **Decision (2026-10-21):** import an Account Login row only when its `Student_ID` has a `Status = "Enrolled"` row in the Enrollment source file. Implemented in the flow; reuses the "Enrollment File ID" config var |

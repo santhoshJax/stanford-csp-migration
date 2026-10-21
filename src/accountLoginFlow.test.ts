@@ -2,7 +2,10 @@
  * Unit tests for the Account Login permission-set helpers. They cover config
  * parsing and the Name-then-Label matching rules; no Salesforce calls are made.
  */
+import { Readable } from "stream";
 import {
+  collectEnrolledStudentIds,
+  isEnrolledStatus,
   DEFAULT_PERMISSION_SETS,
   matchPermissionSets,
   parsePermissionSetNames,
@@ -70,5 +73,71 @@ describe("matchPermissionSets", () => {
   it("reports names that match nothing as missing", () => {
     const result = matchPermissionSets(["Does Not Exist"], AVAILABLE);
     expect(result.missing).toEqual(['"Does Not Exist"']);
+  });
+});
+
+// ── Enrollment check ─────────────────────────────────────────────────────────
+
+const tsv = (lines: string[]) => Readable.from([lines.join("\n") + "\n"]);
+
+describe("isEnrolledStatus", () => {
+  it("accepts Enrolled regardless of case and spacing", () => {
+    expect(isEnrolledStatus("Enrolled")).toBe(true);
+    expect(isEnrolledStatus(" enrolled ")).toBe(true);
+  });
+
+  it("rejects every other status", () => {
+    for (const s of ["Wait List", "Drop", "UnEnrolled", "New", "", undefined]) {
+      expect(isEnrolledStatus(s)).toBe(false);
+    }
+  });
+});
+
+describe("collectEnrolledStudentIds", () => {
+  const header = "\uFEFFID\tStudent_ID\tCourse_ID\tStatus";
+
+  it("keeps only wanted students that have an Enrolled row", async () => {
+    const { enrolled } = await collectEnrolledStudentIds(
+      tsv([
+        header,
+        "1\t100.0\tC1\tEnrolled",
+        "2\t200\tC1\tDrop",
+        "3\t300\tC2\tWait List",
+        "4\t999\tC2\tEnrolled",
+      ]),
+      new Set(["100", "200", "300"]),
+    );
+    expect([...enrolled]).toEqual(["100"]);
+  });
+
+  it("counts a student enrolled if any one of their rows is Enrolled", async () => {
+    const { enrolled } = await collectEnrolledStudentIds(
+      tsv([header, "1\t200\tC1\tDrop", "2\t200\tC2\tEnrolled\r"]),
+      new Set(["200"]),
+    );
+    expect(enrolled.has("200")).toBe(true);
+  });
+
+  it("stops reading once every wanted student is found", async () => {
+    const { enrolled, rowsRead } = await collectEnrolledStudentIds(
+      tsv([
+        header,
+        "1\t100\tC1\tEnrolled",
+        "2\t500\tC1\tEnrolled",
+        "3\t600\tC1\tEnrolled",
+      ]),
+      new Set(["100"]),
+    );
+    expect(enrolled.has("100")).toBe(true);
+    expect(rowsRead).toBe(1);
+  });
+
+  it("fails clearly when the file has no Status column", async () => {
+    await expect(
+      collectEnrolledStudentIds(
+        tsv(["ID\tStudent_ID", "1\t100"]),
+        new Set(["100"]),
+      ),
+    ).rejects.toThrow(/no "Status" column/);
   });
 });

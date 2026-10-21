@@ -341,7 +341,9 @@ export const configPages = {
         dataType: "string",
         description:
           "Google Drive file ID of the TSV that contains Account Login records. " +
-          "Must run after Student Import — each row is matched to its Account via Student_ID.",
+          "Must run after Student Import — each row is matched to its Account via Student_ID. " +
+          "Only students with a Status = Enrolled row in the Enrollment file " +
+          "(Enrollment File ID, Enrollment Configuration page) get a User.",
       }),
       "Account Login Profile Name": configVar({
         stableKey: "2b4c6d8e-0a1f-4c3e-9b5d-7e8f0a1b2c3d",
