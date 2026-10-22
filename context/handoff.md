@@ -42,45 +42,41 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-22
-**Status:** at risk — Course corrections config merged; Account Login timeout fix pushed. Both await deployment & verification.
+**Status:** at risk — Account Login timeout fix + TEST_MODE off committed; awaiting deployment & verification before 85-batch re-run
 
 **Done this session**
-- Pushed Account Login timeout fix (commit 67e10fd) to stanford-csp-orchestrate branch
-- Type check clean; all 14 Account Login tests pass; no new lint findings
-- Confirmed batch hand-off logic: job waits max 10 min, passes to next run if still running (up to 6 hand-offs)
+- Reviewed commits 6ac96a7 (TEST_MODE=false), 67e10fd (timeout fix: 500-row batches, 10-min wait, hand-off logic), f70a14f (docs)
+- Confirmed all 14 Account Login tests pass; no lint issues; hand-off logic & result CSV parsing in place
 
 **Open items**
 - Merge PR #1 (Course Correction Sheet ID config) to main
-- Deploy both changes (PR #1 + Account Login timeout fix) to org
-- Run npm run import to activate new config fields
-- Verify Student/Instructor/Associate Correction Sheet ID retained old value after import
-- Set Course Correction Sheet ID to client's converted sheet; turn on Course Correction Enabled
-- Run Course Import - All; verify 8 corrections applied in logs
-- Check job 750WH00000ga5nNYAQ status in Salesforce; re-run Account Login from batch byte 317,780
-- Remove TEST_MODE=true from src/accountLoginFlow.ts (line 109) before full 85-batch import
-
-**Decisions**
-- Option A: embedded correction table with conditional date override; all other fields from source TSV unchanged
-- Correction table pattern matches Student, Instructor, Associate flows for consistency
-- Tier 2 can run now; Tier 3 changes do not touch Tier 2 logic
-- Execution order locked: Tier 1 → Tier 2 → Tier 3 (newest first)
-- All-time Enrollment flow must run after All-time Course flow; Waiver after Enrollment
-- Course corrections read only from Course Correction Sheet ID; Student/Instructor/Associate read from shared setting
-- Account Login batch waits max 10 min for User job; hands off job ID to next run if still running (max 6 hand-offs)
-
-**Blockers**
-- PR #1 not yet merged to main; changes not live in org
-- Account Login timeout fix not yet deployed; full 85-batch import blocked until deployed and re-run from job 750WH00000ga5nNYAQ
-
-**Next**
-- Merge PR #1 to main
-- Deploy both branches (PR #1 + Account Login timeout fix) to org
-- Check job 750WH00000ga5nNYAQ in Salesforce; verify Users exist and permission sets pending
+- Deploy Account Login timeout fix (branch stanford-csp-orchestrate) to org
+- Deploy PR #1 changes to org
+- Check job 750WH00000ga5nNYAQ status in Salesforce; verify Users exist & permission sets pending
 - Re-run Account Login from batch byte 317,780 with deployed timeout fix
 - Run npm run import to activate Course Correction Sheet ID config
-- Set Course Correction Sheet ID and turn on Course Correction Enabled; run Course Import - All
+- Set Course Correction Sheet ID & turn on Course Correction Enabled; run Course Import - All
+- Monitor logs for 'Handing off job' lines during full 85-batch import (~340 runs, ~30 min overhead)
 
-**Checked live on 2026-10-22:** the repository
+**Decisions**
+- MAX_ROWS reduced to 500 per run (from 2,000) to keep Salesforce jobs within single run window
+- POLL_BUDGET_MS = 10 min; MAX_JOB_HANDOFFS = 6 (~1 hour total per job)
+- Hand-off passes pendingJobId & file position; recordsFromResultCsvs rebuilds results from Salesforce CSVs
+- TEST_MODE now false; next run is full import, not 2-row test
+- All previous execution order & correction logic decisions remain unchanged
+
+**Blockers**
+- Account Login timeout fix not yet deployed; full 85-batch import blocked until deployed & re-run from job 750WH00000ga5nNYAQ
+- PR #1 not yet merged to main; Course Correction changes not live
+
+**Next**
+- Deploy Account Login timeout fix (stanford-csp-orchestrate branch) to org
+- Check job 750WH00000ga5nNYAQ in Salesforce; verify Users created & permission sets pending
+- Re-run Account Login from batch byte 317,780 with deployed fix; monitor for hand-off lines in logs
+- Merge PR #1 to main & deploy Course Correction config
+- Run npm run import; set Course Correction Sheet ID & enable; run Course Import - All
+
+**Checked live on 2026-10-22:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-10-22
 | | |
 |---|---|
@@ -90,21 +86,18 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch origin)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Since your last run, two commits change the Account Login code on `stanford-csp-orchestrate` (head `f70a14f`). I read both diffs on GitHub just now.
 
-I've pushed the timeout fix to `stanford-csp-orchestrate` as commit `67e10fd`. I checked GitHub afterwards and the branch points to that commit. It hasn't been redeployed or run yet.
+## 1. `6ac96a7`: test mode off (pushed by someone else)
+- In `src/accountLoginFlow.ts`, `TEST_MODE` is now `false`. The next run is a full import, not a 2-row test, and it moves on to the next batch by itself.
 
-**Why your second batch failed:** it uploaded 1,664 Users, then waited for Salesforce to finish that job (`750WH00000ga5nNYAQ`). It was still waiting when it hit the 15-minute run limit (E100). The run was cut off before it could write results or start the next batch, so the import stopped there.
+## 2. `67e10fd`: timeout fix (my commit, 4 files, +385 / −70)
 
-**What the fix does (4 files, +385 / −70)**
-- **Wait limit:** a batch now waits at most 10 minutes for the User job.
-- **Hand-off:** if the job is still running after 10 minutes, the batch passes the job Id to the next run, which picks up the wait. I
+**`src/accountLoginFlow.ts`**
+- **Smaller batches:** `MAX_ROWS` went from 2,000 to **500** rows per run. Creating these Users is slow, so a smaller batch keeps each Salesforce job well inside one run. I didn't mention this in my last summary, sorry.
+- **Wait limit:** `POLL_BUDGET_MS` = 10 minutes. A run waits at most that long for the User job, which leaves about 5 minutes for permission sets, the results sheet and starting the next batch.
+- **Hand-off:** if the job is still running after 10 minutes, the run passes `pendingJobId` and its file position to the next run. That run carries on waiting for the same job and doesn't upload the Users again.
+- **Hand-off limit:** `MAX_JOB_HANDOFFS` = 6, so a job gets about an hour in total. After that the run stops with an err
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
