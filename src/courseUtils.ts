@@ -272,9 +272,16 @@ export function parseCourseTime(s: string | undefined | null): {
     }
   }
 
+  // Salesforce Time fields require the full ISO form "HH:mm:ss.SSSZ" — a bare
+  // "HH:mm:ss" is accepted by the API but is mishandled by the platform's own
+  // end-after-start check, rejecting valid ranges (confirmed directly against
+  // Stanford_UAT: the exact same literal value succeeds with ".000Z" appended
+  // and fails without it).
+  const start = startRaw ? parseTime12h(startRaw) : null;
+  const end = endRaw ? parseTime12h(endRaw) : null;
   return {
-    startTime: startRaw ? parseTime12h(startRaw) : null,
-    endTime: endRaw ? parseTime12h(endRaw) : null,
+    startTime: start ? `${start}.000Z` : null,
+    endTime: end ? `${end}.000Z` : null,
   };
 }
 

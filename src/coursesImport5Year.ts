@@ -1111,14 +1111,6 @@ export const coursesImport5Year = flow({
                   if (startTime) sched.StartTime = startTime;
                   if (endTime && startTime && endTime > startTime)
                     sched.EndTime = endTime;
-                  // TEMP DEBUG (remove after diagnosing the End-Time
-                  // validation failures) — prints the raw source value next
-                  // to exactly what was computed and what's about to be sent.
-                  logger.info(
-                    `[Course5Y] DEBUG Schedule row ${startRow + i} (${sourceId}): ` +
-                      `raw Course_Time="${row.Course_Time}" | parsed startTime=${startTime} endTime=${endTime} | ` +
-                      `sched.StartTime=${sched.StartTime} sched.EndTime=${sched.EndTime}`,
-                  );
                   const schedId = await sfCreate(
                     sfBase,
                     sfToken,
