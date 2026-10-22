@@ -42,43 +42,42 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-22
-**Status:** blocked — I've finished the review.
+**Status:** at risk — Course correction table partially implemented locally; needs completion, testing, and deployment
 
 **Done this session**
-- I've finished the review. Yes, correction mode inside `coursesImportAllTime` is the better option. It works the same way as the Student, Instructor and Associate flows, so there's one pattern to maintain and no new flow to deploy. I haven'…
+- Added Course Correction Enabled switch to configuration page
+- Implemented date parser accepting M/D/YYYY and YYYY-MM-DD formats
+- Built correction tab reader with flexible column name handling
+- Added validation to reject end dates before start dates
 
 **Open items**
-- Confirm Option A approach and whether to include 'run only these 8 IDs' feature
-- Implement date-correction table in src/coursesImportAllTime.ts with logging
-- Add unit tests to src/coursesImportAllTime.test.ts
-- Open pull request on stanford-csp-orchestrate
+- Finish file reader change to filter by correction IDs in coursesImportAllTime.ts
+- Connect correction mode to main flow with ID tracking across runs
+- Add logging for each correction and unmatched IDs
+- Add correction column to results sheet
+- Write unit tests for correction logic
+- Build, test locally, then commit and open pull request
 - Re-run Course import (full or 8-row subset) and verify all 8 offerings load
-- Check if Enrollment import already ran; if so, re-run enrollments for these 8 offerings
-- Change TEST_MODE to false in src/accountLoginFlow.ts and redeploy
-- Run full 85-batch Enrollment import after TEST_MODE=false redeploy
+- Verify Enrollment import status; re-run if needed after Course import succeeds
 
 **Decisions**
+- Option A: embedded correction table with conditional date override; all other fields from source TSV unchanged
+- Correction table pattern matches Student, Instructor, Associate flows for consistency
 - Tier 2 can run now; Tier 3 changes do not touch Tier 2 logic
 - Execution order locked: Tier 1 → Tier 2 → Tier 3 (newest first)
 - All-time Enrollment flow must run after All-time Course flow; Waiver after Enrollment
-- Other Cost, Staff Detail, Timecard flows filter on Tier 1 range (2024–2025 prefixes)
-- Enrolled-only filter: Account Login User creation requires at least one Enrollment row with Status = 'Enrolled'
-- Preferred fix for Dropped_Percent fields: widen org field definition to Number or Percent (5,2)
-- Option A: embedded correction table with conditional date override; all other fields from source TSV unchanged
 
 **Blockers**
-- 8 CourseOffering records failed date validation; source file has incorrect dates for these offerings
+- 8 CourseOffering records failed date validation; source file has incorrect dates
 - TEST_MODE=true still in src/accountLoginFlow.ts (line 109); blocks full 85-batch import
-- Awaiting confirmation on Option A and run-subset feature before code implementation
+- Implementation incomplete in local copy; not yet committed or pushed to GitHub
 
 **Next**
-- Confirm Option A (embedded correction table) and run-subset feature preference
-- Implement correction table and logging in src/coursesImportAllTime.ts
-- Add unit tests and open pull request
+- Confirm 8 correction rows are on 'Course' tab in Correction Sheet ID
+- Complete file reader change to filter and track correction IDs
+- Write unit tests and build locally
+- Commit to stanford-csp-orchestrate and open pull request
 - Re-run Course import and verify 8 offerings load successfully
-- Verify Enrollment import status; re-run if it already executed
-- Change TEST_MODE=false and redeploy Account Login flow
-- Run full 85-batch Enrollment import
 
 **Checked live on 2026-10-22:** the repository
 ### Last session — 2026-10-22
@@ -90,26 +89,21 @@
 | Name | Stanford-Data-Migration-CourseAllImport-StartEndDateIssueFix-Build |
 | Session | `248ba686-4c07-4923-9742-10be97b27c14` |
 **In its own words (excerpt):**
-I've finished the review. Yes, correction mode inside `coursesImportAllTime` is the better option. It works the same way as the Student, Instructor and Associate flows, so there's one pattern to maintain and no new flow to deploy. I haven't changed any code.
+My last response was cut off partway, so the change is only partly done. Nothing has been committed or pushed, and the branch on GitHub is unchanged.
 
-## What the other flows do
+**Done so far (in my local copy only):**
+- **Settings:** I added a `Course Correction Enabled` switch on the Course Configuration page, off by default. I also updated the `Correction Sheet ID` description to mention the new `Course` tab.
+- **`src/coursesImportAllTime.ts`:** I added the correction helpers:
+  - a date parser that accepts both `M/D/YYYY` and `YYYY-MM-DD`, and rejects dates that don't exist, such as 2/30;
+  - a function that reads the `Course` tab. It accepts both `StartDate`/`EndDate` and `Start_Date`/`End_Date` as column names, so your sheet works as you pasted it;
+  - a check that records a clear error, and doesn't send the record, if a corrected end date is before its start date.
+- I started changing the file reader so correction mode keeps only the listed IDs.
 
-I read `studentFlow.ts`, `instructorFlow.ts`, `associateFlow.ts` and `configPages.ts`. All three work the same way:
-
-- **On/off switch:** a setting per flow (`Student Correction Enabled`, `Instructor…`, `Associate…`), off by default.
-- **One shared sheet:** they all read the `Correction Sheet ID` sheet, each from its own tab (`Student`, `Instructor`, `Associate`). Each tab has an `ID` column plus one column per corrected field, named with the Salesforce field name.
-- **When on:**
-  - the flow loads that tab when it starts;
-  - it skips any file row whose ID isn't in the tab;
-  - it uses the tab's values for the listed fields only, and takes everything else from the TSV;
-  - it stops reading the file once every ID in the tab has been found.
-- **When off:** the flow behaves exactly as before.
-
-## The Course version
-
-| Piece | Proposal |
-|---|---|
-| Switch | New `Course Correction Enabled` setting, off
+**Still to do:** finish that reader change and connect it to the main flow. That covers:
+- loading the tab when the flow starts;
+- carrying the IDs already found from one run to the next;
+- stopping once all 8 are found;
+- logging each correction, plus any ID
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
