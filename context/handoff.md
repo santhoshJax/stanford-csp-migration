@@ -42,12 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-22
-**Status:** at risk — Option A explained; awaiting confirmation to implement date-correction table and proceed with 8-row fix
+**Status:** blocked — I've finished the review.
 
 **Done this session**
-- Detailed Option A implementation logic: correction table lookup, conditional date override, logging for ID mismatches
-- Clarified that all non-date fields still come from source TSV; correction table supplies only 3 values per row
-- Explained 'run only these 8 IDs' variant: flow skips non-matching rows, logs warnings for unmatched correction IDs
+- I've finished the review. Yes, correction mode inside `coursesImportAllTime` is the better option. It works the same way as the Student, Instructor and Associate flows, so there's one pattern to maintain and no new flow to deploy. I haven'…
 
 **Open items**
 - Confirm Option A approach and whether to include 'run only these 8 IDs' feature
@@ -92,23 +90,26 @@
 | Name | Stanford-Data-Migration-CourseAllImport-StartEndDateIssueFix-Build |
 | Session | `248ba686-4c07-4923-9742-10be97b27c14` |
 **In its own words (excerpt):**
-You don't need to. Under option A the correction file only replaces two fields. Every other field still comes from the source TSV.
+I've finished the review. Yes, correction mode inside `coursesImportAllTime` is the better option. It works the same way as the Student, Instructor and Associate flows, so there's one pattern to maintain and no new flow to deploy. I haven't changed any code.
 
-## How it works
+## What the other flows do
 
-The flow already reads each of the 8 courses from the source course TSV, with all its fields. They failed at the last step only because of the dates. The correction table would hold just three values per course: the source ID, the start date and the end date.
+I read `studentFlow.ts`, `instructorFlow.ts`, `associateFlow.ts` and `configPages.ts`. All three work the same way:
 
-For each row, the flow would:
+- **On/off switch:** a setting per flow (`Student Correction Enabled`, `Instructor…`, `Associate…`), off by default.
+- **One shared sheet:** they all read the `Correction Sheet ID` sheet, each from its own tab (`Student`, `Instructor`, `Associate`). Each tab has an `ID` column plus one column per corrected field, named with the Salesforce field name.
+- **When on:**
+  - the flow loads that tab when it starts;
+  - it skips any file row whose ID isn't in the tab;
+  - it uses the tab's values for the listed fields only, and takes everything else from the TSV;
+  - it stops reading the file once every ID in the tab has been found.
+- **When off:** the flow behaves exactly as before.
 
-1. **Read the row from the source TSV** as it does now. That gives Code, Title, Quarter, Max_Enrollment, Units, Tuition, Additional_Fee, Cancelled, Dropped_Special_Percent, Global_Eval, Return_Rate, Format, Catalog_Notes and Description.
-2. **Check whether the source ID is in the correction table.**
-   - If it is, set the offering's start and end dates from the table instead of the file's dates.
-   - If it isn't, change nothing.
-3. **Build and upsert the CourseOffering** using all the other fields from the TSV, exactly as now.
+## The Course version
 
-In the code, the only change is where the dates are set (`setDate("StartDate", row.Start_Date)` and `setDate("EndDate", row.End_Date)` in `src/coursesImportAllTime.ts`). Everything above and below that stays the same.
-
-## If 
+| Piece | Proposal |
+|---|---|
+| Switch | New `Course Correction Enabled` setting, off
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
