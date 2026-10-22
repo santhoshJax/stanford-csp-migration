@@ -42,22 +42,22 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-22
-**Status:** at risk — Course correction mode committed & PR open; awaiting merge, config deploy, and live test run
+**Status:** at risk — PR #1 merged config; Course Correction Sheet ID live. Awaiting npm run import, config setup, and live test run.
 
 **Done this session**
-- Completed file reader change to filter and track correction IDs
-- Connected correction mode to main flow with ID tracking across runs
-- Added logging for each correction and unmatched IDs
-- All course import tests pass (16/16); type check clean
-- Committed to stanford-csp-orchestrate and opened PR #1
+- Added Course Correction Sheet ID as separate config field
+- Renamed shared setting to Student/Instructor/Associate Correction Sheet ID
+- Updated PR #1 description and rebased cleanly
+- All 16 course import tests pass; type check clean; no new ESLint findings
 
 **Open items**
-- Review and merge PR #1 to main
-- Run npm run import to deploy Course Correction Enabled setting
-- Verify 8 correction rows on 'Course' tab in Correction Sheet ID
-- Turn on Course Correction Enabled and run Course Import - All; verify logs show 8 corrections applied
-- Add correction column to results sheet
-- Re-run Enrollment import after Course import succeeds
+- Merge PR #1 to main
+- Run npm run import to activate new config fields
+- Verify Student/Instructor/Associate Correction Sheet ID retained old value after import
+- Set Course Correction Sheet ID to client's converted sheet
+- Turn on Course Correction Enabled and run Course Import - All; verify 8 corrections applied in logs
+- Turn off Course Correction Enabled
+- Re-run Enrollment import if it ran before these 8 offerings were corrected
 - Remove TEST_MODE=true from src/accountLoginFlow.ts (line 109) before full 85-batch import
 
 **Decisions**
@@ -66,16 +66,18 @@
 - Tier 2 can run now; Tier 3 changes do not touch Tier 2 logic
 - Execution order locked: Tier 1 → Tier 2 → Tier 3 (newest first)
 - All-time Enrollment flow must run after All-time Course flow; Waiver after Enrollment
+- Course corrections read only from Course Correction Sheet ID; Student/Instructor/Associate read from shared setting
 
 **Blockers**
 - PR #1 not yet merged to main; change not live in org
 - TEST_MODE=true still in src/accountLoginFlow.ts blocks full 85-batch import
 
 **Next**
-- Review and merge PR #1
-- Run npm run import to activate Course Correction Enabled in config
-- Enable correction mode and run Course Import - All; verify 8 offerings load with corrections applied
-- Disable correction mode and re-run Enrollment import if it ran before
+- Merge PR #1 to main
+- Run npm run import to deploy new config fields
+- Set Course Correction Sheet ID and turn on Course Correction Enabled
+- Run Course Import - All and verify 8 corrections applied in logs
+- Re-run Enrollment import for corrected offerings
 
 **Checked live on 2026-10-22:** the repository
 ### Last session — 2026-10-22
@@ -87,26 +89,17 @@
 | Name | Stanford-Data-Migration-CourseAllImport-StartEndDateIssueFix-Build |
 | Session | `248ba686-4c07-4923-9742-10be97b27c14` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes
-• Pushed to GitHub: no
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Course corrections now have their own config field, and that's pushed to `stanford-csp-orchestrate`. [PR #1](https://github.com/santhoshJax/stanford-csp-migration/pull/1) now includes the change, its description is updated, and it can still be merged cleanly. Nothing has been deployed or run yet.
 
-The Course correction-mode change is committed, pushed to `stanford-csp-orchestrate`, and open as a pull request to `main`: [PR #1](https://github.com/santhoshJax/stanford-csp-migration/pull/1). It can be merged cleanly.
+**What changed (commit `fa79a14`, 6 files):**
+- **New setting `Course Correction Sheet ID`** on the Course Configuration page. `Course Import - All` reads its corrections only from this sheet. It reads the first tab, whatever that tab is called, so the client's converted Google Sheet works as it is: `ID`, `Start_Date` and `End_Date` are used, and the other columns are ignored.
+- **The shared setting is renamed `Student/Instructor/Associate Correction Sheet ID`**, and its description now mentions only those three flows. The Student, Instructor and Associate flows read it under the new name. Its internal key hasn't changed, so the sheet ID you already saved there should carry over after re-import.
 
-**What I checked before pushing:**
-- Commit `024a249` is now the head of the remote branch.
+**Checks:**
 - The type check is clean and the build compiles.
-- The course import tests all pass: 16 of 16, 12 of them new.
-- 5 tests fail in `flows.test.ts`. I ran them without this change and they fail the same way, so they don't come from it. They're for a different flow.
-
-**Steps for you:**
-1. Review and merge the pull request.
-2. Run `npm run import` so the new `Course Correction Enabled` setting appears in your integration.
-3. Put the 8 r
+- All 16 course import tests pass.
+- ESLint shows the same 44 findings on these files with and without the change, so none are new.
+-
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
