@@ -42,18 +42,20 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-22
-**Status:** at risk — Filter code verified & ready for test run; redeploy needed, 3 config vars to check, full import blocked on TEST_MODE flag & speed validation
+**Status:** on track — Test-mode import succeeded; enrolled-only filter working. Ready for higher test or full import after TEST_MODE=false.
 
 **Done this session**
-- Verified enrolled-only filter commit 5f8e1d2 is correct, builds, and passes Account Login tests
-- Confirmed filter logic matches Enrollment import (Student_ID, Status=Enrolled, tab delimiter, .0 handling)
-- Confirmed no pull request exists yet; branch not behind main
+- Test-mode import (2 rows) executed successfully with enrolled-only filter active
+- Verified all 3 permission set names exist in org (B2BBuyer, CSP_STAP_API_Access, CSP_Student_Education_Cloud_PS)
+- Confirmed enrolled-only check runs and stops early when all students enrolled (2 sec, 118k rows read)
+- Validated User upsert: 1 processed (Shannon McConville updated, not created), 0 failed
+- Confirmed permission set assignments already in place for existing User
 
 **Open items**
-- Redeploy integration from stanford-csp-orchestrate branch to instance
-- Verify 3 config vars on instance: Account Login Profile Name, Permission Sets, Enrollment File ID
-- Run test-mode import (TEST_MODE=true, 2 rows) and review log for enrollment check timing
-- Test quarter code wi24 in source data to confirm it equals 20242
+- Decide: run higher test limit (e.g. 50 rows) to test non-enrolled skip path and new User creation, or proceed to full import
+- Change TEST_MODE from true to false in code and redeploy for full import
+- Open pull request for commits 5f8e1d2 + 5921ac8 to main
+- Run full import (85 batches, ~135.8 MB Enrollment file) after TEST_MODE=false redeploy
 - Widen Dropped_Special_Percent__c and Dropped_Percent__c in org to accept 100
 - Update sheet: Enrollment_Count row → 'don't load'
 - Update sheet: Cancelled target → Enrollment_Status__c only; Units target → Units__c only; Web_Registration_Closed → Direct Map
@@ -68,18 +70,16 @@
 - Preferred fix: widen org field definition for Dropped_Special_Percent__c and Dropped_Percent__c to Number or Percent (5,2)
 
 **Blockers**
-- TEST_MODE=true hardcoded in code; full import requires code change to false + redeploy
-- Speed unvalidated; full run reads 135.8 MB Enrollment file ~85 times (once per batch); test-mode timing required before full import
-- Dropped_Special_Percent__c field too narrow in org; row 49 (100.0 value) rejected; must widen before re-run
+- TEST_MODE=true still in code; full import requires change to false + redeploy
+- Speed unvalidated for non-enrolled case; full Enrollment file read (135.8 MB) occurs when batch contains any non-enrolled student; test-mode with higher limit recommended before full import
 
 **Next**
-- Redeploy integration from stanford-csp-orchestrate branch to instance
-- Check 3 config vars on instance match expected values
-- Run test-mode import and review log for enrollment check step timing and row counts
-- After test validates, change TEST_MODE to false and redeploy for full import
-- Open pull request for both commits (5f8e1d2 + 5921ac8) to main once test run succeeds
+- Confirm: proceed with higher test limit (50 rows) or go straight to TEST_MODE=false + full import
+- Change TEST_MODE to false and redeploy to instance
+- Open pull request for 5f8e1d2 + 5921ac8 to main
+- Run full import and monitor log for speed and skip counts across all 85 batches
 
-**Checked live on 2026-10-22:** the repository
+**Checked live on 2026-10-22:** Google Workspace, the repository
 ### Last session — 2026-10-22
 | | |
 |---|---|
@@ -89,17 +89,16 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-The branch is ready for a **test-mode** run of Account Login Import. The enrolled-only filter is in the code, it's correct, and it builds. It is **not** ready for the full import yet, for two reasons below.
+The run worked, and the log shows each part of the change doing its job.
 
-**What I checked on `stanford-csp-orchestrate` (head `6e4890b`)**
-- The filter commit `5f8e1d2` is on the branch, along with the permission-set commit `5921ac8`. The branch is not behind `main`, and no pull request exists yet.
-- Someone pushed 4 more commits after mine (`188e3ec` and a merge). They only change Course import files and `handoff.md`. None of the Account Login files, or anything the flow imports, were touched.
-- **The filter does what you asked.** For each batch of 2,000 Account Login rows:
-  1. It removes duplicate Student_IDs.
-  2. It reads the Enrollment file and keeps only students with at least one row where `Status = Enrolled`.
-  3. It matches the remaining students to Contacts, creates the Users and assigns the 3 permission sets.
-  - Students who are Wait List, Dropped, Cancelled and so on are skipped, and the log shows how many.
-- **The column names match the Enrollment import.** It uses `Student_ID`, `Status` and the value `Enrolled`, the same as `enrollme
+**What this run shows**
+- **Permission sets:** all 3 names matched sets in the org (`B2BBuyer`, `CSP_STAP_API_Access`, `CSP_Student_Education_Cloud_PS`).
+- **Enrolled-only check:** it ran, and both test students are Enrolled, so neither was filtered out. It stopped reading after 118,187 Enrollment rows because it had already found both students. That's why the step took only about 2 seconds.
+- **Account match:** 1 of the 2 students has no Person Account in the org, so it was skipped. This is a separate check that was already in the flow. That student needs Student Import to run first.
+- **User upsert:** 1 processed, 0 failed. I opened the [results sheet](https://docs.google.com/spreadsheets/d/1wecRladm9wOGhQ4Hjr_cno5U3-HQSTdUpj6ghN7mrHQ). It shows Shannon McConville (Student_ID `20461695`, User `005WH00000TasE9YAJ`) with **Action = Updated**. This is the same User from your first sample run, so it was updated rather than created again.
+- **Assignments:** "3 already in place" means that User already had all 3 permission sets, so nothing new was created.
+
+The `firstId`/`lastId` in the log are the first and last
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
