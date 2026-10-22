@@ -42,12 +42,12 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-22
-**Status:** on track — Account Login flow logic documented; TEST_MODE=false + full import ready after PR merge
+**Status:** on track — Code verified correct; TEST_MODE=false change + redeploy needed before full 85-batch import
 
 **Done this session**
-- Documented enrolled-only filter logic, permission set matching, and step order in accountLoginFlow.ts
-- Confirmed early-stop optimization (118k rows read in 2 sec when all students enrolled)
-- Verified permission set assignment safety (re-run safe; failures logged but don't block)
+- Verified src/accountLoginFlow.ts matches documented logic across 16 key lines
+- Confirmed enrolled-only filter, permission set safety, and batch sequencing work correctly
+- Identified TEST_MODE=true as only blocker for full import
 
 **Open items**
 - Change TEST_MODE from true to false in src/accountLoginFlow.ts and redeploy
@@ -57,6 +57,7 @@
 - Widen Dropped_Special_Percent__c and Dropped_Percent__c in org to accept 100
 - Update sheet: Enrollment_Count row → 'don't load'; Cancelled target → Enrollment_Status__c only; Units target → Units__c only; Web_Registration_Closed → Direct Map
 - Mark sheet row 123 Tuition_Rule_ID 'Done (duplicate)' of row 89
+- Fix two labelled steps '6.' and garbled header line in comments (optional, can batch with TEST_MODE change)
 
 **Decisions**
 - Tier 2 can run now; Tier 3 changes do not touch Tier 2 logic
@@ -70,11 +71,11 @@
 - TEST_MODE=true still in code; full import requires change to false + redeploy
 
 **Next**
-- Change TEST_MODE to false in src/accountLoginFlow.ts and redeploy to instance
+- Change TEST_MODE to false in src/accountLoginFlow.ts (optionally tidy comments) and redeploy to instance
 - Open pull request for 5f8e1d2 + 5921ac8 to main
 - Run full import and monitor log for speed and skip counts across all 85 batches
 
-**Checked live on 2026-10-22:** the repository
+**Checked live on 2026-10-22:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-10-22
 | | |
 |---|---|
@@ -84,25 +85,14 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-The logic is all in `src/accountLoginFlow.ts` on `stanford-csp-orchestrate`. I re-read the file for this answer, and the snippets below are copied from it.
+I checked the code you pasted against `src/accountLoginFlow.ts` on `stanford-csp-orchestrate` (head `bedfbb3`). It matches, and it's correct to run in test mode. Before a full import, `TEST_MODE` has to be changed first.
 
-## Order of steps in each 2,000-row batch
+**How I compared them:** I didn't diff the two files line by line. Instead I checked 16 lines from your paste against the branch, and all 16 are there. They include the test-mode settings, the `Enrolled` status match, the `.0` clean-up, the early stop, the permission set lookup, the `Student_ID` check, the duplicate merge and the next-batch call. The commits since my last review only touch `handoff.md`, so the flow code hasn't changed.
 
-1. Read the Account Login rows from Drive. A row is skipped if its column count doesn't match the header, or its `Student_ID` is blank, `0` or not a number.
-2. Look up the Profile. The run stops if it isn't found.
-3. Look up the 3 permission sets. The run stops if a name is missing or matches more than one set.
-4. Remove duplicate `Student_ID`s.
-5. **Enrolled-only filter:** keep only students who have an `Enrolled` row in the Enrollment file.
-6. Match the remaining students to a Person Account. Students with no Account, or no email, are skipped.
-7. Upsert the Users with Bulk API 2.0, using `Federation_Identifier__c` as the key.
-8. Add any of the 3 permission sets each User doesn't already have.
-9. Write the results sheet, then start the next batch.
-
-The filter runs after step 4 and before the Salesforce lookup, so non-enrolled students never cost a Salesforce query.
-
-## 1. Enrolled-only filter
-
-**Rule:** a student gets a User only if at least one row in the Enrollment TSV has their `St
+**What runs correctly**
+- **Enrolled-only filter:** looks up `Student_ID` and `Status` by header name and matches `Enrolled` ignoring case and spaces. It runs after duplicate IDs are merged and before the Salesforce lookup. If either column is missing, the run stops.
+- **Permission sets:** a wrong or ambiguous name stops the run before any User is written. Assignments a User already has are skipped, so re-running is safe.
+- **Moving between batches:** the next batch starts at the first row the current batch didn't process, so rows 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
