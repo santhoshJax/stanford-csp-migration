@@ -105,8 +105,9 @@ const MAX_ROWS = 2000; // rows per execution window
 
 // Sandbox testing only. When TEST_MODE is true, the flow processes at most
 // TEST_RECORD_LIMIT records total and stops — no recursion through the rest
-// of the file. Set TEST_MODE back to false before running the full file.
-const TEST_MODE = true;
+// of the file. Full run (2026-10-22): TEST_MODE off after the sandbox
+// 2-record validation passed.
+const TEST_MODE = false;
 const TEST_RECORD_LIMIT = 2;
 
 const DEFAULT_PROFILE_NAME = "Student_Profile";
