@@ -42,59 +42,75 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-22
-**Status:** on track — Code verified identical to branch; TEST_MODE=false change + redeploy still needed before full 85-batch import
+**Status:** at risk — Course import: 8 date errors found; recommending code fix (Option A) with correction table + re-run. Awaiting confirmation before commit.
 
 **Done this session**
-- Confirmed src/accountLoginFlow.ts on branch matches pasted code character-for-character (1,025 lines, checksum a33c699c…)
+- Identified exact 8 CourseOffering records with date validation failures
+- Mapped corrected dates from Course_Start_End_Dates_Corrected.xlsx
+- Analyzed flow logic (line 569) and upsert safety
+- Evaluated 4 fix options; recommended Option A (embedded correction table)
 
 **Open items**
-- Change TEST_MODE from true to false in src/accountLoginFlow.ts (line 109) and redeploy to instance
-- Open pull request for commits 5f8e1d2 + 5921ac8 to main
-- Run full import (85 batches, ~135.8 MB Enrollment file) after TEST_MODE=false redeploy
-- Monitor full run for speed and skip counts; expect slower batches if any contain non-enrolled students
-- Widen Dropped_Special_Percent__c and Dropped_Percent__c in org to accept 100
-- Update sheet: Enrollment_Count row → 'don't load'; Cancelled target → Enrollment_Status__c only; Units target → Units__c only; Web_Registration_Closed → Direct Map
-- Mark sheet row 123 Tuition_Rule_ID 'Done (duplicate)' of row 89
-- Fix two labelled steps '6.' and garbled header line in comments (optional, can batch with TEST_MODE change)
+- Confirm Option A approach and whether to include 'run only these 8 IDs' feature
+- Implement date-correction table in src/coursesImportAllTime.ts with logging
+- Add unit tests to src/coursesImportAllTime.test.ts
+- Open pull request on stanford-csp-orchestrate
+- Re-run Course import (full or 8-row subset) and verify all 8 offerings load
+- Check if Enrollment import already ran; if so, re-run enrollments for these 8 offerings
+- Change TEST_MODE to false in src/accountLoginFlow.ts and redeploy (from previous session)
+- Run full 85-batch Enrollment import after TEST_MODE=false redeploy
 
 **Decisions**
 - Tier 2 can run now; Tier 3 changes do not touch Tier 2 logic
 - Execution order locked: Tier 1 → Tier 2 → Tier 3 (newest first)
 - All-time Enrollment flow must run after All-time Course flow; Waiver after Enrollment
 - Other Cost, Staff Detail, Timecard flows filter on Tier 1 range (2024–2025 prefixes)
-- Enrolled-only filter: Account Login User creation requires at least one Enrollment row with Status = 'Enrolled' for that Student_ID
-- Preferred fix: widen org field definition for Dropped_Special_Percent__c and Dropped_Percent__c to Number or Percent (5,2)
+- Enrolled-only filter: Account Login User creation requires at least one Enrollment row with Status = 'Enrolled'
+- Preferred fix for Dropped_Percent fields: widen org field definition to Number or Percent (5,2)
 
 **Blockers**
-- TEST_MODE=true still in code (line 109); full import requires change to false + redeploy
+- 8 CourseOffering records failed date validation; source file has incorrect dates for these offerings
+- TEST_MODE=true still in src/accountLoginFlow.ts (line 109); blocks full 85-batch import
 
 **Next**
-- Change TEST_MODE to false in src/accountLoginFlow.ts and redeploy to instance
-- Open pull request for 5f8e1d2 + 5921ac8 to main
-- Run full import and monitor log for speed and skip counts across all 85 batches
+- Confirm Option A (embedded correction table) and run-subset feature preference
+- Implement correction table and logging in src/coursesImportAllTime.ts
+- Add unit tests and open pull request
+- Re-run Course import and verify 8 offerings load successfully
+- Verify Enrollment import status; re-run if it already executed
+- Change TEST_MODE=false and redeploy Account Login flow
+- Run full 85-batch Enrollment import
 
-**Checked live on 2026-10-22:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-10-22:** the repository, the Salesforce org
 ### Last session — 2026-10-22
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
-| Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
+| Name | Stanford-Data-Migration-CourseAllImport-StartEndDateIssueFix-Build |
+| Session | `248ba686-4c07-4923-9742-10be97b27c14` |
 **In its own words (excerpt):**
-Your pasted code is identical to `src/accountLoginFlow.ts` on `stanford-csp-orchestrate`, character for character. This time I compared the whole file rather than spot-checking lines.
+My recommendation is to add a small, explicit date-correction table inside the Course Import flow, keyed by the 8 source IDs, and then re-run only those 8 rows. I haven't changed any code yet.
 
-**How I checked**
-- I downloaded the file from GitHub at the current head of the branch (`23976d5`).
-- I saved your paste to a separate file and compared the two with `diff` and `cmp`. Both report no differences, both files have 1,025 lines, and their checksums match (`a33c699c…`).
-- The file was last changed in commit `5f8e1d2`, the enrolled-only filter. The 4 commits pushed since then only touched `handoff.md`.
+## What I found
 
-So what you're running is what's on the branch, including both the permission-set step and the enrolled-only filter.
+**The corrected dates** (`Course_Start_End_Dates_Corrected.xlsx`) cover exactly 8 offerings, which matches your 8 errors:
 
-**Before the full import:** `TEST_MODE = true` is still set on line 109. As it stands, the flow handles 2 rows and doesn't go on to the next batch. For the full run, it needs changing to `false` and the integration redeploying. I can make that change and push it to the branch once you confirm.
+| Source ID | Quarter | Start | End |
+|---|---|---|---|
+| 19991_GER 01 | fa99 | 1999-09-27 | 1999-11-29 |
+| 20002_DRA 02 | wi00 | 2001-01-11 | 2001-03-15 |
+| 20033_PHY 19 | sp03 | 2004-04-05 | 2004-06-14 |
+| 20051_LIT 161 | fa05 | 2005-09-28 | 2005-11-30 |
+| 20052_EVT 120 | wi05 | 2006-02-23 | 2006-02-23 (same day, which the rule allows) |
+| 20064_EGL 267 | su06 | 2007-06-26 | 2007-07-17 |
+| 20071_WSP 109 | fa07 | 2007-11-03 | 2007-11-10 |
+| 20073_EGL 256 W | sp07 | 2008-03-31 | 2008-06-08 |
 
-Sources: checked live: `src/accountLoginFlow.ts` on GitHub branch `stanford-csp-orchestrate` (head `23976d5`), the branch's commit history · not checked: what's deployed on the integr
+The years fit your quarter codes: the number is the academic year, which starts in Fall, so wi00 falls in January 2001.
+
+**The flow** (`src/coursesImportAllTime.ts`) copies `Start_Date` and `End_Date` from the course file straight onto `StartDate` and `EndDate` (around line 569). It then upserts the CourseOffering by `External_ID_4D__c` = source ID. Learning and Lea
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
