@@ -102,14 +102,13 @@ export function isTier3Quarter(quarter: string): boolean {
 
 // ── Correction mode ───────────────────────────────────────────────────────────
 // Same pattern as Student / Instructor / Associate: when "Course Correction
-// Enabled" is true, the flow reads the 'Course' tab of the shared Correction
-// Sheet, processes ONLY the course IDs listed there, and overrides the listed
+// Enabled" is true, the flow reads the first tab of its own Course Correction
+// Sheet (separate from the Student/Instructor/Associate sheet), processes ONLY the course IDs listed there, and overrides the listed
 // fields. Every other field still comes from the course TSV. When the switch
 // is false, nothing below is used and the flow behaves exactly as before.
 //
 // Added Oct 2026 for the 8 CourseOfferings that failed the "End Date cannot be
 // before Start Date" validation rule — the client supplied corrected dates.
-const CORRECTION_TAB = "Course";
 
 // Corrected field → accepted column headers on the tab. The Salesforce field
 // name is preferred (as on the other tabs), but the source TSV column name is
@@ -161,7 +160,7 @@ export function parseCorrectionDate(
 }
 
 /**
- * Turns the raw values of the 'Course' tab (first row = headers) into a
+ * Turns the raw values of the Course Correction Sheet (first row = headers) into a
  * Map<sourceId, {StartDate?, EndDate?}>. IDs are trimmed. Blank cells are not
  * captured, so a blank cell means "no override" for that field.
  */
@@ -230,13 +229,17 @@ export function applyCourseCorrection(
   return { applied };
 }
 
-/** Reads the 'Course' tab of the Correction Sheet through the Sheets API. */
+/**
+ * Reads the first tab of the Course Correction Sheet through the Sheets API.
+ * A range with no sheet name resolves to the first tab, so the tab can be
+ * called anything.
+ */
 async function loadCourseCorrectionSheet(
   spreadsheetId: string,
   accessToken: string,
 ): Promise<Map<string, CourseCorrection>> {
   const { data } = await axios.get<{ values?: string[][] }>(
-    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(CORRECTION_TAB)}!A:Z`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/A:Z`,
     { headers: { Authorization: `Bearer ${accessToken}` } },
   );
   return buildCourseCorrectionMap(data.values ?? []);
@@ -463,7 +466,7 @@ async function streamAndParseTsv(
           return;
         }
 
-        // Correction mode — keep only the IDs listed on the 'Course' tab.
+        // Correction mode — keep only the IDs listed in the Course Correction Sheet.
         if (correctionIds) {
           const rowId = (record.id ?? "").trim();
           if (!correctionIds.has(rowId)) {
@@ -580,17 +583,18 @@ export const coursesImportAllTime = flow({
     const sfToken = getAccessToken(sfConn);
     const sfBase = getSfInstanceUrl(sfConn);
 
-    // ── Correction sheet ('Course' tab) ───────────────────────────────────────
+    // ── Course Correction Sheet (first tab) ───────────────────────────────────
     // Unlike the person flows, a missing or empty tab stops the run: in
     // correction mode an empty map would silently skip every row in the file.
     const correctionMap = new Map<string, CourseCorrection>();
     if (correctionEnabled) {
       const correctionSheetId = String(
-        (configVars as Record<string, unknown>)["Correction Sheet ID"] ?? "",
+        (configVars as Record<string, unknown>)["Course Correction Sheet ID"] ??
+          "",
       ).trim();
       if (!correctionSheetId) {
         throw new Error(
-          "Course Correction Enabled is true but Correction Sheet ID is empty.",
+          "Course Correction Enabled is true but Course Correction Sheet ID is empty.",
         );
       }
       try {
@@ -601,16 +605,16 @@ export const coursesImportAllTime = flow({
         for (const [k, v] of loaded) correctionMap.set(k, v);
       } catch (err) {
         throw new Error(
-          `[Course22] Could not load the '${CORRECTION_TAB}' tab of the correction sheet: ${sfErrMsg(err)}`,
+          `[Course22] Could not load the Course Correction Sheet: ${sfErrMsg(err)}`,
         );
       }
       if (correctionMap.size === 0) {
         throw new Error(
-          `[Course22] Correction mode is on but the '${CORRECTION_TAB}' tab has no rows with an ID.`,
+          `[Course22] Correction mode is on but the Course Correction Sheet has no rows with an ID.`,
         );
       }
       logger.info(
-        `[Course22] Correction mode ON — ${correctionMap.size} course IDs loaded from the '${CORRECTION_TAB}' tab. Only these IDs are processed.`,
+        `[Course22] Correction mode ON — ${correctionMap.size} course IDs loaded from the Course Correction Sheet. Only these IDs are processed.`,
       );
     }
     const correctionIds = correctionEnabled

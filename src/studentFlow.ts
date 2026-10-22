@@ -771,7 +771,9 @@ export const studentImport = flow({
     // per-record from the correction sheet before mapping. All other fields come from TSV.
     const correctionSheetId = correctionEnabled
       ? String(
-          (configVars as Record<string, unknown>)["Correction Sheet ID"] ?? "",
+          (configVars as Record<string, unknown>)[
+            "Student/Instructor/Associate Correction Sheet ID"
+          ] ?? "",
         ).trim()
       : "";
 

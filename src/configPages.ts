@@ -118,12 +118,12 @@ export const configPages = {
         description:
           "When true, Associate Import only processes records found in the Correction Sheet and applies address overrides. Set to false to process all associate records normally.",
       }),
-      "Correction Sheet ID": configVar({
+      "Student/Instructor/Associate Correction Sheet ID": configVar({
         stableKey: "b6c7d8e9-f0a1-4b2c-9d3e-f4a5b6c7d8e9",
         dataType: "string",
         default: "",
         description:
-          "Google Sheets spreadsheet ID of the shared correction sheet. Used when Student, Instructor, Associate, or Course correction is enabled. Leave blank when no correction is running. Must contain a 'Student', 'Instructor', 'Associate', and/or 'Course' tab with an 'ID' column plus columns for each corrected field. The 'Course' tab uses 'StartDate'/'EndDate' (or 'Start_Date'/'End_Date') columns in M/D/YYYY or YYYY-MM-DD format.",
+          "Google Sheets spreadsheet ID of the correction sheet used by Student, Instructor, and Associate Import when their correction mode is enabled. Leave blank when no correction is running. Must contain a 'Student', 'Instructor', and/or 'Associate' tab with an 'ID' column plus columns for each corrected field. Course corrections use the separate Course Correction Sheet ID on the Course Configuration page.",
       }),
     },
   }),
@@ -162,7 +162,14 @@ export const configPages = {
         dataType: "boolean",
         default: "false",
         description:
-          "When true, Course Import - All only processes course IDs found on the 'Course' tab of the Correction Sheet and uses that tab's start and end dates for the CourseOffering. Every other field still comes from the course TSV. Set to false to process all course records normally.",
+          "When true, Course Import - All only processes course IDs found in the Course Correction Sheet and uses that sheet's start and end dates for the CourseOffering. Every other field still comes from the course TSV. Set to false to process all course records normally.",
+      }),
+      "Course Correction Sheet ID": configVar({
+        stableKey: "df025f96-aeb7-4540-94f3-0606654a0833",
+        dataType: "string",
+        default: "",
+        description:
+          "Google Sheets spreadsheet ID of the course correction sheet. Used only when Course Correction Enabled is true; leave blank otherwise. The first tab is read. It needs an 'ID' column matching the course TSV ID, plus 'Start_Date'/'End_Date' (or 'StartDate'/'EndDate') columns in M/D/YYYY or YYYY-MM-DD format. Other columns are ignored.",
       }),
       "Course Instructor File ID": configVar({
         stableKey: "c8d9e0f1-8888-4c1d-5e6f-11223344ccdd",

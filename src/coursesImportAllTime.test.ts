@@ -37,7 +37,7 @@ describe("isTier3Quarter", () => {
 
 // ── Correction mode (Oct 2026) ────────────────────────────────────────────────
 // The 8 CourseOfferings that failed "End Date cannot be before Start Date" get
-// their dates from the 'Course' tab of the Correction Sheet.
+// their dates from the Course Correction Sheet.
 
 describe("parseCorrectionDate", () => {
   it("reads M/D/YYYY (source TSV format)", () => {
