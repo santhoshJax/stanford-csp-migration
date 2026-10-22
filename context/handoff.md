@@ -42,15 +42,13 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-22
-**Status:** on track — Code verified correct; TEST_MODE=false change + redeploy needed before full 85-batch import
+**Status:** on track — Code verified identical to branch; TEST_MODE=false change + redeploy still needed before full 85-batch import
 
 **Done this session**
-- Verified src/accountLoginFlow.ts matches documented logic across 16 key lines
-- Confirmed enrolled-only filter, permission set safety, and batch sequencing work correctly
-- Identified TEST_MODE=true as only blocker for full import
+- Confirmed src/accountLoginFlow.ts on branch matches pasted code character-for-character (1,025 lines, checksum a33c699c…)
 
 **Open items**
-- Change TEST_MODE from true to false in src/accountLoginFlow.ts and redeploy
+- Change TEST_MODE from true to false in src/accountLoginFlow.ts (line 109) and redeploy to instance
 - Open pull request for commits 5f8e1d2 + 5921ac8 to main
 - Run full import (85 batches, ~135.8 MB Enrollment file) after TEST_MODE=false redeploy
 - Monitor full run for speed and skip counts; expect slower batches if any contain non-enrolled students
@@ -68,10 +66,10 @@
 - Preferred fix: widen org field definition for Dropped_Special_Percent__c and Dropped_Percent__c to Number or Percent (5,2)
 
 **Blockers**
-- TEST_MODE=true still in code; full import requires change to false + redeploy
+- TEST_MODE=true still in code (line 109); full import requires change to false + redeploy
 
 **Next**
-- Change TEST_MODE to false in src/accountLoginFlow.ts (optionally tidy comments) and redeploy to instance
+- Change TEST_MODE to false in src/accountLoginFlow.ts and redeploy to instance
 - Open pull request for 5f8e1d2 + 5921ac8 to main
 - Run full import and monitor log for speed and skip counts across all 85 batches
 
@@ -85,14 +83,18 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-I checked the code you pasted against `src/accountLoginFlow.ts` on `stanford-csp-orchestrate` (head `bedfbb3`). It matches, and it's correct to run in test mode. Before a full import, `TEST_MODE` has to be changed first.
+Your pasted code is identical to `src/accountLoginFlow.ts` on `stanford-csp-orchestrate`, character for character. This time I compared the whole file rather than spot-checking lines.
 
-**How I compared them:** I didn't diff the two files line by line. Instead I checked 16 lines from your paste against the branch, and all 16 are there. They include the test-mode settings, the `Enrolled` status match, the `.0` clean-up, the early stop, the permission set lookup, the `Student_ID` check, the duplicate merge and the next-batch call. The commits since my last review only touch `handoff.md`, so the flow code hasn't changed.
+**How I checked**
+- I downloaded the file from GitHub at the current head of the branch (`23976d5`).
+- I saved your paste to a separate file and compared the two with `diff` and `cmp`. Both report no differences, both files have 1,025 lines, and their checksums match (`a33c699c…`).
+- The file was last changed in commit `5f8e1d2`, the enrolled-only filter. The 4 commits pushed since then only touched `handoff.md`.
 
-**What runs correctly**
-- **Enrolled-only filter:** looks up `Student_ID` and `Status` by header name and matches `Enrolled` ignoring case and spaces. It runs after duplicate IDs are merged and before the Salesforce lookup. If either column is missing, the run stops.
-- **Permission sets:** a wrong or ambiguous name stops the run before any User is written. Assignments a User already has are skipped, so re-running is safe.
-- **Moving between batches:** the next batch starts at the first row the current batch didn't process, so rows 
+So what you're running is what's on the branch, including both the permission-set step and the enrolled-only filter.
+
+**Before the full import:** `TEST_MODE = true` is still set on line 109. As it stands, the flow handles 2 rows and doesn't go on to the next batch. For the full run, it needs changing to `false` and the integration redeploying. I can make that change and push it to the branch once you confirm.
+
+Sources: checked live: `src/accountLoginFlow.ts` on GitHub branch `stanford-csp-orchestrate` (head `23976d5`), the branch's commit history · not checked: what's deployed on the integr
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
