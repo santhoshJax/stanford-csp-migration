@@ -123,7 +123,7 @@ export const configPages = {
         dataType: "string",
         default: "",
         description:
-          "Google Sheets spreadsheet ID of the shared correction sheet. Used when Student, Instructor, or Associate correction is enabled. Leave blank when no correction is running. Must contain a 'Student', 'Instructor', and/or 'Associate' tab with an 'ID' column plus columns for each corrected field.",
+          "Google Sheets spreadsheet ID of the shared correction sheet. Used when Student, Instructor, Associate, or Course correction is enabled. Leave blank when no correction is running. Must contain a 'Student', 'Instructor', 'Associate', and/or 'Course' tab with an 'ID' column plus columns for each corrected field. The 'Course' tab uses 'StartDate'/'EndDate' (or 'Start_Date'/'End_Date') columns in M/D/YYYY or YYYY-MM-DD format.",
       }),
     },
   }),
@@ -156,6 +156,13 @@ export const configPages = {
         dataType: "string",
         description:
           "Google Drive file ID of the TSV that contains course records.",
+      }),
+      "Course Correction Enabled": configVar({
+        stableKey: "7d2c4e1a-5b6f-4a8e-9c3d-2e1f0a9b8c7d",
+        dataType: "boolean",
+        default: "false",
+        description:
+          "When true, Course Import - All only processes course IDs found on the 'Course' tab of the Correction Sheet and uses that tab's start and end dates for the CourseOffering. Every other field still comes from the course TSV. Set to false to process all course records normally.",
       }),
       "Course Instructor File ID": configVar({
         stableKey: "c8d9e0f1-8888-4c1d-5e6f-11223344ccdd",

@@ -100,6 +100,148 @@ export function isTier3Quarter(quarter: string): boolean {
   return fullYear <= MAX_TIER3_YEAR;
 }
 
+// ── Correction mode ───────────────────────────────────────────────────────────
+// Same pattern as Student / Instructor / Associate: when "Course Correction
+// Enabled" is true, the flow reads the 'Course' tab of the shared Correction
+// Sheet, processes ONLY the course IDs listed there, and overrides the listed
+// fields. Every other field still comes from the course TSV. When the switch
+// is false, nothing below is used and the flow behaves exactly as before.
+//
+// Added Oct 2026 for the 8 CourseOfferings that failed the "End Date cannot be
+// before Start Date" validation rule — the client supplied corrected dates.
+const CORRECTION_TAB = "Course";
+
+// Corrected field → accepted column headers on the tab. The Salesforce field
+// name is preferred (as on the other tabs), but the source TSV column name is
+// also accepted so the client's sheet can be pasted in unchanged.
+const CORRECTION_COLUMNS: Record<CourseCorrectionField, string[]> = {
+  StartDate: ["StartDate", "Start_Date"],
+  EndDate: ["EndDate", "End_Date"],
+};
+
+export type CourseCorrectionField = "StartDate" | "EndDate";
+export type CourseCorrection = Partial<Record<CourseCorrectionField, string>>;
+
+/**
+ * Parses a date from the correction tab. Accepts M/D/YYYY (the source TSV
+ * format) and YYYY-MM-DD (how Google Sheets may display a date cell).
+ * Returns a Salesforce date-time string, or null when the value is not a real
+ * calendar date — callers treat null as an error, never as "leave blank".
+ */
+export function parseCorrectionDate(
+  v: string | undefined | null,
+): string | null {
+  const s = (v ?? "").trim();
+  let year: number;
+  let month: number;
+  let day: number;
+  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+  if (us) {
+    month = Number(us[1]);
+    day = Number(us[2]);
+    year = Number(us[3]);
+  } else if (iso) {
+    year = Number(iso[1]);
+    month = Number(iso[2]);
+    day = Number(iso[3]);
+  } else {
+    return null;
+  }
+  // Round-trip through Date.UTC so values like 2/30 are rejected, not rolled over.
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  if (
+    dt.getUTCFullYear() !== year ||
+    dt.getUTCMonth() !== month - 1 ||
+    dt.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return dt.toISOString().slice(0, 10) + "T00:00:00.000Z";
+}
+
+/**
+ * Turns the raw values of the 'Course' tab (first row = headers) into a
+ * Map<sourceId, {StartDate?, EndDate?}>. IDs are trimmed. Blank cells are not
+ * captured, so a blank cell means "no override" for that field.
+ */
+export function buildCourseCorrectionMap(
+  values: string[][],
+): Map<string, CourseCorrection> {
+  const map = new Map<string, CourseCorrection>();
+  if (values.length < 2) return map;
+  const headers = values[0].map((h) => (h ?? "").trim());
+  const idIdx = headers.indexOf("ID");
+  if (idIdx === -1) return map;
+  const colIdx = {} as Record<CourseCorrectionField, number>;
+  for (const field of Object.keys(
+    CORRECTION_COLUMNS,
+  ) as CourseCorrectionField[]) {
+    colIdx[field] = headers.findIndex((h) =>
+      CORRECTION_COLUMNS[field].includes(h),
+    );
+  }
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const id = (row[idIdx] ?? "").trim();
+    if (!id) continue;
+    const correction: CourseCorrection = {};
+    for (const field of Object.keys(colIdx) as CourseCorrectionField[]) {
+      if (colIdx[field] === -1) continue;
+      const val = (row[colIdx[field]] ?? "").trim();
+      if (val !== "") correction[field] = val;
+    }
+    map.set(id, correction);
+  }
+  return map;
+}
+
+/**
+ * Applies one correction-tab entry to a CourseOffering payload (in place).
+ * Returns an error message instead of applying anything when a corrected date
+ * is unreadable or the resulting End Date is before the Start Date, so the
+ * record is reported as failed rather than sent to Salesforce.
+ */
+export function applyCourseCorrection(
+  co: Record<string, unknown>,
+  correction: CourseCorrection,
+): { applied: CourseCorrectionField[]; error?: string } {
+  const parsed: Partial<Record<CourseCorrectionField, string>> = {};
+  for (const field of Object.keys(correction) as CourseCorrectionField[]) {
+    const d = parseCorrectionDate(correction[field]);
+    if (!d) {
+      return {
+        applied: [],
+        error: `Correction sheet ${field} "${correction[field]}" is not a valid date (use M/D/YYYY or YYYY-MM-DD).`,
+      };
+    }
+    parsed[field] = d;
+  }
+  const start = (parsed.StartDate ?? co.StartDate) as string | undefined;
+  const end = (parsed.EndDate ?? co.EndDate) as string | undefined;
+  if (start && end && end < start) {
+    return {
+      applied: [],
+      error: `Corrected End Date ${end.slice(0, 10)} is before Start Date ${start.slice(0, 10)} — not sent to Salesforce.`,
+    };
+  }
+  const applied = Object.keys(parsed) as CourseCorrectionField[];
+  for (const field of applied) co[field] = parsed[field];
+  return { applied };
+}
+
+/** Reads the 'Course' tab of the Correction Sheet through the Sheets API. */
+async function loadCourseCorrectionSheet(
+  spreadsheetId: string,
+  accessToken: string,
+): Promise<Map<string, CourseCorrection>> {
+  const { data } = await axios.get<{ values?: string[][] }>(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(CORRECTION_TAB)}!A:Z`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  return buildCourseCorrectionMap(data.values ?? []);
+}
+
 // ── Salesforce REST helpers ───────────────────────────────────────────────────
 function authHeaders(token: string): Record<string, string> {
   return {
@@ -226,13 +368,23 @@ interface StreamResult {
   hasMore: boolean;
   nextStartRow: number;
   skippedByQuarter: number;
+  skippedByCorrection: number;
+  allCorrectionRecordsFound: boolean;
 }
 
+/**
+ * correctionIds / foundIds are only passed in correction mode. Rows whose ID is
+ * not in correctionIds are skipped; each kept ID is added to foundIds (which
+ * carries over from earlier runs), and parsing stops as soon as every
+ * correction ID has been found.
+ */
 async function streamAndParseTsv(
   fileId: string,
   accessToken: string,
   startRow: number,
   maxRows: number,
+  correctionIds?: Set<string>,
+  foundIds?: Set<string>,
 ): Promise<StreamResult> {
   const response = await axios.get(
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`,
@@ -250,6 +402,8 @@ async function streamAndParseTsv(
     const rows: RawCourseRow[] = [];
     let aborted = false;
     let skippedByQuarter = 0;
+    let skippedByCorrection = 0;
+    let allCorrectionRecordsFound = false;
 
     Papa.parse(response.data as unknown as NodeJS.ReadableStream, {
       delimiter: "\t",
@@ -309,16 +463,41 @@ async function streamAndParseTsv(
           return;
         }
 
+        // Correction mode — keep only the IDs listed on the 'Course' tab.
+        if (correctionIds) {
+          const rowId = (record.id ?? "").trim();
+          if (!correctionIds.has(rowId)) {
+            skippedByCorrection++;
+            dataRowIndex++;
+            return;
+          }
+          foundIds?.add(rowId);
+        }
+
         rows.push(record);
         dataRowIndex++;
+
+        // Correction mode — stop reading once every listed ID has been found.
+        if (
+          correctionIds &&
+          foundIds &&
+          correctionIds.size > 0 &&
+          [...correctionIds].every((cid) => foundIds.has(cid))
+        ) {
+          allCorrectionRecordsFound = true;
+          parser.abort();
+        }
       },
 
       complete: () =>
         resolve({
           rows,
-          hasMore: aborted,
+          // An early stop in correction mode is not "more rows to process".
+          hasMore: aborted && !allCorrectionRecordsFound,
           nextStartRow: dataRowIndex,
           skippedByQuarter,
+          skippedByCorrection,
+          allCorrectionRecordsFound,
         }),
       error: (err: Error) => reject(err),
     });
@@ -375,6 +554,12 @@ export const coursesImportAllTime = flow({
         ? triggerBody.courseSheetId
         : undefined;
 
+    // IDs already found by earlier runs of a correction-mode import, so the
+    // "never matched" warning at the end covers the whole file, not one window.
+    const priorFoundIds = Array.isArray(triggerBody?.correctionFoundIds)
+      ? (triggerBody.correctionFoundIds as unknown[]).map((v) => String(v))
+      : [];
+
     logger.info(`[Course22] Starting at row ${startRow}`);
 
     // ── Connections ───────────────────────────────────────────────────────────
@@ -386,11 +571,52 @@ export const coursesImportAllTime = flow({
     const failedFolderId = configVars["Failed Records Folder ID"] as
       string | undefined;
 
+    const correctionEnabled =
+      String(configVars["Course Correction Enabled"]) === "true";
+
     if (!fileId) throw new Error("Course File ID config var is empty.");
 
     const gdToken = getAccessToken(gdConn);
     const sfToken = getAccessToken(sfConn);
     const sfBase = getSfInstanceUrl(sfConn);
+
+    // ── Correction sheet ('Course' tab) ───────────────────────────────────────
+    // Unlike the person flows, a missing or empty tab stops the run: in
+    // correction mode an empty map would silently skip every row in the file.
+    const correctionMap = new Map<string, CourseCorrection>();
+    if (correctionEnabled) {
+      const correctionSheetId = String(
+        (configVars as Record<string, unknown>)["Correction Sheet ID"] ?? "",
+      ).trim();
+      if (!correctionSheetId) {
+        throw new Error(
+          "Course Correction Enabled is true but Correction Sheet ID is empty.",
+        );
+      }
+      try {
+        const loaded = await loadCourseCorrectionSheet(
+          correctionSheetId,
+          gdToken,
+        );
+        for (const [k, v] of loaded) correctionMap.set(k, v);
+      } catch (err) {
+        throw new Error(
+          `[Course22] Could not load the '${CORRECTION_TAB}' tab of the correction sheet: ${sfErrMsg(err)}`,
+        );
+      }
+      if (correctionMap.size === 0) {
+        throw new Error(
+          `[Course22] Correction mode is on but the '${CORRECTION_TAB}' tab has no rows with an ID.`,
+        );
+      }
+      logger.info(
+        `[Course22] Correction mode ON — ${correctionMap.size} course IDs loaded from the '${CORRECTION_TAB}' tab. Only these IDs are processed.`,
+      );
+    }
+    const correctionIds = correctionEnabled
+      ? new Set(correctionMap.keys())
+      : undefined;
+    const foundIds = correctionEnabled ? new Set(priorFoundIds) : undefined;
 
     // ── Existing catalog records (owned by Tier 1 / Tier 2 / newer rows) ──────
     logger.info("[Course22] Building lookup caches…");
@@ -408,17 +634,34 @@ export const coursesImportAllTime = flow({
     logger.info(
       `[Course22] Streaming rows ${startRow}–${startRow + MAX_ROWS - 1}… Tier 3 = year <= ${MAX_TIER3_YEAR}`,
     );
-    const { rows, hasMore, nextStartRow, skippedByQuarter } =
-      await streamAndParseTsv(fileId, gdToken, startRow, MAX_ROWS);
+    const {
+      rows,
+      hasMore,
+      nextStartRow,
+      skippedByQuarter,
+      skippedByCorrection,
+      allCorrectionRecordsFound,
+    } = await streamAndParseTsv(
+      fileId,
+      gdToken,
+      startRow,
+      MAX_ROWS,
+      correctionIds,
+      foundIds,
+    );
     logger.info(
-      `[Course22] Parsed ${rows.length} rows, skipped ${skippedByQuarter} (outside Tier 3 quarters) (hasMore=${hasMore})`,
+      `[Course22] Parsed ${rows.length} rows, skipped ${skippedByQuarter} (outside Tier 3 quarters)` +
+        (correctionEnabled
+          ? `, skipped ${skippedByCorrection} (not on correction tab)`
+          : "") +
+        ` (hasMore=${hasMore})`,
     );
 
     // ── Counters ──────────────────────────────────────────────────────────────
     const counts = {
       learning: { ok: 0, skipped: 0, err: 0 },
       learningCourse: { ok: 0, skipped: 0, err: 0 },
-      courseOffering: { ok: 0, err: 0 },
+      courseOffering: { ok: 0, err: 0, corrected: 0 },
     };
 
     const successRows: SuccessRow[] = [];
@@ -552,6 +795,11 @@ export const coursesImportAllTime = flow({
       co.LearningCourse = { External_ID_4D__c: baseCode };
       if (effectiveQuarter)
         co.AcademicSession = { Abbreviation__c: effectiveQuarter };
+      // Results-sheet column (correction mode only) — which dates came from
+      // the correction tab. Not sent to Salesforce.
+      let correctionApplied = "";
+      const resultCols = (): Record<string, unknown> =>
+        correctionEnabled ? { Correction_Applied: correctionApplied } : {};
       try {
         const setDate = (field: string, v: string | undefined) => {
           const d = parseCourseDate(v);
@@ -568,6 +816,36 @@ export const coursesImportAllTime = flow({
 
         setDate("StartDate", row.Start_Date);
         setDate("EndDate", row.End_Date);
+
+        // Correction mode — replace the TSV dates with the tab's dates.
+        // Every other field above/below still comes from the TSV row.
+        const correction = correctionMap.get(sourceId.trim());
+        if (correctionEnabled && correction) {
+          const tsvStart = row.Start_Date ?? "";
+          const tsvEnd = row.End_Date ?? "";
+          const result = applyCourseCorrection(co, correction);
+          if (result.error) {
+            counts.courseOffering.err++;
+            logger.error(
+              `[Course22] Row ${startRow + i} (${sourceId}) CourseOffering: ${result.error}`,
+            );
+            fail("CourseOffering", result.error, {
+              External_ID_4D__c: sourceId,
+              ...co,
+              Correction_Applied: "error",
+            });
+            continue;
+          }
+          correctionApplied = result.applied.length
+            ? result.applied.join(", ")
+            : "none (tab row had no dates)";
+          counts.courseOffering.corrected++;
+          logger.info(
+            `[Course22] Correction applied for ${sourceId}: ` +
+              `Start ${tsvStart || "(blank)"} → ${String(co.StartDate ?? "").slice(0, 10)}, ` +
+              `End ${tsvEnd || "(blank)"} → ${String(co.EndDate ?? "").slice(0, 10)}`,
+          );
+        }
         // EnrolleeCount is system-calculated (read-only) — cannot be written
         // via API, same as Tier 1 and Tier 2.
         setInt("EnrollmentCapacity", row.Max_Enrollment);
@@ -596,6 +874,7 @@ export const coursesImportAllTime = flow({
         ok("CourseOffering", r.id, r.created, {
           External_ID_4D__c: sourceId,
           ...co,
+          ...resultCols(),
         });
       } catch (err) {
         counts.courseOffering.err++;
@@ -603,7 +882,11 @@ export const coursesImportAllTime = flow({
         logger.error(
           `[Course22] Row ${startRow + i} (${sourceId}) CourseOffering: ${msg}`,
         );
-        fail("CourseOffering", msg, { External_ID_4D__c: sourceId, ...co });
+        fail("CourseOffering", msg, {
+          External_ID_4D__c: sourceId,
+          ...co,
+          ...resultCols(),
+        });
       }
     }
 
@@ -687,8 +970,31 @@ export const coursesImportAllTime = flow({
       `[Course22] Window summary (rows ${startRow}–${nextStartRow - 1}):` +
         `\n  Learning:       ${counts.learning.ok} ok, ${counts.learning.skipped} skip (exists), ${counts.learning.err} err` +
         `\n  LearningCourse: ${counts.learningCourse.ok} ok, ${counts.learningCourse.skipped} skip (exists), ${counts.learningCourse.err} err` +
-        `\n  CourseOffering: ${counts.courseOffering.ok} ok, ${counts.courseOffering.err} err`,
+        `\n  CourseOffering: ${counts.courseOffering.ok} ok, ${counts.courseOffering.err} err` +
+        (correctionEnabled
+          ? `, ${counts.courseOffering.corrected} date-corrected`
+          : ""),
     );
+
+    // ── Correction mode: report IDs never found in the file ──────────────────
+    const correctionDone =
+      correctionEnabled && (allCorrectionRecordsFound || !hasMore);
+    if (correctionEnabled && correctionIds && foundIds) {
+      logger.info(
+        `[Course22] Correction IDs found so far: ${foundIds.size} of ${correctionIds.size}`,
+      );
+      if (allCorrectionRecordsFound) {
+        logger.info(
+          `[Course22] All ${correctionIds.size} correction records found — stopping early.`,
+        );
+      } else if (correctionDone) {
+        const missing = [...correctionIds].filter((cid) => !foundIds.has(cid));
+        logger.warn(
+          `[Course22] ${missing.length} correction ID(s) never matched a Tier 3 row in the course file ` +
+            `(check spelling/spaces, or the quarter is not Tier 3): ${missing.map((m) => `"${m}"`).join(", ")}`,
+        );
+      }
+    }
 
     // ── Recurse ───────────────────────────────────────────────────────────────
     if (hasMore && (!TEST_MODE || nextStartRow < TEST_MAX_ROWS)) {
@@ -702,6 +1008,7 @@ export const coursesImportAllTime = flow({
       ).invokeFlow("Course Import - All", {
         startRow: nextStartRow,
         courseSheetId: nextSheetId,
+        ...(foundIds ? { correctionFoundIds: [...foundIds] } : {}),
       });
     } else {
       logger.info("[Course22] All rows processed — import complete.");
