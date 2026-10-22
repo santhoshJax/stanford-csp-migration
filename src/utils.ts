@@ -1217,12 +1217,33 @@ export interface BulkJobPollResult extends BulkJobResult {
   errorMessage?: string;
 }
 
-/** Recursively polls the job every POLL_INTERVAL_MS until a terminal state. */
+/**
+ * Recursively polls the job every POLL_INTERVAL_MS until a terminal state.
+ * Waits indefinitely — callers that run close to the execution time limit
+ * should use pollJobUntil instead.
+ */
 export async function pollJobRecursively(
   instanceUrl: string,
   accessToken: string,
   jobId: string,
 ): Promise<BulkJobPollResult> {
+  const result = await pollJobUntil(instanceUrl, accessToken, jobId);
+  // No deadline was passed, so pollJobUntil only returns once the job ends.
+  return result!;
+}
+
+/**
+ * Polls the job every POLL_INTERVAL_MS until it reaches a terminal state, or
+ * until Date.now() passes deadlineMs. Returns null when the deadline passes
+ * first — the job keeps running in Salesforce and can be polled again later
+ * by job Id. With no deadline it waits indefinitely.
+ */
+export async function pollJobUntil(
+  instanceUrl: string,
+  accessToken: string,
+  jobId: string,
+  deadlineMs?: number,
+): Promise<BulkJobPollResult | null> {
   const { data } = await axios.get(
     `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
     { headers: { Authorization: `Bearer ${accessToken}` } },
@@ -1242,12 +1263,19 @@ export async function pollJobRecursively(
     };
   }
 
+  // Stop before the next wait would carry us past the deadline.
+  if (deadlineMs !== undefined && Date.now() + POLL_INTERVAL_MS >= deadlineMs) {
+    return null;
+  }
   await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS));
-  return pollJobRecursively(instanceUrl, accessToken, jobId);
+  return pollJobUntil(instanceUrl, accessToken, jobId, deadlineMs);
 }
 
-/** Runs the full Bulk API 2.0 lifecycle for a batch of records and logs results. */
-export async function runBulkJob(
+/**
+ * Creates a Bulk API 2.0 upsert job, uploads the records and closes it.
+ * Returns the job Id; Salesforce processes the job from here on.
+ */
+export async function submitBulkJob(
   instanceUrl: string,
   accessToken: string,
   objectName: string,
@@ -1259,7 +1287,7 @@ export async function runBulkJob(
     error: (m: string) => void;
   },
   logPrefix: string,
-): Promise<BulkJobResult> {
+): Promise<string> {
   logger.info(
     `${logPrefix} Creating Bulk API 2.0 upsert job for ${objectName}…`,
   );
@@ -1309,10 +1337,31 @@ export async function runBulkJob(
     throw err;
   }
 
+  return jobId;
+}
+
+/**
+ * Waits for a submitted Bulk API 2.0 job and fetches its result CSVs.
+ * Returns null if deadlineMs passes before the job finishes (the job keeps
+ * running in Salesforce; call again with the same jobId to resume).
+ */
+export async function collectBulkJobResults(
+  instanceUrl: string,
+  accessToken: string,
+  jobId: string,
+  externalIdFieldName: string,
+  logger: {
+    info: (m: string) => void;
+    warn: (m: string) => void;
+    error: (m: string) => void;
+  },
+  logPrefix: string,
+  deadlineMs?: number,
+): Promise<BulkJobResult | null> {
   logger.info(`${logPrefix} Polling job ${jobId} for completion…`);
-  let result: BulkJobResult;
+  let polled: BulkJobPollResult | null;
   try {
-    result = await pollJobRecursively(instanceUrl, accessToken, jobId);
+    polled = await pollJobUntil(instanceUrl, accessToken, jobId, deadlineMs);
   } catch (err: unknown) {
     const e = err as { response?: { status?: number; data?: unknown } };
     logger.error(
@@ -1322,6 +1371,13 @@ export async function runBulkJob(
     );
     throw err;
   }
+  if (!polled) {
+    logger.warn(
+      `${logPrefix} Job ${jobId} is still running in Salesforce at the time limit for this execution.`,
+    );
+    return null;
+  }
+  const result: BulkJobResult = polled;
 
   logger.info(
     `${logPrefix} Job ${result.jobId} finished — ` +
@@ -1405,4 +1461,39 @@ export async function runBulkJob(
   }
 
   return result;
+}
+
+/** Runs the full Bulk API 2.0 lifecycle for a batch of records and logs results. */
+export async function runBulkJob(
+  instanceUrl: string,
+  accessToken: string,
+  objectName: string,
+  externalIdFieldName: string,
+  records: Record<string, unknown>[],
+  logger: {
+    info: (m: string) => void;
+    warn: (m: string) => void;
+    error: (m: string) => void;
+  },
+  logPrefix: string,
+): Promise<BulkJobResult> {
+  const jobId = await submitBulkJob(
+    instanceUrl,
+    accessToken,
+    objectName,
+    externalIdFieldName,
+    records,
+    logger,
+    logPrefix,
+  );
+  // No deadline, so this only returns once the job has finished.
+  const result = await collectBulkJobResults(
+    instanceUrl,
+    accessToken,
+    jobId,
+    externalIdFieldName,
+    logger,
+    logPrefix,
+  );
+  return result!;
 }

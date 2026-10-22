@@ -299,7 +299,7 @@ Upsert key: `Student_ID_4D__c`
 ### 4.3a Account Login Flow
 
 **File:** `src/accountLoginFlow.ts`
-**Source:** Account Login TSV (4D) — streamed in 2,000-row windows
+**Source:** Account Login TSV (4D) — streamed in 500-row windows (was 2,000 until 2026-10-22; see "Long-running User jobs" below)
 **Purpose:** Creates one Salesforce `User` per portal login credential, for the Student community/portal profile. **Must run after Student Flow** — every row is resolved against the Account created there.
 **Reference:** "CSP Data Migration Mapping Workbook - Account Login.pdf"
 
@@ -334,6 +334,13 @@ Every User the upsert accepts, whether created or updated, is assigned these per
 **Row-skip rules:** no `Student_ID` or `Student_ID = 0`; no matching Account found for `Student_ID`; matched Contact has no usable email.
 
 **Open item — Active/Inactive semantics:** the mapping doc calls this "Direct Map" from source `Inactive` to target `Active`, noting "records are only marked as inactive if they are duplicate." A literal same-value copy would leave every normal (non-duplicate) record `IsActive = false`, so this flow inverts the value (`IsActive = !Inactive`) to match the note's evident intent. **Needs architect confirmation before go-live.**
+
+#### Long-running User jobs (added 2026-10-22)
+
+Creating Experience Cloud Users through Bulk API 2.0 is slow. In the first full run, window 2 (2,000 rows, 1,664 Users) was still waiting on its job when the platform's 15-minute execution limit ended it (E100), so its permission sets, results sheet and the next window never ran. Two changes:
+
+- Windows are now 500 rows.
+- An execution waits at most 10 minutes for its User job. If the job is still running, the flow re-invokes itself with `pendingJobId`, `pendingHasMore` and `byteOffset` set to the start of the next window. The next execution waits for the same job (the records are not uploaded again), then assigns permission sets, writes the results sheet from the job's result CSVs and moves on. After 6 hand-offs for one job the run stops with an error naming the job and the byte offset to restart from.
 
 **Prerequisites:** a Profile named `Student_Profile` must exist in the org (configurable via the "Account Login Profile Name" config var); a custom field `User.Federation_Identifier__c` must exist and be marked as an External ID in Salesforce Setup, so Bulk API 2.0 can upsert on it (same convention as `Student_ID_4D__c` / `Instructor_ID_4D__c` / `Associate_ID_4D__c` elsewhere in this project). Each permission set in "Account Login Permission Sets" must exist and be assignable to the Experience Cloud license on that Profile; otherwise the assignment fails with a license mismatch.
 
@@ -906,3 +913,4 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | 19 | **Account Login — Bulk API support for Community/portal Users** | **New risk (2026-10-13):** since `Student_Profile` is confirmed to be a portal/Experience Cloud license (#15), worth a small sandbox test before the full run — Salesforce has had org-specific restrictions around creating licensed Community/Partner users via Bulk API that don't show up with internal-profile Users. If it fails, the fallback is the standard REST/Composite API instead of Bulk API 2.0 for this one object |
 | 20 | **Account Login — permission sets for imported Users** | **Decision (2026-10-15):** every imported User also gets Buyer, CSP Stap API Access and CSP Student Education Cloud PS. Implemented in the flow (configurable via "Account Login Permission Sets"); re-running the flow back-fills Users already imported |
 | 21 | **Account Login — only enrolled students get a User** | **Decision (2026-10-21):** import an Account Login row only when its `Student_ID` has a `Status = "Enrolled"` row in the Enrollment source file. Implemented in the flow; reuses the "Enrollment File ID" config var |
+| 22 | **Account Login — User Bulk job can outlast one execution** | **Fixed (2026-10-22):** window 2 of the full run timed out (E100) waiting on a 1,664-User job. Windows cut to 500 rows; the flow hands a still-running job to the next execution instead of waiting past the limit |

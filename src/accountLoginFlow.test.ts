@@ -9,6 +9,7 @@ import {
   DEFAULT_PERMISSION_SETS,
   matchPermissionSets,
   parsePermissionSetNames,
+  recordsFromResultCsvs,
 } from "./accountLoginFlow";
 
 const AVAILABLE = [
@@ -139,5 +140,27 @@ describe("collectEnrolledStudentIds", () => {
         new Set(["100"]),
       ),
     ).rejects.toThrow(/no "Status" column/);
+  });
+});
+
+describe("recordsFromResultCsvs", () => {
+  it("rebuilds uploaded rows from both result CSVs and drops sf__ columns", () => {
+    const successful =
+      "sf__Id,sf__Created,Federation_Identifier__c,Email,IsActive\n" +
+      "005A,true,111,a@x.edu,true\n" +
+      "005B,false,222,b@x.edu,false\n";
+    const failed =
+      "sf__Id,sf__Error,Federation_Identifier__c,Email,FirstName\n" +
+      ",DUPLICATE_USERNAME:Duplicate Username,333,c@x.edu,\n";
+    const records = recordsFromResultCsvs(successful, failed);
+    expect(records).toEqual([
+      { Federation_Identifier__c: "111", Email: "a@x.edu", IsActive: "true" },
+      { Federation_Identifier__c: "222", Email: "b@x.edu", IsActive: "false" },
+      { Federation_Identifier__c: "333", Email: "c@x.edu" },
+    ]);
+  });
+
+  it("returns nothing when both CSVs are empty", () => {
+    expect(recordsFromResultCsvs("", "  ")).toEqual([]);
   });
 });

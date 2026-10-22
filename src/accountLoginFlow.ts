@@ -89,8 +89,10 @@ import {
   cleanEmail,
   getAccessToken,
   getSfInstanceUrl,
-  runBulkJob,
+  submitBulkJob,
+  collectBulkJobResults,
   SF_API_VERSION,
+  type BulkJobResult,
 } from "./utils";
 import { createResultsSheetFromContacts } from "./reportResults";
 import {
@@ -101,7 +103,23 @@ import {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const MAX_ROWS = 2000; // rows per execution window
+// Rows per execution window. Lowered from 2000 on 2026-10-22: window 2 of the
+// full run (2000 rows → 1664 Users) was still waiting on its User Bulk job when
+// the 15-minute execution limit ended it (E100). Creating Experience Cloud
+// Users is much slower per record than other objects, so a smaller window
+// keeps each job well inside one execution.
+const MAX_ROWS = 500;
+
+// How long one execution waits for the User Bulk job before handing off.
+// The platform ends an execution at 15 minutes; this leaves ~5 minutes for
+// the permission set assignments, the results sheet and the next invocation.
+// If the job is still running at this point, the flow re-invokes itself with
+// the job Id and the next execution carries on waiting for the same job — it
+// does not upload the records again.
+const POLL_BUDGET_MS = 10 * 60 * 1000;
+// Hand-offs allowed for one job (about 10 minutes each) before the run stops
+// with an error, so a job stuck in Salesforce cannot loop forever.
+const MAX_JOB_HANDOFFS = 6;
 
 // Sandbox testing only. When TEST_MODE is true, the flow processes at most
 // TEST_RECORD_LIMIT records total and stops — no recursion through the rest
@@ -378,6 +396,38 @@ interface StudentContactInfo {
  * Given a list of Student_ID values, returns { studentId → matched Contact info }
  * resolved from the person Account created by Student Import.
  */
+/**
+ * Rebuilds the uploaded User rows from a finished Bulk job's result CSVs.
+ * Used when a job is resumed in a later execution, where the original
+ * records are no longer in memory. Both CSVs repeat every uploaded column;
+ * the sf__ columns Salesforce adds are dropped, and empty cells are omitted
+ * (the upload left unset fields out the same way).
+ */
+export function recordsFromResultCsvs(
+  successfulCsv: string,
+  failedCsv: string,
+): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
+  for (const csv of [successfulCsv, failedCsv]) {
+    if (!csv.trim()) continue;
+    const result: ParseResult<Record<string, string>> = parse(csv, {
+      header: true,
+      skipEmptyLines: true,
+    });
+    for (const row of result.data) {
+      const record: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(row)) {
+        if (key.startsWith("sf__") || value === "" || value === undefined) {
+          continue;
+        }
+        record[key] = value;
+      }
+      if (record.Federation_Identifier__c) records.push(record);
+    }
+  }
+  return records;
+}
+
 async function resolveContactsByStudentId(
   instanceUrl: string,
   accessToken: string,
@@ -694,6 +744,9 @@ export const accountLoginImport = flow({
 
   onExecution: async (context, params) => {
     const { logger, configVars } = context;
+    // Measured from the start of this execution so the Bulk job wait can stop
+    // before the platform's 15-minute limit.
+    const pollDeadlineMs = Date.now() + POLL_BUDGET_MS;
 
     // ── 1. Read cursor (byteOffset) from trigger payload ──────────────────────
     const triggerBody = (
@@ -713,6 +766,18 @@ export const accountLoginImport = flow({
       typeof triggerBody?.sheetId === "string"
         ? triggerBody.sheetId
         : undefined;
+    // Set when the previous execution handed off a User Bulk job that was
+    // still running. byteOffset is then the start of the NEXT window, and
+    // pendingHasMore says whether that next window exists.
+    const pendingJobId =
+      typeof triggerBody?.pendingJobId === "string"
+        ? triggerBody.pendingJobId
+        : undefined;
+    const pendingHasMore = triggerBody?.pendingHasMore === true;
+    const handoffCount =
+      typeof triggerBody?.handoffCount === "number"
+        ? triggerBody.handoffCount
+        : 0;
 
     logger.info(`[Account Login Import] Starting at byte offset ${byteOffset}`);
 
@@ -742,6 +807,162 @@ export const accountLoginImport = flow({
     const gdToken = getAccessToken(gdConn);
     const sfToken = getAccessToken(sfConn);
     const sfInstanceUrl = getSfInstanceUrl(sfConn);
+
+    // Re-invokes this flow. Used both to move to the next window and to hand
+    // off a Bulk job that is still running.
+    const invokeSelf = async (payload: Record<string, unknown>) => {
+      await (
+        context as unknown as {
+          invokeFlow(name: string, payload: unknown): Promise<void>;
+        }
+      ).invokeFlow("Account Login Import", payload);
+    };
+
+    // After the User upsert: assign permission sets, write the results
+    // sheet, and return the results sheet Id for the next window.
+    const finishWindow = async (
+      jobResult: BulkJobResult,
+      records: Record<string, unknown>[],
+      permissionSets: PermissionSetRow[],
+    ): Promise<string | undefined> => {
+      // ── 7. Assign permission sets to every User the upsert accepted ────────
+      // successfulResults covers both newly created and updated Users, so a
+      // re-run also back-fills Users imported before this step existed.
+      const userIds = [
+        ...parseSuccessfulSfIds(
+          jobResult.successfulCsv,
+          "Federation_Identifier__c",
+        ).values(),
+      ];
+      try {
+        const assignment = await assignPermissionSets(
+          sfInstanceUrl,
+          sfToken,
+          userIds,
+          permissionSets,
+          logger,
+        );
+        logger.info(
+          `[Account Login Import] Permission sets — ${userIds.length} User(s): ` +
+            `${assignment.created} assignment(s) created, ` +
+            `${assignment.alreadyAssigned} already in place, ${assignment.failed} failed.`,
+        );
+        if (assignment.failed > 0) {
+          logger.warn(
+            `[Account Login Import] Some permission set assignments failed (see errors above). ` +
+              `A common cause is a permission set whose license does not match the Users' ` +
+              `Experience Cloud license. Re-running the flow retries only the missing ones.`,
+          );
+        }
+      } catch (err: unknown) {
+        const e = err as { response?: { status?: number; data?: unknown } };
+        logger.error(
+          `[Account Login Import] Permission set assignment failed.\n` +
+            `  Status : ${e.response?.status ?? "unknown"}\n` +
+            `  Details: ${JSON.stringify(e.response?.data ?? String(err), null, 2)}`,
+        );
+      }
+
+      try {
+        const sheet = await createResultsSheetFromContacts({
+          flowName: "Account Login Import",
+          objectName: "User",
+          contacts: records,
+          externalIdField: "Federation_Identifier__c",
+          failedExternalIds: jobResult.failedExternalIds,
+          successfulCsv: jobResult.successfulCsv,
+          failedCsv: jobResult.failedCsv,
+          accessToken: gdToken,
+          folderId: failedFolderId,
+          spreadsheetId: sheetId,
+        });
+        logger.info(`[Account Login Import] Results sheet: ${sheet.url}`);
+        return sheet.spreadsheetId;
+      } catch (err: unknown) {
+        logger.warn(
+          `[Account Login Import] Could not update results sheet: ${String(err)}`,
+        );
+        return sheetId;
+      }
+    };
+
+    // ── 2b. Resume a User Bulk job handed off by the previous execution ───────
+    // The records were already uploaded; Salesforce kept processing the job
+    // while the flow handed off. This execution only waits for it, finishes
+    // the window, and then moves on to the next window.
+    if (pendingJobId) {
+      logger.info(
+        `[Account Login Import] Resuming window ${windowNumber}: waiting for User Bulk job ` +
+          `${pendingJobId} (hand-off ${handoffCount} of ${MAX_JOB_HANDOFFS}).`,
+      );
+      const permissionSets = await resolvePermissionSets(
+        sfInstanceUrl,
+        sfToken,
+        permissionSetNames,
+      );
+      const jobResult = await collectBulkJobResults(
+        sfInstanceUrl,
+        sfToken,
+        pendingJobId,
+        "Federation_Identifier__c",
+        logger,
+        "[Account Login Import]",
+        pollDeadlineMs,
+      );
+      if (!jobResult) {
+        if (handoffCount >= MAX_JOB_HANDOFFS) {
+          throw new Error(
+            `[Account Login Import] User Bulk job ${pendingJobId} has not finished after ` +
+              `${MAX_JOB_HANDOFFS} hand-offs. Check it in Salesforce Setup → Bulk Data Load Jobs. ` +
+              `To continue once it has finished, start the flow with byteOffset ${byteOffset}.`,
+          );
+        }
+        logger.info(
+          `[Account Login Import] Handing off job ${pendingJobId} to the next execution.`,
+        );
+        await invokeSelf({
+          byteOffset,
+          headers: knownHeaders,
+          windowNumber,
+          sheetId,
+          pendingJobId,
+          pendingHasMore,
+          handoffCount: handoffCount + 1,
+        });
+        return { data: { byteOffset, rowsProcessed: 0, hasMore: true } };
+      }
+
+      // The result CSVs carry every column that was uploaded, so the rows
+      // for the results sheet can be rebuilt from them.
+      const records = recordsFromResultCsvs(
+        jobResult.successfulCsv,
+        jobResult.failedCsv,
+      );
+      const resumedSheetId = await finishWindow(
+        jobResult,
+        records,
+        permissionSets,
+      );
+
+      if (pendingHasMore) {
+        logger.info(
+          `[Account Login Import] More rows remain — invoking next iteration at byte ${byteOffset}`,
+        );
+        await invokeSelf({
+          byteOffset,
+          headers: knownHeaders,
+          windowNumber: windowNumber + 1,
+          sheetId: resumedSheetId,
+        });
+      } else {
+        logger.info(
+          "[Account Login Import] All rows processed — import complete.",
+        );
+      }
+      return {
+        data: { byteOffset, rowsProcessed: 0, hasMore: pendingHasMore },
+      };
+    }
 
     // ── 3. Stream & parse the TSV window from Google Drive ─────────────────────
     logger.info(
@@ -913,7 +1134,7 @@ export const accountLoginImport = flow({
 
       // ── 6. Upsert to Salesforce Bulk API 2.0 ──────────────────────────────
       if (records.length > 0) {
-        const jobResult = await runBulkJob(
+        const jobId = await submitBulkJob(
           sfInstanceUrl,
           sfToken,
           "User",
@@ -922,65 +1143,41 @@ export const accountLoginImport = flow({
           logger,
           "[Account Login Import]",
         );
+        const jobResult = await collectBulkJobResults(
+          sfInstanceUrl,
+          sfToken,
+          jobId,
+          "Federation_Identifier__c",
+          logger,
+          "[Account Login Import]",
+          pollDeadlineMs,
+        );
 
-        // ── 7. Assign permission sets to every User the upsert accepted ──────
-        // successfulResults covers both newly created and updated Users, so a
-        // re-run also back-fills Users imported before this step existed.
-        const userIds = [
-          ...parseSuccessfulSfIds(
-            jobResult.successfulCsv,
-            "Federation_Identifier__c",
-          ).values(),
-        ];
-        try {
-          const assignment = await assignPermissionSets(
-            sfInstanceUrl,
-            sfToken,
-            userIds,
-            permissionSets,
-            logger,
-          );
+        if (!jobResult) {
+          // The job is still running in Salesforce. Hand it to a new
+          // execution rather than letting this one hit the time limit; the
+          // records are NOT uploaded again.
           logger.info(
-            `[Account Login Import] Permission sets — ${userIds.length} User(s): ` +
-              `${assignment.created} assignment(s) created, ` +
-              `${assignment.alreadyAssigned} already in place, ${assignment.failed} failed.`,
+            `[Account Login Import] Handing off job ${jobId} to the next execution ` +
+              `(it will wait for the job, assign permission sets, then continue at byte ${nextByteOffset}).`,
           );
-          if (assignment.failed > 0) {
-            logger.warn(
-              `[Account Login Import] Some permission set assignments failed (see errors above). ` +
-                `A common cause is a permission set whose license does not match the Users' ` +
-                `Experience Cloud license. Re-running the flow retries only the missing ones.`,
-            );
-          }
-        } catch (err: unknown) {
-          const e = err as { response?: { status?: number; data?: unknown } };
-          logger.error(
-            `[Account Login Import] Permission set assignment failed.\n` +
-              `  Status : ${e.response?.status ?? "unknown"}\n` +
-              `  Details: ${JSON.stringify(e.response?.data ?? String(err), null, 2)}`,
-          );
+          await invokeSelf({
+            byteOffset: nextByteOffset,
+            headers: parsedHeaders,
+            windowNumber,
+            sheetId,
+            pendingJobId: jobId,
+            pendingHasMore: hasMore,
+            handoffCount: 1,
+          });
+          return { data: { byteOffset, rowsProcessed: rows.length, hasMore } };
         }
 
-        try {
-          const sheet = await createResultsSheetFromContacts({
-            flowName: "Account Login Import",
-            objectName: "User",
-            contacts: records as unknown as Record<string, unknown>[],
-            externalIdField: "Federation_Identifier__c",
-            failedExternalIds: jobResult.failedExternalIds,
-            successfulCsv: jobResult.successfulCsv,
-            failedCsv: jobResult.failedCsv,
-            accessToken: gdToken,
-            folderId: failedFolderId,
-            spreadsheetId: sheetId,
-          });
-          nextSheetId = sheet.spreadsheetId;
-          logger.info(`[Account Login Import] Results sheet: ${sheet.url}`);
-        } catch (err: unknown) {
-          logger.warn(
-            `[Account Login Import] Could not update results sheet: ${String(err)}`,
-          );
-        }
+        nextSheetId = await finishWindow(
+          jobResult,
+          records as unknown as Record<string, unknown>[],
+          permissionSets,
+        );
       } else {
         logger.info(
           "[Account Login Import] Window contained no upsertable records after the enrollment check and Contact resolution.",
@@ -997,11 +1194,7 @@ export const accountLoginImport = flow({
       logger.info(
         `[Account Login Import] More rows remain — invoking next iteration at byte ${nextByteOffset}`,
       );
-      await (
-        context as unknown as {
-          invokeFlow(name: string, payload: unknown): Promise<void>;
-        }
-      ).invokeFlow("Account Login Import", {
+      await invokeSelf({
         byteOffset: nextByteOffset,
         headers: parsedHeaders,
         windowNumber: windowNumber + 1,
