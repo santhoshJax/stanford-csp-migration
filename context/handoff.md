@@ -41,23 +41,23 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-10-16
-**Status:** at risk — Field precision issue found: Dropped_Special_Percent__c rejects 100.0; org field definition must be checked and widened
+### Engagement state — 2026-10-21
+**Status:** at risk — Enrolled-only filter committed & verified on repo; field precision & quarter-code blockers remain. Script provided for real row counts.
 
 **Done this session**
-- Identified root cause of row 49 failure: NUMBER_OUTSIDE_VALID_RANGE on Dropped_Special_Percent__c with value 100.0
-- Confirmed flow guard allows 100 (<= 100 check) but org field definition is too narrow to accept it
-- Confirmed only row 49 failed; 99 rows loaded successfully, Learning and Learning Course records created
+- Verified enrolled-only filter commit 5f8e1d2 points correctly on GitHub branch
+- Confirmed Account_Login.txt (26.9 MB, ~169k rows) and Enrollment.txt (135.8 MB) sizes
+- Provided count_enrolled_account_logins.py script to get real enrolled student counts offline
 
 **Open items**
-- Test quarter code wi24 in source data to confirm it equals 20242 (blocks all three flows)
+- Test quarter code wi24 in source data to confirm it equals 20242
 - Update sheet: Enrollment_Count row → 'don't load'
-- Update sheet: Cancelled target → Enrollment_Status__c only (remove Status)
-- Update sheet: Units target → Units__c only (remove DurationUnit)
-- Update sheet: Web_Registration_Closed Map Type → Direct Map (was SA Decision)
+- Update sheet: Cancelled target → Enrollment_Status__c only
+- Update sheet: Units target → Units__c only
+- Update sheet: Web_Registration_Closed Map Type → Direct Map
 - Mark sheet row 123 Tuition_Rule_ID 'Done (duplicate)' of row 89
 - Check precision and scale of Dropped_Special_Percent__c and Dropped_Percent__c in org; widen to accept 100
-- Review results sheet from run for errors on windows after row 99 (confirm hasMore=true continuation)
+- Review results sheet from run for errors on windows after row 99
 
 **Decisions**
 - Tier 2 can run now; Tier 3 changes do not touch Tier 2 logic
@@ -66,41 +66,45 @@
 - Other Cost, Staff Detail, Timecard flows filter on Tier 1 range (2024–2025 prefixes)
 - Tier 3 intentional gaps confirmed: no schedules, instructors, Duration_Unit__c, tuition rule per sheet flags
 - Preferred fix: widen org field definition for Dropped_Special_Percent__c and Dropped_Percent__c to Number or Percent (5,2)
+- Enrolled-only filter: Account Login User creation requires at least one Enrollment row with Status = 'Enrolled' for that Student_ID
 
 **Blockers**
 - Quarter-code convention unverified: wi24 = 20242 assumption blocks all three flows until tested in source data
 - Dropped_Special_Percent__c field too narrow in org; row 49 (100.0 value) rejected; must widen before re-run
+- Real enrolled student count unknown; script provided but requires offline execution on full files (Drive reader limited to 10 MB)
 
 **Next**
-- Check org field definitions: precision and scale of Dropped_Special_Percent__c and Dropped_Percent__c
-- Widen both fields to accept 100 (e.g., Number or Percent with scale 2)
-- Re-run row 49 after field widening (upsert by external ID is safe)
-- Review full results sheet for errors on windows 100+ (verify hasMore=true continuation)
-- Test quarter code wi24 in source data to confirm 20242 mapping
-- Update four sheet rows and mark row 123 duplicate as planned
+- Download Account_Login.txt and Enrollment.txt from Drive; run count_enrolled_account_logins.py to get real enrolled counts
+- Open pull request for enrolled-only filter on GitHub (if not already open)
+- Review and merge PR to main
+- Run Deploy session to ship filter to org
+- After deploy: verify 'Enrollment File ID' config var points to Enrollment TSV
+- Widen Dropped_Special_Percent__c and Dropped_Percent__c in org to accept 100
+- Test quarter code wi24 mapping in source data
 
-**Checked live on 2026-10-16:** the repository
-### Last session — 2026-10-16
+**Checked live on 2026-10-21:** the repository, the Salesforce org, Google Workspace
+### Last session — 2026-10-21
 | | |
 |---|---|
-| Type | REVIEW |
+| Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-CourseFlows-Review |
-| Session | `7429b002-74d0-4757-ae64-31c1acd5195f` |
+| Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
+| Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-The error is a field-size problem in the org, not a bug in the flow. I haven't confirmed that against the org, because none is attached to this session.
+I couldn't get the real counts in this session. Drive's file reader stops at 10 MB, and the two source files are much bigger:
 
-**Cause**
-- Row 49 (`20081_COM 35`) has a Dropped Special Percent of exactly `100.0`, and Salesforce rejected that value on `Dropped_Special_Percent__c`.
-- The error is `NUMBER_OUTSIDE_VALID_RANGE` on that one field. The flow already guards the value (`coursesImportAllTime.ts` line 583, and the same lines in the 2-year and 5-year flows), but the guard is `<= 100`, so 100 passes the check.
-- A value of 100 only fails when the field has too few digits for it. My guess is the field is defined with precision 3 and scale 2, which allows at most 9.99, or something similar.
-- The same guard applies to `Dropped_Percent__c`. If its definition is the same, it will fail on any 100 as well.
+- [Account_Login.txt](https://drive.google.com/file/d/169lMYyPTETvrVQtlieYdBo3VVplV9jkM/view?usp=drivesdk) is 26.9 MB.
+- [Enrollment.txt](https://drive.google.com/file/d/1wgEclnnltZKJyrfyqBJu1065iTnm1rLh/view?usp=drivesdk) is 135.8 MB.
 
-**Impact**
-- Only that one Course Offering failed. The run reports 99 ok and 1 error.
-- The Learning and Learning Course records for that row were created, and the failed offering is the only gap.
-- The window stopped at row 99 with "All rows processed — import complete", even though `hasMore=true`. Please check that the run continues to the following win
+When I tried to read them, both came back with "files up to 10 MB are read". No Salesforce org is attached here either, so I couldn't count from the org.
+
+**Rough size of Account Login only:** your earlier log said the first 2,000 rows ended at byte 317,780. That's about 159 bytes per row, so the file probably has around **169,000 rows**. This is a guess from file size, not a count. It says nothing about how many of those students are enrolled.
+
+**Script to get the real numbers:** I've written `count_enrolled_account_logins.py` and attached it to this session. It applies the same rules as the new filter in commit `5f8e1d2`:
+- Both files are tab-separated with a header row.
+- A trailing `.0` is removed from `Student_ID`, and blank or `0` IDs are skipped.
+- A student counts as enrolled if any Enrollment row for them has `Statu
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->

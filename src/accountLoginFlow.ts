@@ -46,6 +46,12 @@
  *      but every other target field on this object depends on the match).
  *   3. Matched Contact has no email → skip (Username/Email are required,
  *      unique-format fields on User; can't create the record without one).
+ *   4. Student is not enrolled → skip (decision 2026-10-21). Only students
+ *      who have at least one row in the Enrollment source file (the
+ *      "Enrollment File ID" config var) with Status = "Enrolled" get a User.
+ *      The check reads the source file, not Salesforce, so it does not
+ *      depend on the Enrollment Import having run. Applied after the
+ *      Student_ID de-duplication and before the Contact lookup.
  *
  * NOTE — Active/Inactive (confirmed with architect): the source "Inactive"
  * flag IS the duplicate marker — 4D only ever sets it true when a row was
@@ -64,6 +70,9 @@
  *     (default "Student_Profile" — DEFAULT_PROFILE_NAME below) must exist
  *     in this org under that exact name. Confirmed failing in the "Student_Profile"
  *     org run on 2026-10-05 — set the config var to the real Profile Name before re-running.
+ *   - The "Enrollment File ID" config var (Enrollment Configuration page)
+ *     must point at the Enrollment TSV. The flow throws if it is empty,
+ *     because without it every row would be skipped as not enrolled.
  *   - Every permission set in "Account Login Permission Sets" must exist (by
  *     API Name, or by a Label that is unique) and be assignable to the
  *     Experience Cloud license on that Profile. The flow throws before the
@@ -73,7 +82,7 @@
 import { flow } from "@prismatic-io/spectral";
 import axios from "axios";
 import { parse, type ParseResult, type Parser } from "papaparse";
-import { Transform } from "stream";
+import { Transform, type Readable } from "stream";
 import {
   str,
   toBool,
@@ -109,6 +118,9 @@ export const DEFAULT_PERMISSION_SETS = [
   "CSP Stap API Access",
   "CSP Student Education Cloud PS",
 ];
+// Enrollment Status value that qualifies a student for a User (decision
+// 2026-10-21). Compared case-insensitively after trimming.
+const ENROLLED_STATUS = "enrolled";
 const DEFAULT_LOCALE_SID_KEY = "en_US";
 const DEFAULT_LANGUAGE_LOCALE_KEY = "en_US";
 const DEFAULT_TIME_ZONE_SID_KEY = "America/Los_Angeles";
@@ -409,6 +421,129 @@ async function resolveContactsByStudentId(
   return map;
 }
 
+// ── Enrollment check (Enrollment source file) ──────────────────────────────────
+
+/** True when an Enrollment Status value counts as enrolled. */
+export function isEnrolledStatus(status: string | undefined): boolean {
+  return str(status).trim().toLowerCase() === ENROLLED_STATUS;
+}
+
+/** Enrollment TSV stores some IDs as "12345.0" — normalise to "12345". */
+function normaliseStudentId(value: string | undefined): string {
+  return str(value).trim().replace(/\.0$/, "");
+}
+
+/**
+ * Reads an Enrollment TSV stream and returns the subset of `wantedStudentIds`
+ * that have at least one row with Status = "Enrolled". Stops reading as soon
+ * as every wanted ID has been found, so a window whose students all enrolled
+ * early in the file does not read the whole file.
+ */
+export function collectEnrolledStudentIds(
+  stream: Readable | NodeJS.ReadableStream,
+  wantedStudentIds: Set<string>,
+): Promise<{ enrolled: Set<string>; rowsRead: number }> {
+  const enrolled = new Set<string>();
+  let rowsRead = 0;
+
+  return new Promise((resolve, reject) => {
+    if (wantedStudentIds.size === 0) {
+      (stream as Readable).destroy?.();
+      resolve({ enrolled, rowsRead });
+      return;
+    }
+
+    let studentIdIndex = -1;
+    let statusIndex = -1;
+    let headersSeen = false;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      (stream as Readable).destroy?.();
+      resolve({ enrolled, rowsRead });
+    };
+
+    parse(stream as unknown as NodeJS.ReadableStream, {
+      delimiter: "\t",
+      quoteChar: "\x00",
+      header: false,
+      skipEmptyLines: true,
+
+      step: (result: ParseResult<string[]>, parser: Parser) => {
+        if (settled) return;
+        const row = result.data as unknown as string[];
+
+        if (!headersSeen) {
+          headersSeen = true;
+          const headers = row.map((h) =>
+            (h.charCodeAt(0) === 0xfeff ? h.slice(1) : h)
+              .replace(/\r/g, "")
+              .trim(),
+          );
+          studentIdIndex = headers.indexOf("Student_ID");
+          statusIndex = headers.indexOf("Status");
+          if (studentIdIndex === -1 || statusIndex === -1) {
+            settled = true;
+            parser.abort();
+            (stream as Readable).destroy?.();
+            reject(
+              new Error(
+                `[Account Login Import] The Enrollment file has no ` +
+                  `${studentIdIndex === -1 ? '"Student_ID"' : '"Status"'} column. ` +
+                  `Check the "Enrollment File ID" config var points at the Enrollment TSV.`,
+              ),
+            );
+          }
+          return;
+        }
+
+        rowsRead++;
+        if (!isEnrolledStatus(row[statusIndex]?.replace(/\r/g, ""))) return;
+
+        const studentId = normaliseStudentId(
+          row[studentIdIndex]?.replace(/\r/g, ""),
+        );
+        if (!wantedStudentIds.has(studentId)) return;
+
+        enrolled.add(studentId);
+        if (enrolled.size === wantedStudentIds.size) {
+          parser.abort();
+          finish();
+        }
+      },
+
+      complete: () => finish(),
+      error: (err: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      },
+    });
+  });
+}
+
+/** Streams the Enrollment TSV from Google Drive and runs the check above. */
+async function resolveEnrolledStudentIds(
+  enrollmentFileId: string,
+  accessToken: string,
+  wantedStudentIds: Set<string>,
+): Promise<{ enrolled: Set<string>; rowsRead: number }> {
+  if (wantedStudentIds.size === 0) return { enrolled: new Set(), rowsRead: 0 };
+  const response = await axios.get(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(enrollmentFileId)}`,
+    {
+      params: { alt: "media", supportsAllDrives: "true" },
+      headers: { Authorization: `Bearer ${accessToken}` },
+      responseType: "stream",
+    },
+  );
+  return collectEnrolledStudentIds(
+    response.data as NodeJS.ReadableStream,
+    wantedStudentIds,
+  );
+}
+
 // ── Google Drive streaming + TSV parsing ───────────────────────────────────────
 
 async function streamAndParseTsv(
@@ -545,7 +680,8 @@ export const accountLoginImport = flow({
   name: "Account Login Import",
   stableKey: "7c1d9e2a-4b3f-4a6c-9d1e-2f3a4b5c6d7e",
   description:
-    "Streams the Account Login TSV from Google Drive, resolves each Student_ID " +
+    "Streams the Account Login TSV from Google Drive, keeps only students with an " +
+    "Enrolled row in the Enrollment TSV, resolves each Student_ID " +
     "against the Account created by Student Import, and upserts Salesforce User " +
     "records (Federation_Identifier__c as the upsert key) via Bulk API 2.0. Must run " +
     "after Student Import. Recurses until the full file is processed.",
@@ -585,6 +721,8 @@ export const accountLoginImport = flow({
     const fileId = configVars["Account Login File ID"] as string | undefined;
     const failedFolderId = configVars["Failed Records Folder ID"] as
       string | undefined;
+    const enrollmentFileId = configVars["Enrollment File ID"] as
+      string | undefined;
     const profileName =
       (configVars["Account Login Profile Name"] as string | undefined) ||
       DEFAULT_PROFILE_NAME;
@@ -593,6 +731,12 @@ export const accountLoginImport = flow({
     );
 
     if (!fileId) throw new Error("Account Login File ID config var is empty.");
+    if (!enrollmentFileId) {
+      throw new Error(
+        "[Account Login Import] Enrollment File ID config var is empty. It is needed to " +
+          "check which students are enrolled (only enrolled students get a User).",
+      );
+    }
 
     const gdToken = getAccessToken(gdConn);
     const sfToken = getAccessToken(sfConn);
@@ -683,11 +827,34 @@ export const accountLoginImport = flow({
           (isActiveByStudentId.get(row.studentId) ?? false) || row.isActive,
         );
       }
-      const dedupedStudentIds = [...isActiveByStudentId.keys()];
-      const duplicateRowCount = rows.length - dedupedStudentIds.length;
+      const uniqueStudentIds = [...isActiveByStudentId.keys()];
+      const duplicateRowCount = rows.length - uniqueStudentIds.length;
       if (duplicateRowCount > 0) {
         logger.info(
           `[Account Login Import] ${duplicateRowCount} duplicate Student_ID row(s) collapsed in this window.`,
+        );
+      }
+
+      // ── 5b. Keep only students enrolled in at least one course ─────────────
+      // Decision 2026-10-21: a User is created only when the Enrollment
+      // source file has a row for this Student_ID with Status = "Enrolled".
+      const { enrolled, rowsRead } = await resolveEnrolledStudentIds(
+        enrollmentFileId,
+        gdToken,
+        new Set(uniqueStudentIds),
+      );
+      const dedupedStudentIds = uniqueStudentIds.filter((id) =>
+        enrolled.has(id),
+      );
+      const droppedNotEnrolled =
+        uniqueStudentIds.length - dedupedStudentIds.length;
+      logger.info(
+        `[Account Login Import] Enrollment check — read ${rowsRead} Enrollment row(s); ` +
+          `${dedupedStudentIds.length} of ${uniqueStudentIds.length} student(s) in this window are Enrolled.`,
+      );
+      if (droppedNotEnrolled > 0) {
+        logger.info(
+          `[Account Login Import] ${droppedNotEnrolled} student(s) have no Enrollment row with Status = "Enrolled" — skipped.`,
         );
       }
 
@@ -815,7 +982,7 @@ export const accountLoginImport = flow({
         }
       } else {
         logger.info(
-          "[Account Login Import] Window contained no upsertable records after Contact resolution.",
+          "[Account Login Import] Window contained no upsertable records after the enrollment check and Contact resolution.",
         );
       }
     } else {
