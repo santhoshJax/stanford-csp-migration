@@ -73,6 +73,23 @@ export function normaliseCatalogNotes(v: string | undefined | null): string | nu
   return v.replace(/_4DNL_/g, "\n").trim();
 }
 
+/**
+ * Strip HTML tags and cap the result to a max length, for plain Text fields
+ * (unlike normaliseCatalogNotes above, which deliberately keeps HTML since
+ * its targets are Rich Text Area fields). Some source titles contain inline
+ * formatting tags (e.g. <span style="font-style:italic">) that push an
+ * otherwise-short title past a 255-char Text field limit — stripping the
+ * tags removes that bloat; the length cap is a safety net for any title
+ * still too long after stripping.
+ */
+export function stripHtmlForTextField(
+  v: string | undefined | null,
+  maxLength = 255,
+): string {
+  const s = (v ?? "").replace(/<[^>]*>/g, "").trim();
+  return s.slice(0, maxLength);
+}
+
 // ── Notes merge ───────────────────────────────────────────────────────────────
 
 export function mergeNotes(

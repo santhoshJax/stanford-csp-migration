@@ -1,29 +1,35 @@
 /**
- * Stanford CSP Migration – Course 22-Field Import flow (Tier 3).
+ * Stanford CSP Migration – Course 18-Field Import flow (Tier 3).
  *
  * Same processing style as coursesImport2Year.ts (Tier 1) and coursesImport5Year.ts
- * (Tier 2), but maps only the 22 Tier 3 fields confirmed checked in the
- * "Field for All Courses Import" column of the architect's mapping sheet
- * (Oct 2026), and covers every academic year older than Tier 2.
+ * (Tier 2), but maps only the Tier 3 fields confirmed by the architect, and
+ * covers every academic year older than Tier 2.
  *
  * Course data tiers (Julia / architect, Sep–Oct 2026):
  *   Tier 1 – all fields      – AY 2024-25, 2025-26 (coursesImport2Year.ts)
  *   Tier 2 – 32 fields       – AY 2021-22, 2022-23, 2023-24 (coursesImport5Year.ts)
- *   Tier 3 – 22 fields       – AY 2020-21 and older (this flow)
+ *   Tier 3 – 18 fields       – AY 2020-21 and older (this flow)
  * The number in a 4D quarter code is the academic year (starts in Fall), so
  * Tier 3 = any quarter whose 2-digit year is 20 or lower (fa08…su20, wi20, etc).
  *
- * All 22 checked fields come from the Course source table only — nothing is
+ * All checked fields come from the Course source table only — nothing is
  * checked under Course_Department, Room_AV_Request, or Course_Submission for
  * this tier, so none of those joins/objects are touched here.
  *
  * Confirmed fields (user-provided list, Oct 2026):
  *   ID, Code, Title, Quarter, Start_Date, End_Date, Enrollment_Count,
- *   Max_Enrollment, Catalog_Notes, Description, Units, Tuition, Drop_By_Date,
- *   Additional_Fee, Enrollment_Status, Cancelled, Dropped_Percent,
- *   Dropped_Special_Percent, Global_Eval, Return_Rate, Format, Course_Summary
+ *   Max_Enrollment, Catalog_Notes, Description, Units, Tuition,
+ *   Additional_Fee, Cancelled, Dropped_Special_Percent, Global_Eval,
+ *   Return_Rate, Format
  *
- * Three fields are intentionally NOT written, matching decisions already
+ * Course_Summary, Drop_By_Date, Dropped_Percent, and Enrollment_Status were
+ * originally included (matching Tier 1/Tier 3, but notably absent from
+ * Tier 2) — architect confirmed (Oct 2026) these should be dropped from
+ * Tier 3 too, to match Tier 2's scope. Enrollment_Status__c (the target
+ * field) is still written, same as Tier 2: derived purely from Cancelled,
+ * since the raw Enrollment_Status source text is no longer read here.
+ *
+ * Four fields are intentionally NOT written, matching decisions already
  * made (and left in place) by the other two tiers:
  *   - Enrollment_Count → EnrolleeCount: system-calculated/read-only in
  *     Salesforce, cannot be written via API (same as Tier 1 and Tier 2).
@@ -38,7 +44,7 @@
  * No CourseOfferingSchedule, CourseOfferingParticipant, Location, or
  * Department records — none of their source fields (Weekday, Course_Time,
  * Primary_Instructor, Primary_Associate, Building, Room, Coordinator_ID,
- * RecID, Tuition_Rule_ID) are in the checked 22.
+ * RecID, Tuition_Rule_ID) are in the checked set.
  *
  * Learning / LearningCourse are shared with Tier 1 and Tier 2 by base course
  * code. If one already exists in Salesforce it is left untouched, so older
@@ -181,16 +187,12 @@ interface RawCourseRow {
   Description?: string;
   Units?: string;
   Tuition?: string;
-  Drop_By_Date?: string;
   Additional_Fee?: string;
-  Enrollment_Status?: string;
   Cancelled?: string;
-  Dropped_Percent?: string;
   Dropped_Special_Percent?: string;
   Global_Eval?: string;
   Return_Rate?: string;
   Format?: string;
-  Course_Summary?: string;
   [key: string]: string | undefined;
 }
 
@@ -542,10 +544,10 @@ export const coursesImportAllTime = flow({
       const co: Record<string, unknown> = {
         Name: code || sourceId,
         ...(sectionSuffix ? { SectionNumber: sectionSuffix } : {}),
-        Enrollment_Status__c: normaliseEnrollmentStatus(
-          row.Enrollment_Status,
-          isCancelled,
-        ),
+        // Enrollment_Status is not a Tier 3 field (dropped per architect
+        // confirmation, Oct 2026, to match Tier 2) — derive from Cancelled
+        // only, same as Tier 2.
+        Enrollment_Status__c: normaliseEnrollmentStatus(undefined, isCancelled),
       };
       co.LearningCourse = { External_ID_4D__c: baseCode };
       if (effectiveQuarter)
@@ -563,10 +565,6 @@ export const coursesImportAllTime = flow({
           const n = parseFloatVal(v);
           if (n !== null) co[field] = n;
         };
-        const setStr = (field: string, v: string | undefined) => {
-          const s = str(v);
-          if (s) co[field] = s;
-        };
 
         setDate("StartDate", row.Start_Date);
         setDate("EndDate", row.End_Date);
@@ -575,11 +573,7 @@ export const coursesImportAllTime = flow({
         setInt("EnrollmentCapacity", row.Max_Enrollment);
         setFloat("Units__c", row.Units);
         setFloat("Tuition_Amount__c", row.Tuition);
-        setDate("Drop_By_Date__c", row.Drop_By_Date);
         setFloat("Additional_Fee__c", row.Additional_Fee);
-        const droppedPct = parseFloatVal(row.Dropped_Percent);
-        if (droppedPct !== null && droppedPct <= 100)
-          co.Dropped_Percent__c = droppedPct;
         const droppedSpecialPct = parseFloatVal(row.Dropped_Special_Percent);
         if (droppedSpecialPct !== null && droppedSpecialPct <= 100)
           co.Dropped_Special_Percent__c = droppedSpecialPct;
@@ -589,7 +583,6 @@ export const coursesImportAllTime = flow({
           normaliseFormat(row.Format, undefined) ??
           formatFromSuffix(sectionSuffix);
         if (fmt) co.Format__c = fmt;
-        setStr("Course_Summary__c", row.Course_Summary);
 
         const r = await sfUpsert(
           sfBase,
