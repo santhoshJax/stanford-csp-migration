@@ -42,13 +42,12 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-22
-**Status:** at risk — Course import: 8 date errors found; recommending code fix (Option A) with correction table + re-run. Awaiting confirmation before commit.
+**Status:** at risk — Option A explained; awaiting confirmation to implement date-correction table and proceed with 8-row fix
 
 **Done this session**
-- Identified exact 8 CourseOffering records with date validation failures
-- Mapped corrected dates from Course_Start_End_Dates_Corrected.xlsx
-- Analyzed flow logic (line 569) and upsert safety
-- Evaluated 4 fix options; recommended Option A (embedded correction table)
+- Detailed Option A implementation logic: correction table lookup, conditional date override, logging for ID mismatches
+- Clarified that all non-date fields still come from source TSV; correction table supplies only 3 values per row
+- Explained 'run only these 8 IDs' variant: flow skips non-matching rows, logs warnings for unmatched correction IDs
 
 **Open items**
 - Confirm Option A approach and whether to include 'run only these 8 IDs' feature
@@ -57,7 +56,7 @@
 - Open pull request on stanford-csp-orchestrate
 - Re-run Course import (full or 8-row subset) and verify all 8 offerings load
 - Check if Enrollment import already ran; if so, re-run enrollments for these 8 offerings
-- Change TEST_MODE to false in src/accountLoginFlow.ts and redeploy (from previous session)
+- Change TEST_MODE to false in src/accountLoginFlow.ts and redeploy
 - Run full 85-batch Enrollment import after TEST_MODE=false redeploy
 
 **Decisions**
@@ -67,10 +66,12 @@
 - Other Cost, Staff Detail, Timecard flows filter on Tier 1 range (2024–2025 prefixes)
 - Enrolled-only filter: Account Login User creation requires at least one Enrollment row with Status = 'Enrolled'
 - Preferred fix for Dropped_Percent fields: widen org field definition to Number or Percent (5,2)
+- Option A: embedded correction table with conditional date override; all other fields from source TSV unchanged
 
 **Blockers**
 - 8 CourseOffering records failed date validation; source file has incorrect dates for these offerings
 - TEST_MODE=true still in src/accountLoginFlow.ts (line 109); blocks full 85-batch import
+- Awaiting confirmation on Option A and run-subset feature before code implementation
 
 **Next**
 - Confirm Option A (embedded correction table) and run-subset feature preference
@@ -81,7 +82,7 @@
 - Change TEST_MODE=false and redeploy Account Login flow
 - Run full 85-batch Enrollment import
 
-**Checked live on 2026-10-22:** the repository, the Salesforce org
+**Checked live on 2026-10-22:** the repository
 ### Last session — 2026-10-22
 | | |
 |---|---|
@@ -91,26 +92,23 @@
 | Name | Stanford-Data-Migration-CourseAllImport-StartEndDateIssueFix-Build |
 | Session | `248ba686-4c07-4923-9742-10be97b27c14` |
 **In its own words (excerpt):**
-My recommendation is to add a small, explicit date-correction table inside the Course Import flow, keyed by the 8 source IDs, and then re-run only those 8 rows. I haven't changed any code yet.
+You don't need to. Under option A the correction file only replaces two fields. Every other field still comes from the source TSV.
 
-## What I found
+## How it works
 
-**The corrected dates** (`Course_Start_End_Dates_Corrected.xlsx`) cover exactly 8 offerings, which matches your 8 errors:
+The flow already reads each of the 8 courses from the source course TSV, with all its fields. They failed at the last step only because of the dates. The correction table would hold just three values per course: the source ID, the start date and the end date.
 
-| Source ID | Quarter | Start | End |
-|---|---|---|---|
-| 19991_GER 01 | fa99 | 1999-09-27 | 1999-11-29 |
-| 20002_DRA 02 | wi00 | 2001-01-11 | 2001-03-15 |
-| 20033_PHY 19 | sp03 | 2004-04-05 | 2004-06-14 |
-| 20051_LIT 161 | fa05 | 2005-09-28 | 2005-11-30 |
-| 20052_EVT 120 | wi05 | 2006-02-23 | 2006-02-23 (same day, which the rule allows) |
-| 20064_EGL 267 | su06 | 2007-06-26 | 2007-07-17 |
-| 20071_WSP 109 | fa07 | 2007-11-03 | 2007-11-10 |
-| 20073_EGL 256 W | sp07 | 2008-03-31 | 2008-06-08 |
+For each row, the flow would:
 
-The years fit your quarter codes: the number is the academic year, which starts in Fall, so wi00 falls in January 2001.
+1. **Read the row from the source TSV** as it does now. That gives Code, Title, Quarter, Max_Enrollment, Units, Tuition, Additional_Fee, Cancelled, Dropped_Special_Percent, Global_Eval, Return_Rate, Format, Catalog_Notes and Description.
+2. **Check whether the source ID is in the correction table.**
+   - If it is, set the offering's start and end dates from the table instead of the file's dates.
+   - If it isn't, change nothing.
+3. **Build and upsert the CourseOffering** using all the other fields from the TSV, exactly as now.
 
-**The flow** (`src/coursesImportAllTime.ts`) copies `Start_Date` and `End_Date` from the course file straight onto `StartDate` and `EndDate` (around line 569). It then upserts the CourseOffering by `External_ID_4D__c` = source ID. Learning and Lea
+In the code, the only change is where the dates are set (`setDate("StartDate", row.Start_Date)` and `setDate("EndDate", row.End_Date)` in `src/coursesImportAllTime.ts`). Everything above and below that stays the same.
+
+## If 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
