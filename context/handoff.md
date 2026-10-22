@@ -42,23 +42,20 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-22
-**Status:** on track — Test-mode import succeeded; enrolled-only filter working. Ready for higher test or full import after TEST_MODE=false.
+**Status:** on track — Account Login flow logic documented; TEST_MODE=false + full import ready after PR merge
 
 **Done this session**
-- Test-mode import (2 rows) executed successfully with enrolled-only filter active
-- Verified all 3 permission set names exist in org (B2BBuyer, CSP_STAP_API_Access, CSP_Student_Education_Cloud_PS)
-- Confirmed enrolled-only check runs and stops early when all students enrolled (2 sec, 118k rows read)
-- Validated User upsert: 1 processed (Shannon McConville updated, not created), 0 failed
-- Confirmed permission set assignments already in place for existing User
+- Documented enrolled-only filter logic, permission set matching, and step order in accountLoginFlow.ts
+- Confirmed early-stop optimization (118k rows read in 2 sec when all students enrolled)
+- Verified permission set assignment safety (re-run safe; failures logged but don't block)
 
 **Open items**
-- Decide: run higher test limit (e.g. 50 rows) to test non-enrolled skip path and new User creation, or proceed to full import
-- Change TEST_MODE from true to false in code and redeploy for full import
+- Change TEST_MODE from true to false in src/accountLoginFlow.ts and redeploy
 - Open pull request for commits 5f8e1d2 + 5921ac8 to main
 - Run full import (85 batches, ~135.8 MB Enrollment file) after TEST_MODE=false redeploy
+- Monitor full run for speed and skip counts; expect slower batches if any contain non-enrolled students
 - Widen Dropped_Special_Percent__c and Dropped_Percent__c in org to accept 100
-- Update sheet: Enrollment_Count row → 'don't load'
-- Update sheet: Cancelled target → Enrollment_Status__c only; Units target → Units__c only; Web_Registration_Closed → Direct Map
+- Update sheet: Enrollment_Count row → 'don't load'; Cancelled target → Enrollment_Status__c only; Units target → Units__c only; Web_Registration_Closed → Direct Map
 - Mark sheet row 123 Tuition_Rule_ID 'Done (duplicate)' of row 89
 
 **Decisions**
@@ -71,15 +68,13 @@
 
 **Blockers**
 - TEST_MODE=true still in code; full import requires change to false + redeploy
-- Speed unvalidated for non-enrolled case; full Enrollment file read (135.8 MB) occurs when batch contains any non-enrolled student; test-mode with higher limit recommended before full import
 
 **Next**
-- Confirm: proceed with higher test limit (50 rows) or go straight to TEST_MODE=false + full import
-- Change TEST_MODE to false and redeploy to instance
+- Change TEST_MODE to false in src/accountLoginFlow.ts and redeploy to instance
 - Open pull request for 5f8e1d2 + 5921ac8 to main
 - Run full import and monitor log for speed and skip counts across all 85 batches
 
-**Checked live on 2026-10-22:** Google Workspace, the repository
+**Checked live on 2026-10-22:** the repository
 ### Last session — 2026-10-22
 | | |
 |---|---|
@@ -89,16 +84,25 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-The run worked, and the log shows each part of the change doing its job.
+The logic is all in `src/accountLoginFlow.ts` on `stanford-csp-orchestrate`. I re-read the file for this answer, and the snippets below are copied from it.
 
-**What this run shows**
-- **Permission sets:** all 3 names matched sets in the org (`B2BBuyer`, `CSP_STAP_API_Access`, `CSP_Student_Education_Cloud_PS`).
-- **Enrolled-only check:** it ran, and both test students are Enrolled, so neither was filtered out. It stopped reading after 118,187 Enrollment rows because it had already found both students. That's why the step took only about 2 seconds.
-- **Account match:** 1 of the 2 students has no Person Account in the org, so it was skipped. This is a separate check that was already in the flow. That student needs Student Import to run first.
-- **User upsert:** 1 processed, 0 failed. I opened the [results sheet](https://docs.google.com/spreadsheets/d/1wecRladm9wOGhQ4Hjr_cno5U3-HQSTdUpj6ghN7mrHQ). It shows Shannon McConville (Student_ID `20461695`, User `005WH00000TasE9YAJ`) with **Action = Updated**. This is the same User from your first sample run, so it was updated rather than created again.
-- **Assignments:** "3 already in place" means that User already had all 3 permission sets, so nothing new was created.
+## Order of steps in each 2,000-row batch
 
-The `firstId`/`lastId` in the log are the first and last
+1. Read the Account Login rows from Drive. A row is skipped if its column count doesn't match the header, or its `Student_ID` is blank, `0` or not a number.
+2. Look up the Profile. The run stops if it isn't found.
+3. Look up the 3 permission sets. The run stops if a name is missing or matches more than one set.
+4. Remove duplicate `Student_ID`s.
+5. **Enrolled-only filter:** keep only students who have an `Enrolled` row in the Enrollment file.
+6. Match the remaining students to a Person Account. Students with no Account, or no email, are skipped.
+7. Upsert the Users with Bulk API 2.0, using `Federation_Identifier__c` as the key.
+8. Add any of the 3 permission sets each User doesn't already have.
+9. Write the results sheet, then start the next batch.
+
+The filter runs after step 4 and before the Salesforce lookup, so non-enrolled students never cost a Salesforce query.
+
+## 1. Enrolled-only filter
+
+**Rule:** a student gets a User only if at least one row in the Enrollment TSV has their `St
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
