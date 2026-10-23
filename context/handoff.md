@@ -42,10 +42,13 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-23
-**Status:** at risk — Batching & retry fixes ready; performance review complete. Job 750WH00000gdMIFYA2 status & org limits still unknown.
+**Status:** at risk — Results sheet field coverage reviewed; 5-Year missing fields root cause found. Job 750WH00000gdMIFYA2 status & org limits still unknown.
 
 **Done this session**
-- Reviewed Account Login flow performance; identified 5 causes of slow windows (User automation, Enrollment file re-read, results sheet row count, permission set batching, fixed costs)
+- Code review: identified why Total_Hours__c, Tuition_Adjustment__c, Tuition_Adjustment_Note__c missing from 5-Year sheet (PapaParse drops columns absent in first row)
+- Found shared sheet writer bug: reportResults.ts never reads existing header on append, misaligns values across windows
+- Identified 50+ optional CourseOffering fields missing from 2-Year flow; lookup values show as [object Object]
+- Confirmed 16 Bulk-API flows are fine (use Salesforce result files); identified 10 flows affected by shared writer bug
 
 **Open items**
 - Check job 750WH00000gdMIFYA2 in Bulk Data Load Jobs; confirm 360 Users created or identify LIMIT_EXCEEDED failures
@@ -69,45 +72,32 @@
 - Job 750WH00000gdMIFYA2 final status unknown after socket hang up; may have finished or failed
 
 **Next**
-- Redeploy Account Login integration from stanford-csp-orchestrate (head 9562b28)
-- Check Setup → Bulk Data Load Jobs for job 750WH00000gdMIFYA2 final status and record counts
-- Check Setup → Object Manager → User for triggers, flows, and Experience Cloud welcome email settings
-- Resume import from byte 18,468,950; check first batch log for LIMIT_EXCEEDED or success
-- If LIMIT_EXCEEDED persists, check Setup → Company Information for Student_Profile licences & storage usage
+- Confirm today's 5-Year sheet to verify missing fields match root cause found
+- Decide: create Jira backlog for results sheet fixes or hand to Build session
+- Check job 750WH00000gdMIFYA2 status and record counts in Bulk Data Load Jobs
+- Check Setup → Company Information for Student_Profile licences & storage usage if LIMIT_EXCEEDED persists
+- Redeploy Account Login integration and resume import from byte 18,468,950
 
 **Checked live on 2026-10-23:** the repository
 ### Last session — 2026-10-23
 | | |
 |---|---|
-| Type | BUILD |
+| Type | REVIEW |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
-| Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
+| Name | Stanford-Data-Migration-SuccessFailGoogleSheetColumn-Review |
+| Session | `8bb34aed-4a66-4102-bb48-d51e190354df` |
 **In its own words (excerpt):**
-I reviewed the code only and changed nothing. Most of each window's time is Salesforce creating the Users. On top of that, two parts of the flow repeat work every window, and one of them gets slower as the import goes on.
+The sheets do not always include every field the flow sent to Salesforce, and I found the cause of your 5 Year problem. This is a code review only. I changed no code and did not open any past Drive sheets, so please check today's 5 Year sheet to confirm. The report has been attached to this session as **D01 – Results Sheet Field Coverage Review**.
 
-## Where the time goes in one window
+**Why the three new fields are missing**
+- The three Course Import flows (5 Year, 2 Year, All Time) build their sheet CSV with `papaUnparse(rows)` and no column list. PapaParse takes the columns from the first row only and drops any field that appears only in later rows. I confirmed this by running it.
+- `Total_Hours__c`, `Tuition_Adjustment__c` and `Tuition_Adjustment_Note__c` are only set when the row matches a Course Submission record. If the first CourseOffering row in a window has no match, the columns never appear and the rest of that window loses them too.
+- The same applies to about 50 other optional CourseOffering fields in the 2 Year flow.
+- Lookup values in these flows (LearningCourse, AcademicSession, Learning and so on) show as `[object Object]` in the sheet.
 
-These timings come from your 08:22 log, a 500-row window that took 53 seconds in total:
-
-| Step | Time | Same every window? |
-|---|---|---|
-| Platform start | 1–4 s | Yes |
-| Read 500 Account Login rows from Drive | ~1 s | Yes, cheap |
-| Profile and permission set lookups | <1 s | Yes |
-| **Read the whole Enrollment file** | **~7 s** | **Yes, the same file every time** |
-| Account/Contact lookup (3 queries of 200) | <1 s | Yes |
-| **Salesforce Bulk job for the Users** | **~39 s** (426 rows) | **No: depends on the org** |
-| Permission sets, results sheet, next run | a few s | **Grows over the run** (see 3) |
-
-For comparison, the 2,000-row window on 22 Oct waited more than 14 minutes on its job.
-
-## The causes, biggest first
-
-**1. Salesforce is slow to create Users (most of the time).**
-- The flow only waits in this step. It checks the job every 2 seconds and does nothing else, so the time is spent inside Salesforce.
-- User rec
+**Other problems found**
+- **Enrollment Waiver:** the sheet shows
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
