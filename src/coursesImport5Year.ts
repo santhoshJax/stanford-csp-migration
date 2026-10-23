@@ -17,8 +17,11 @@
  *
  * Not written by this flow (fields outside the 32): Location, department
  * (Learning.ProviderId, CourseOffering.Department__r, Course_Department__c),
- * Course_Submission fields, Textbooks, Enrollment_Status (derived from
- * Cancelled only).
+ * Textbooks, Enrollment_Status (derived from Cancelled only).
+ *
+ * Course_Submission fields written here (workbook 5-year column, Oct 2026):
+ * Total_Hours__c, Tuition_Adjustment__c, Tuition_Adjustment_Note__c — joined on
+ * Course_Code|Course_Quarter, same as the 2-year flow.
  *
  * Learning / LearningCourse are shared with Tier 1 by base course code. If one
  * already exists in Salesforce it is left untouched, so an older Tier 2 title
@@ -346,6 +349,48 @@ async function loadCourseInstructors(
   return map;
 }
 
+// ── Course-Submission data ────────────────────────────────────────────────────
+// Only the three fields in the workbook's 5-year column are read from this file.
+
+interface CourseSubmissionRow {
+  Course_Code?: string;
+  Course_Quarter?: string;
+  Course_Total_Hours?: string;
+  Tuition_Adjustment?: string;
+  Tuition_Adjustment_Note?: string;
+}
+
+/**
+ * Loads the Course_Submission TSV and keys each row by "Course_Code|quarter"
+ * (quarter lower-cased). First row wins when a key repeats, as in the 2-year flow.
+ */
+async function loadCourseSubmissions(
+  fileId: string,
+  token: string,
+): Promise<Map<string, CourseSubmissionRow>> {
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`;
+  const { data } = await axios.get<string>(url, {
+    params: { alt: "media", supportsAllDrives: "true" },
+    headers: { Authorization: `Bearer ${token}` },
+    responseType: "text",
+  });
+  const content = data.replace(/^\uFEFF/, "");
+  const { data: rows } = papaParse<CourseSubmissionRow>(content, {
+    header: true,
+    skipEmptyLines: true,
+    delimiter: "\t",
+  });
+  const map = new Map<string, CourseSubmissionRow>();
+  for (const row of rows) {
+    const code = row.Course_Code?.trim();
+    const quarter = row.Course_Quarter?.trim().toLowerCase();
+    if (!code || !quarter) continue;
+    const key = `${code}|${quarter}`;
+    if (!map.has(key)) map.set(key, row);
+  }
+  return map;
+}
+
 // ── Course-Associate junction ─────────────────────────────────────────────────
 
 interface CourseAssociateRow {
@@ -618,6 +663,9 @@ export const coursesImport5Year = flow({
     const associateFileId = configVars[
       "Course Associate File ID"
     ] as unknown as string | undefined;
+    const submissionFileId = configVars[
+      "Course Submission File ID"
+    ] as unknown as string | undefined;
     const failedFolderId = configVars["Failed Records Folder ID"] as
       string | undefined;
 
@@ -671,6 +719,24 @@ export const coursesImport5Year = flow({
       } catch (err) {
         logger.warn(
           `[Course32] Could not load Course-Associate file: ${String(err)} — falling back to Primary_Associate field`,
+        );
+      }
+    }
+
+    // ── Course-Submission data ────────────────────────────────────────────────
+    let courseSubmissionMap = new Map<string, CourseSubmissionRow>();
+    if (submissionFileId) {
+      try {
+        courseSubmissionMap = await loadCourseSubmissions(
+          submissionFileId,
+          gdToken,
+        );
+        logger.info(
+          `[Course32] Course-Submission data loaded — ${courseSubmissionMap.size} entries`,
+        );
+      } catch (err) {
+        logger.warn(
+          `[Course32] Could not load Course-Submission file: ${String(err)} — submission fields will not be set`,
         );
       }
     }
@@ -1034,6 +1100,19 @@ export const coursesImport5Year = flow({
         setBool("Recording__c", row.Recording);
         const instrPrefs = normaliseInstructorPrefs(row.Instructor_Preferences);
         if (instrPrefs) co.Textbook_Instructor_Preferences__c = instrPrefs;
+
+        // Course_Submission fields — joined on Course_Code|Course_Quarter
+        const submission = courseSubmissionMap.get(
+          `${code}|${quarter.toLowerCase()}`,
+        );
+        if (submission) {
+          setFloat("Total_Hours__c", submission.Course_Total_Hours);
+          setFloat("Tuition_Adjustment__c", submission.Tuition_Adjustment);
+          setStr(
+            "Tuition_Adjustment_Note__c",
+            str(submission.Tuition_Adjustment_Note).trim(),
+          );
+        }
 
         logger.info(
           `[Course32] Row ${startRow + i} (${sourceId}) CourseOffering required fields:` +
