@@ -42,40 +42,39 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-23
-**Status:** at risk — Account Login retry fix pushed (5f2be48); LIMIT_EXCEEDED & job 750WH00000gdMIFYA2 status still open
+**Status:** at risk — Account Login retry & batching fixes pushed (67e10fd, 5f2be48); ready to redeploy. LIMIT_EXCEEDED & job 750WH00000gdMIFYA2 status still ope…
 
 **Done this session**
-- Pushed Account Login timeout retry fix to stanford-csp-orchestrate (5f2be48); 21 tests pass, type check clean
-- Implemented exponential backoff (2s–30s) for Salesforce 429/5xx/socket errors on job status & file downloads
+- Reduced batch size to 500 rows; added 10-min wait limit per run with hand-off up to 6 times
+- Implemented exponential backoff retry (2s–30s) for Salesforce 429/5xx/socket errors on job status & file downloads
+- All 14 Account Login tests + 21 retry tests pass; type check clean
 
 **Open items**
-- Check Salesforce Setup: user licences on Student_Profile, Experience Cloud limits, storage usage
 - Check job 750WH00000gdMIFYA2 in Bulk Data Load Jobs; confirm 360 Users created or identify LIMIT_EXCEEDED failures
+- Check Salesforce Setup: Student_Profile user licences and storage usage (org limit issue)
 - Verify Total_Hours__c, Tuition_Adjustment__c, Tuition_Adjustment_Note__c exist on CourseOffering
 - Deploy Course 5-Year flow & run test; confirm values appear on CourseOffering records
-- Deploy Account Login retry fix from stanford-csp-orchestrate & re-run from byte 20,375,310
+- Redeploy Account Login integration from stanford-csp-orchestrate & resume from byte 18,468,950
 - Merge PR #1 (Course Correction Sheet ID config) to main & deploy
+- Open PR for Account Login batching & retry fixes to main
 
 **Decisions**
 - MAX_ROWS = 500 per run; POLL_BUDGET_MS = 10 min; MAX_JOB_HANDOFFS = 6
 - Hand-off passes pendingJobId & file position; recordsFromResultCsvs rebuilds from Salesforce CSVs
-- TEST_MODE = false; next run is full import
-- Pause Account Login integration until org licence/limit issue confirmed & resolved
-- Course 5-Year flow uses same file ID setting as 2-year flow; All Courses flow unchanged
 - Account Login retry: up to 5 attempts, exponential backoff 2s–30s; non-retryable errors (401/404) fail immediately
+- Course 5-Year flow uses same file ID setting as 2-year flow; All Courses flow unchanged
+- TEST_MODE = false; next run is full import from byte 18,468,950
 
 **Blockers**
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
-- Job 750WH00000gdMIFYA2 status unknown after socket hang up; may have finished or failed
-- PR #1 not yet merged to main
-- Course 5-Year target fields not yet verified in org
+- Job 750WH00000gdMIFYA2 final status unknown after socket hang up; may have finished or failed
 
 **Next**
-- Check Salesforce Setup → Company Information for user licences (Student_Profile) and storage usage
+- Redeploy Account Login integration from stanford-csp-orchestrate (head 9562b28)
 - Check Setup → Bulk Data Load Jobs for job 750WH00000gdMIFYA2 final status and record counts
-- Verify three CourseOffering fields exist in target org
-- Deploy Course 5-Year flow & run test; confirm values on CourseOffering records
-- Once org limits confirmed OK, deploy Account Login fix & re-run from byte 20,375,310
+- Resume import from byte 18,468,950; check first batch log for LIMIT_EXCEEDED or success
+- If LIMIT_EXCEEDED persists, check Setup → Company Information for Student_Profile licences & storage usage
+- Decide: open PR to main now, or add safeguard for org-level batch failures first
 
 **Checked live on 2026-10-23:** the repository
 ### Last session — 2026-10-23
@@ -87,18 +86,19 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-I pushed the fix to `stanford-csp-orchestrate` as commit `5f2be48`, and the branch on GitHub now points to it. It changes 2 files (+187 / −17). It isn't deployed and hasn't been run yet.
+I made two code changes to the Account Login import in this session. Both are pushed to `stanford-csp-orchestrate`. Neither has been deployed or run yet. The branch head is now `9562b28`, but the only commit after my last code change just updates `context/handoff.md`.
 
-**Why the last run stopped:** one status check on job `750WH00000gdMIFYA2` lost its connection ("socket hang up"). The flow treated that as fatal and ended the run, even though the job was still running in Salesforce.
+## What I changed
 
-**What the fix does (`src/utils.ts`)**
-- **Retries:** if Salesforce doesn't answer at all, or returns 429 or 5xx, the flow tries again up to 5 times, waiting 2s, 4s, 8s and so on, up to 30s between tries. Errors like 401 or 404 aren't retried.
-- **Where it applies:** the job status checks, and downloading the success and failure files.
-- **If Salesforce still can't be reached:** the flow treats the job as not finished yet. The existing hand-off then passes the job Id to the next run instead of failing. You'll see "Status check … retry N" warnings in the log when this happens.
-- **Tests:** `src/utils.retry.test.ts` is new. All 21 retry and Account Login tests pass and the type check is clean.
+**1. Batches no longer time out (commit `67e10fd`)**
+- **Problem:** the second batch waited on Salesforce job `750WH00000ga5nNYAQ` until it hit the 15-minute run limit (E100), and the import stopped there.
+- **Smaller batches:** each run now handles 500 rows instead of 2,000.
+- **Wait limit:** a run now waits at most 10 minutes for the job. If the job is still running, the run passes the job Id and its place in the file to the next run, which carries on waiting. The Users aren't uploaded twice.
+- **Hand-off limit:** a job can be handed on 6 times, about an hour in total, so a stuck job can't loop forever.
+- **Finishing the batch:** the flow builds the results rows from Salesforce's success and failure files, then assigns the permission sets.
+- **Files and tests:** this touched `src/accountLoginFlow.ts`, `src/utils.ts`, the tests and `ARCHITECTURE.md`. All 14 Account Login tests pass.
 
-**Before you re-run**
-1. **The `LIMIT_EXCEEDED` problem from earlier is still open.** This 
+**2. A droppe
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
