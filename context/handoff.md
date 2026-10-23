@@ -41,43 +41,42 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-10-22
-**Status:** at risk — Account Login timeout fix + TEST_MODE off committed; awaiting deployment & verification before 85-batch re-run
+### Engagement state — 2026-10-23
+**Status:** blocked — Account Login paused: all 426 Users rejected with LIMIT_EXCEEDED. Likely org licence exhaustion; awaiting org check.
 
 **Done this session**
-- Reviewed commits 6ac96a7 (TEST_MODE=false), 67e10fd (timeout fix: 500-row batches, 10-min wait, hand-off logic), f70a14f (docs)
-- Confirmed all 14 Account Login tests pass; no lint issues; hand-off logic & result CSV parsing in place
+- Reviewed timeout fix commits (6ac96a7, 67e10fd, f70a14f); confirmed 14 tests pass
+- Identified batch failure root cause: LIMIT_EXCEEDED on all 426 Users at byte 18,551,476
+- Confirmed flow logic correct; Salesforce org rejected entire batch, not mapping issue
 
 **Open items**
-- Merge PR #1 (Course Correction Sheet ID config) to main
-- Deploy Account Login timeout fix (branch stanford-csp-orchestrate) to org
-- Deploy PR #1 changes to org
-- Check job 750WH00000ga5nNYAQ status in Salesforce; verify Users exist & permission sets pending
-- Re-run Account Login from batch byte 317,780 with deployed timeout fix
-- Run npm run import to activate Course Correction Sheet ID config
-- Set Course Correction Sheet ID & turn on Course Correction Enabled; run Course Import - All
-- Monitor logs for 'Handing off job' lines during full 85-batch import (~340 runs, ~30 min overhead)
-
-**Decisions**
-- MAX_ROWS reduced to 500 per run (from 2,000) to keep Salesforce jobs within single run window
-- POLL_BUDGET_MS = 10 min; MAX_JOB_HANDOFFS = 6 (~1 hour total per job)
-- Hand-off passes pendingJobId & file position; recordsFromResultCsvs rebuilds results from Salesforce CSVs
-- TEST_MODE now false; next run is full import, not 2-row test
-- All previous execution order & correction logic decisions remain unchanged
-
-**Blockers**
-- Account Login timeout fix not yet deployed; full 85-batch import blocked until deployed & re-run from job 750WH00000ga5nNYAQ
-- PR #1 not yet merged to main; Course Correction changes not live
-
-**Next**
-- Deploy Account Login timeout fix (stanford-csp-orchestrate branch) to org
-- Check job 750WH00000ga5nNYAQ in Salesforce; verify Users created & permission sets pending
-- Re-run Account Login from batch byte 317,780 with deployed fix; monitor for hand-off lines in logs
-- Merge PR #1 to main & deploy Course Correction config
+- Check Salesforce org: user licences (Student_Profile), Experience Cloud limits, storage usage
+- Identify first failed batch byte offset in Salesforce job 750WH00000gbOj9YAE
+- Confirm with client: total Users needed vs. available licences
+- Deploy Account Login timeout fix (stanford-csp-orchestrate) once org issue resolved
+- Re-run Account Login from first failed batch byte offset with deployed fix
+- Merge PR #1 (Course Correction Sheet ID config) to main & deploy
 - Run npm run import; set Course Correction Sheet ID & enable; run Course Import - All
 
-**Checked live on 2026-10-22:** nothing — the status above is as recorded, not re-checked
-### Last session — 2026-10-22
+**Decisions**
+- MAX_ROWS = 500 per run; POLL_BUDGET_MS = 10 min; MAX_JOB_HANDOFFS = 6
+- Hand-off passes pendingJobId & file position; recordsFromResultCsvs rebuilds from Salesforce CSVs
+- TEST_MODE = false; next run is full import
+- Pause integration until org licence/limit issue confirmed & resolved
+
+**Blockers**
+- Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
+- Account Login timeout fix not yet deployed
+- PR #1 not yet merged to main
+
+**Next**
+- Check Salesforce Setup: user licences on Student_Profile, Experience Cloud limits, storage usage
+- Review job 750WH00000gbOj9YAE & prior jobs to find first failed batch byte offset
+- Confirm with client: total enrolled Users in file vs. available licences
+- Once org issue resolved, deploy timeout fix & re-run from first failed batch byte offset
+
+**Checked live on 2026-10-23:** Google Workspace
+### Last session — 2026-10-23
 | | |
 |---|---|
 | Type | BUILD |
@@ -86,18 +85,15 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-Since your last run, two commits change the Account Login code on `stanford-csp-orchestrate` (head `f70a14f`). I read both diffs on GitHub just now.
+**Please pause the Account Login integration now.** Every User in this batch failed, and the flow still went on to the next batch at byte 18,551,476. If the cause is an org-level limit, every batch after this one will fail the same way. There are about 50 batches left in the file, so leaving it running only produces more failed rows.
 
-## 1. `6ac96a7`: test mode off (pushed by someone else)
-- In `src/accountLoginFlow.ts`, `TEST_MODE` is now `false`. The next run is a full import, not a 2-row test, and it moves on to the next batch by itself.
+## What the log shows
+- **The flow worked:** it read 500 rows, the Enrollment filter skipped 74, it sent 426 Users, and the Salesforce job finished in about 40 seconds.
+- **Salesforce rejected all 426** with `LIMIT_EXCEEDED:limit exceeded:--`. The rows themselves look fine: every one has a Contact, an email, the Student_Profile Id `00eWH000001djuLYAQ` and a valid alias. So this isn't a mapping problem with a few bad rows. The org refused the whole batch.
+- **No permission sets were assigned**, because no User was written. That part behaved correctly.
 
-## 2. `67e10fd`: timeout fix (my commit, 4 files, +385 / −70)
-
-**`src/accountLoginFlow.ts`**
-- **Smaller batches:** `MAX_ROWS` went from 2,000 to **500** rows per run. Creating these Users is slow, so a smaller batch keeps each Salesforce job well inside one run. I didn't mention this in my last summary, sorry.
-- **Wait limit:** `POLL_BUDGET_MS` = 10 minutes. A run waits at most that long for the User job, which leaves about 5 minutes for permission sets, the results sheet and starting the next batch.
-- **Hand-off:** if the job is still running after 10 minutes, the run passes `pendingJobId` and its file position to the next run. That run carries on waiting for the same job and doesn't upload the Users again.
-- **Hand-off limit:** `MAX_JOB_HANDOFFS` = 6, so a job gets about an hour in total. After that the run stops with an err
+## Likely cause (I couldn't check it)
+When every row fails with the same `LIMIT_EXCEEDED` partway through a large User load, it usually means an org-level limit has been reached, and the most common one is **user licences**. About 18.5 MB of the 27 MB file was processed before this batch, so thousands of
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
