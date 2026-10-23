@@ -42,19 +42,18 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-23
-**Status:** at risk — Course 5-Year flow committed; Account Login blocked on org limits; PR #1 awaiting merge
+**Status:** at risk — Account Login retry fix pushed (5f2be48); LIMIT_EXCEEDED & job 750WH00000gdMIFYA2 status still open
 
 **Done this session**
-- Committed Course 5-Year flow (9ed44a4) mapping Total Hours & Tuition Adjustment fields to GitHub
+- Pushed Account Login timeout retry fix to stanford-csp-orchestrate (5f2be48); 21 tests pass, type check clean
+- Implemented exponential backoff (2s–30s) for Salesforce 429/5xx/socket errors on job status & file downloads
 
 **Open items**
-- Check Salesforce org: user licences (Student_Profile), Experience Cloud limits, storage usage
-- Identify first failed batch byte offset in Salesforce job 750WH00000gbOj9YAE
-- Confirm with client: total Users needed vs. available licences
-- Verify three target fields (Total_Hours__c, Tuition_Adjustment__c, Tuition_Adjustment_Note__c) exist on CourseOffering
+- Check Salesforce Setup: user licences on Student_Profile, Experience Cloud limits, storage usage
+- Check job 750WH00000gdMIFYA2 in Bulk Data Load Jobs; confirm 360 Users created or identify LIMIT_EXCEEDED failures
+- Verify Total_Hours__c, Tuition_Adjustment__c, Tuition_Adjustment_Note__c exist on CourseOffering
 - Deploy Course 5-Year flow & run test; confirm values appear on CourseOffering records
-- Deploy Account Login timeout fix (stanford-csp-orchestrate) once org issue resolved
-- Re-run Account Login from first failed batch byte offset with deployed fix
+- Deploy Account Login retry fix from stanford-csp-orchestrate & re-run from byte 20,375,310
 - Merge PR #1 (Course Correction Sheet ID config) to main & deploy
 
 **Decisions**
@@ -63,18 +62,20 @@
 - TEST_MODE = false; next run is full import
 - Pause Account Login integration until org licence/limit issue confirmed & resolved
 - Course 5-Year flow uses same file ID setting as 2-year flow; All Courses flow unchanged
+- Account Login retry: up to 5 attempts, exponential backoff 2s–30s; non-retryable errors (401/404) fail immediately
 
 **Blockers**
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
-- Account Login timeout fix not yet deployed
+- Job 750WH00000gdMIFYA2 status unknown after socket hang up; may have finished or failed
 - PR #1 not yet merged to main
 - Course 5-Year target fields not yet verified in org
 
 **Next**
-- Check Salesforce Setup: user licences on Student_Profile, Experience Cloud limits, storage usage
-- Verify Total_Hours__c, Tuition_Adjustment__c, Tuition_Adjustment_Note__c exist on CourseOffering
-- Deploy Course 5-Year flow & run test run; confirm values on CourseOffering records
-- Once org limits issue resolved, deploy Account Login timeout fix & re-run from first failed batch byte offset
+- Check Salesforce Setup → Company Information for user licences (Student_Profile) and storage usage
+- Check Setup → Bulk Data Load Jobs for job 750WH00000gdMIFYA2 final status and record counts
+- Verify three CourseOffering fields exist in target org
+- Deploy Course 5-Year flow & run test; confirm values on CourseOffering records
+- Once org limits confirmed OK, deploy Account Login fix & re-run from byte 20,375,310
 
 **Checked live on 2026-10-23:** the repository
 ### Last session — 2026-10-23
@@ -83,23 +84,21 @@
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Course5YearFlowUpdate |
-| Session | `4274774a-2d22-4be3-934e-9ea6d4a5a871` |
+| Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
+| Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-The commit is pushed. `stanford-csp-orchestrate` on GitHub now points at `9ed44a4` ("Course 5-Year: map Total Hours and Tuition Adjustment fields"), and I checked that against the remote. No other commits went with it.
+I pushed the fix to `stanford-csp-orchestrate` as commit `5f2be48`, and the branch on GitHub now points to it. It changes 2 files (+187 / −17). It isn't deployed and hasn't been run yet.
 
-**What's in it:** the Course Import - 5 Year flow now reads the Course Submission file. It uses the same file ID setting as the 2-year flow and matches rows the same way, on Code + Quarter. From that file it writes `Total_Hours__c`, `Tuition_Adjustment__c` and `Tuition_Adjustment_Note__c`. If the file is missing or won't load, the flow logs a warning and carries on without those three fields. As you decided, the All Courses flow is unchanged.
+**Why the last run stopped:** one status check on job `750WH00000gdMIFYA2` lost its connection ("socket hang up"). The flow treated that as fatal and ended the run, even though the job was still running in Salesforce.
 
-**Where it stands:**
-- **Done:** committed and pushed to `stanford-csp-orchestrate`.
-- **Not deployed:** no org is attached to this session, so I haven't run the flow or confirmed the three target fields exist on CourseOffering in the org.
+**What the fix does (`src/utils.ts`)**
+- **Retries:** if Salesforce doesn't answer at all, or returns 429 or 5xx, the flow tries again up to 5 times, waiting 2s, 4s, 8s and so on, up to 30s between tries. Errors like 401 or 404 aren't retried.
+- **Where it applies:** the job status checks, and downloading the success and failure files.
+- **If Salesforce still can't be reached:** the flow treats the job as not finished yet. The existing hand-off then passes the job Id to the next run instead of failing. You'll see "Status check … retry N" warnings in the log when this happens.
+- **Tests:** `src/utils.retry.test.ts` is new. All 21 retry and Account Login tests pass and the type check is clean.
 
-**Still to do:**
-1. Check the three fields exist in the target org.
-2. Deploy, then do one 5-year test run and confirm the values appear on a few CourseOffering records.
-3. Merge to `main` the usual way. PR #1 is still open on this branch.
-
-Sources: checked live: GitHub branch `stanford-csp
+**Before you re-run**
+1. **The `LIMIT_EXCEEDED` problem from earlier is still open.** This 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
