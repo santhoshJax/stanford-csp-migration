@@ -28,6 +28,7 @@
    - [Tuition Rule Flow](#414-tuition-rule-flow)
    - [Unit Rule Flow](#415-unit-rule-flow)
    - [Textbook Flow](#416-textbook-flow)
+   - [Commerce Flows — Purchase Inventory / Purchase / Purchase Item / Payments](#417-commerce-flows)
 5. [Cross-Cutting Patterns](#5-cross-cutting-patterns)
 6. [External ID Strategy](#6-external-id-strategy)
 7. [Known Open Items & Decisions](#7-known-open-items--decisions)
@@ -176,6 +177,13 @@ Group 5 — Depends on Group 4
 
 Group 6 — Standalone (can run any time after Group 1)
   └── Transcript Request Flow → CSP_Transcript_Request__c
+
+Group 7 — Commerce (Student flow first; see 4.17 for the internal order)
+  ├── Purchase Inventory Flow → Product2, PricebookEntry
+  ├── Registration Flow       → CardPaymentMethod, Order, PaymentGroup, Payment
+  ├── Purchase Flow           → CardPaymentMethod, Order, PaymentGroup, Payment   (PUR- ids)
+  ├── Purchase Item Flow      → OrderItem        (needs Purchase Inventory + Purchase)
+  └── Payments Flow           → Payment, Refund  (needs Registration; PAY- ids)
 ```
 
 ---
@@ -291,9 +299,13 @@ Upsert key: `Student_ID_4D__c`
 ### 4.3a Account Login Flow
 
 **File:** `src/accountLoginFlow.ts`
-**Source:** Account Login TSV (4D) — streamed in 2,000-row windows
+**Source:** Account Login TSV (4D) — streamed in 500-row windows (was 2,000 until 2026-10-22; see "Long-running User jobs" below)
 **Purpose:** Creates one Salesforce `User` per portal login credential, for the Student community/portal profile. **Must run after Student Flow** — every row is resolved against the Account created there.
 **Reference:** "CSP Data Migration Mapping Workbook - Account Login.pdf"
+
+#### Enrollment filter (added 2026-10-21)
+
+Only students who are enrolled in a course get a User. For each window, after duplicate `Student_ID` rows are collapsed, the flow streams the Enrollment TSV (the "Enrollment File ID" config var on the Enrollment Configuration page) and keeps a `Student_ID` only if it has at least one Enrollment row with `Status = "Enrolled"` (case-insensitive; `12345.0` is read as `12345`). Wait List, Drop, Cancelled and every other status do not count. The check reads the source file, not Salesforce, so it does not depend on the Enrollment Import having run. The scan stops as soon as every student in the window has been found. The run stops with an error if "Enrollment File ID" is empty or the file has no `Student_ID` or `Status` column. Skipped students are counted in the log.
 
 #### Objects Created
 
@@ -314,13 +326,23 @@ Upsert key: `Federation_Identifier__c` (custom field — not the standard `Feder
 | `TimeZoneSidKey` | — | Direct map, default `"America/Los_Angeles"` |
 | `EmailEncodingKey` | — | Direct map, default `"UTF-8"` |
 
+**PermissionSetAssignment** (added 2026-10-15)
+Every User the upsert accepts, whether created or updated, is assigned these permission sets: **Buyer**, **CSP Stap API Access**, **CSP Student Education Cloud PS**. The list comes from the "Account Login Permission Sets" config var (comma-separated; each entry can be an API Name or a unique Label). The permission sets are looked up before the upsert, and the run stops if any is missing or its Label is ambiguous. Assignments that already exist are skipped, so re-running the flow also adds the permission sets to Users imported before this step existed. Inserted through the sObject Collections API with allOrNone=false. Per-row failures are logged and do not undo the User upsert.
+
 **Do Not Map:** `Instructor_ID`, `Associate_ID`, `ID`, `Last_Login_Date`, `Password_Hash_Char`, `Created_Date/Time/By`, `Last_Modified_Date/Time/By`, `Student_ID_Previous`, `Override_Hash_Storage/Start_Date/Start_Time/History`, `Previous_Hash_Chars`.
 
 **Row-skip rules:** no `Student_ID` or `Student_ID = 0`; no matching Account found for `Student_ID`; matched Contact has no usable email.
 
 **Open item — Active/Inactive semantics:** the mapping doc calls this "Direct Map" from source `Inactive` to target `Active`, noting "records are only marked as inactive if they are duplicate." A literal same-value copy would leave every normal (non-duplicate) record `IsActive = false`, so this flow inverts the value (`IsActive = !Inactive`) to match the note's evident intent. **Needs architect confirmation before go-live.**
 
-**Prerequisites:** a Profile named `Student_Profile` must exist in the org (configurable via the "Account Login Profile Name" config var); a custom field `User.Federation_Identifier__c` must exist and be marked as an External ID in Salesforce Setup, so Bulk API 2.0 can upsert on it (same convention as `Student_ID_4D__c` / `Instructor_ID_4D__c` / `Associate_ID_4D__c` elsewhere in this project).
+#### Long-running User jobs (added 2026-10-22)
+
+Creating Experience Cloud Users through Bulk API 2.0 is slow. In the first full run, window 2 (2,000 rows, 1,664 Users) was still waiting on its job when the platform's 15-minute execution limit ended it (E100), so its permission sets, results sheet and the next window never ran. Two changes:
+
+- Windows are now 500 rows.
+- An execution waits at most 10 minutes for its User job. If the job is still running, the flow re-invokes itself with `pendingJobId`, `pendingHasMore` and `byteOffset` set to the start of the next window. The next execution waits for the same job (the records are not uploaded again), then assigns permission sets, writes the results sheet from the job's result CSVs and moves on. After 6 hand-offs for one job the run stops with an error naming the job and the byte offset to restart from.
+
+**Prerequisites:** a Profile named `Student_Profile` must exist in the org (configurable via the "Account Login Profile Name" config var); a custom field `User.Federation_Identifier__c` must exist and be marked as an External ID in Salesforce Setup, so Bulk API 2.0 can upsert on it (same convention as `Student_ID_4D__c` / `Instructor_ID_4D__c` / `Associate_ID_4D__c` elsewhere in this project). Each permission set in "Account Login Permission Sets" must exist and be assignable to the Experience Cloud license on that Profile; otherwise the assignment fails with a license mismatch.
 
 ---
 
@@ -790,6 +812,23 @@ Upsert key: `External_ID_4D__c` = source row ID
 
 ---
 
+### 4.17 Commerce Flows
+
+**Files:** `src/purchaseInventoryFlow.ts`, `src/purchaseFlow.ts`, `src/purchaseItemFlow.ts`, `src/paymentsFlow.ts`, shared helpers in `src/commerceShared.ts`
+**Sources:** the Purchase Inventory, Purchase, Purchase Item and Payments tabs of the mapping workbook (Registration is documented in its own file header).
+**Status:** added 2026-10-14, `TEST_MODE = true` (one window, 50 records) — not yet run against an org. Open questions and unverified fields: `reports/registration-mapping-review-2026-10-14.md`.
+
+| Flow | Writes | External ID | Depends on |
+|---|---|---|---|
+| Purchase Inventory | Product2, PricebookEntry (Standard Price Book, insert-only) | `{id}` on Product2 | — |
+| Purchase | CardPaymentMethod, Order (Draft, Standard Price Book), PaymentGroup, Payment | `PUR-{id}` | Student |
+| Purchase Item | OrderItem | `PI-{id}` (Order via `Order.External_ID_4D__c = PUR-{Purchase_ID}`; product via `Product2.Name` → PricebookEntry) | Purchase Inventory, Purchase |
+| Payments | Payment, Refund (Referenced) | `PAY-{id}` (PaymentGroup via `External_ID_4D__c = Registration_ID`) | Student, Registration |
+
+External IDs are **prefixed** because Registration writes the raw `Registration.ID` into the same objects and the id ranges overlap. Purchase / Purchase Item / Payments reuse Registration's windowed-stream + 4-phase (CardPaymentMethod → Order → PaymentGroup → Payment) pattern.
+
+---
+
 ## 5. Cross-Cutting Patterns
 
 ### 5.1 Streaming (HTTP Range Windows)
@@ -841,6 +880,10 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | `ENR-{id}` | CourseOfferingParticipant (student enrollment) | `ENR-80001` |
 | `NOISBN_{slug}` | Textbook__c (no ISBN) | `NOISBN_intro-to-python_smith` |
 | (raw 4D `Student_ID`) | User (`Federation_Identifier__c` — not `External_ID_4D__c`) | Account Login |
+| `PUR-{id}` | Order, CardPaymentMethod, PaymentGroup, Payment (Purchase) | `PUR-2` |
+| `PI-{id}` | OrderItem (Purchase Item) | `PI-101` |
+| `PAY-{id}` | Payment, Refund (Payments) | `PAY-1` |
+| (raw Registration ID) | Order, CardPaymentMethod, PaymentGroup, Payment (Registration) | `560585` |
 | (raw 4D ID) | All other objects | `"6001"` |
 
 ---
@@ -868,3 +911,6 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | 17 | **Account Login — welcome/password-reset email on User insert** | **Resolved (2026-10-14):** architect confirmed suppression is required until go-live. Bulk API 2.0 has no job-level option for this — confirmed via Salesforce docs that `EmailHeader.triggerUserEmail` is a SOAP API header, not available on Bulk API 2.0's `jobs/ingest` endpoint. Resolution: set Setup → Email → Deliverability → Access Level = "System email only" for the duration of the migration load, then restore before go-live. This is an org-wide Setup toggle, not a code change — **must be flipped back before go-live** or all org email stays blocked |
 | 18 | **Account Login — `Federation_Identifier__c` not marked as External ID** | **Resolved (2026-10-14):** marked as External ID in Stanford_UAT |
 | 19 | **Account Login — Bulk API support for Community/portal Users** | **New risk (2026-10-13):** since `Student_Profile` is confirmed to be a portal/Experience Cloud license (#15), worth a small sandbox test before the full run — Salesforce has had org-specific restrictions around creating licensed Community/Partner users via Bulk API that don't show up with internal-profile Users. If it fails, the fallback is the standard REST/Composite API instead of Bulk API 2.0 for this one object |
+| 20 | **Account Login — permission sets for imported Users** | **Decision (2026-10-15):** every imported User also gets Buyer, CSP Stap API Access and CSP Student Education Cloud PS. Implemented in the flow (configurable via "Account Login Permission Sets"); re-running the flow back-fills Users already imported |
+| 21 | **Account Login — only enrolled students get a User** | **Decision (2026-10-21):** import an Account Login row only when its `Student_ID` has a `Status = "Enrolled"` row in the Enrollment source file. Implemented in the flow; reuses the "Enrollment File ID" config var |
+| 22 | **Account Login — User Bulk job can outlast one execution** | **Fixed (2026-10-22):** window 2 of the full run timed out (E100) waiting on a 1,664-User job. Windows cut to 500 rows; the flow hands a still-running job to the next execution instead of waiting past the limit |

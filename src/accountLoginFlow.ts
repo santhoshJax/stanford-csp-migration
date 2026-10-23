@@ -26,6 +26,13 @@
  *   —           → User.LanguageLocaleKey      (Direct Map — default "en_US")
  *   —           → User.TimeZoneSidKey         (Direct Map — default "America/Los_Angeles")
  *   —           → User.EmailEncodingKey       (Direct Map — default "UTF-8")
+ *   —           → PermissionSetAssignment     (decision 2026-10-15 — every
+ *                                               successfully upserted User gets
+ *                                               Buyer, CSP Stap API Access and
+ *                                               CSP Student Education Cloud PS;
+ *                                               configurable via "Account Login
+ *                                               Permission Sets". Existing
+ *                                               assignments are skipped.)
  *
  * Do Not Map (per mapping doc): Instructor_ID, Associate_ID, ID, Last_Login_Date,
  * Password_Hash_Char, Created_Date/Time/By, Last_Modified_Date/Time/By,
@@ -39,6 +46,12 @@
  *      but every other target field on this object depends on the match).
  *   3. Matched Contact has no email → skip (Username/Email are required,
  *      unique-format fields on User; can't create the record without one).
+ *   4. Student is not enrolled → skip (decision 2026-10-21). Only students
+ *      who have at least one row in the Enrollment source file (the
+ *      "Enrollment File ID" config var) with Status = "Enrolled" get a User.
+ *      The check reads the source file, not Salesforce, so it does not
+ *      depend on the Enrollment Import having run. Applied after the
+ *      Student_ID de-duplication and before the Contact lookup.
  *
  * NOTE — Active/Inactive (confirmed with architect): the source "Inactive"
  * flag IS the duplicate marker — 4D only ever sets it true when a row was
@@ -57,34 +70,76 @@
  *     (default "Student_Profile" — DEFAULT_PROFILE_NAME below) must exist
  *     in this org under that exact name. Confirmed failing in the "Student_Profile"
  *     org run on 2026-10-05 — set the config var to the real Profile Name before re-running.
+ *   - The "Enrollment File ID" config var (Enrollment Configuration page)
+ *     must point at the Enrollment TSV. The flow throws if it is empty,
+ *     because without it every row would be skipped as not enrolled.
+ *   - Every permission set in "Account Login Permission Sets" must exist (by
+ *     API Name, or by a Label that is unique) and be assignable to the
+ *     Experience Cloud license on that Profile. The flow throws before the
+ *     upsert if a name is missing or ambiguous.
  */
 
 import { flow } from "@prismatic-io/spectral";
 import axios from "axios";
 import { parse, type ParseResult, type Parser } from "papaparse";
-import { Transform } from "stream";
+import { Transform, type Readable } from "stream";
 import {
   str,
   toBool,
   cleanEmail,
   getAccessToken,
   getSfInstanceUrl,
-  runBulkJob,
+  submitBulkJob,
+  collectBulkJobResults,
   SF_API_VERSION,
+  type BulkJobResult,
 } from "./utils";
 import { createResultsSheetFromContacts } from "./reportResults";
+import {
+  sfQueryAll,
+  insertViaComposite,
+  parseSuccessfulSfIds,
+} from "./commerceShared";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const MAX_ROWS = 2000; // rows per execution window
+// Rows per execution window. Lowered from 2000 on 2026-10-22: window 2 of the
+// full run (2000 rows → 1664 Users) was still waiting on its User Bulk job when
+// the 15-minute execution limit ended it (E100). Creating Experience Cloud
+// Users is much slower per record than other objects, so a smaller window
+// keeps each job well inside one execution.
+const MAX_ROWS = 500;
+
+// How long one execution waits for the User Bulk job before handing off.
+// The platform ends an execution at 15 minutes; this leaves ~5 minutes for
+// the permission set assignments, the results sheet and the next invocation.
+// If the job is still running at this point, the flow re-invokes itself with
+// the job Id and the next execution carries on waiting for the same job — it
+// does not upload the records again.
+const POLL_BUDGET_MS = 10 * 60 * 1000;
+// Hand-offs allowed for one job (about 10 minutes each) before the run stops
+// with an error, so a job stuck in Salesforce cannot loop forever.
+const MAX_JOB_HANDOFFS = 6;
 
 // Sandbox testing only. When TEST_MODE is true, the flow processes at most
 // TEST_RECORD_LIMIT records total and stops — no recursion through the rest
-// of the file. Set TEST_MODE back to false before running the full file.
-const TEST_MODE = true;
+// of the file. Full run (2026-10-22): TEST_MODE off after the sandbox
+// 2-record validation passed.
+const TEST_MODE = false;
 const TEST_RECORD_LIMIT = 2;
 
 const DEFAULT_PROFILE_NAME = "Student_Profile";
+// Permission sets assigned to every imported User (decision 2026-10-15).
+// Each entry may be a Permission Set API Name or its Label. Overridable via
+// the "Account Login Permission Sets" config var (comma-separated).
+export const DEFAULT_PERMISSION_SETS = [
+  "Buyer",
+  "CSP Stap API Access",
+  "CSP Student Education Cloud PS",
+];
+// Enrollment Status value that qualifies a student for a User (decision
+// 2026-10-21). Compared case-insensitively after trimming.
+const ENROLLED_STATUS = "enrolled";
 const DEFAULT_LOCALE_SID_KEY = "en_US";
 const DEFAULT_LANGUAGE_LOCALE_KEY = "en_US";
 const DEFAULT_TIME_ZONE_SID_KEY = "America/Los_Angeles";
@@ -163,6 +218,173 @@ async function resolveProfileId(
   return records[0]?.Id ?? null;
 }
 
+/** Splits the comma-separated config var into trimmed, de-duplicated names. */
+export function parsePermissionSetNames(raw: string | undefined): string[] {
+  const source = raw?.trim() ? raw.split(",") : DEFAULT_PERMISSION_SETS;
+  return [...new Set(source.map((n) => n.trim()).filter((n) => n.length > 0))];
+}
+
+interface PermissionSetRow {
+  Id: string;
+  Name: string;
+  Label: string;
+}
+
+/**
+ * Picks one permission set per configured name. An exact API Name match wins;
+ * otherwise a single Label match is used. Returns the unmatched and ambiguous
+ * names so the caller can fail with a clear message.
+ */
+export function matchPermissionSets(
+  configuredNames: string[],
+  available: PermissionSetRow[],
+): {
+  matched: Map<string, PermissionSetRow>;
+  missing: string[];
+  ambiguous: string[];
+} {
+  const matched = new Map<string, PermissionSetRow>();
+  const missing: string[] = [];
+  const ambiguous: string[] = [];
+
+  for (const configuredName of configuredNames) {
+    const wanted = configuredName.toLowerCase();
+    const byName = available.filter((p) => p.Name.toLowerCase() === wanted);
+
+    if (byName.length === 1) {
+      matched.set(configuredName, byName[0]);
+      continue;
+    }
+
+    const byLabel = available.filter((p) => p.Label.toLowerCase() === wanted);
+
+    if (byLabel.length === 1) {
+      matched.set(configuredName, byLabel[0]);
+    } else if (byLabel.length > 1) {
+      ambiguous.push(
+        `"${configuredName}" (API Names: ${byLabel.map((p) => p.Name).join(", ")})`,
+      );
+    } else {
+      missing.push(`"${configuredName}"`);
+    }
+  }
+
+  return { matched, missing, ambiguous };
+}
+
+/**
+ * Resolves every configured permission set to its Id. Throws before any User
+ * is written if a name is missing or matches more than one permission set.
+ */
+async function resolvePermissionSets(
+  instanceUrl: string,
+  accessToken: string,
+  configuredNames: string[],
+): Promise<PermissionSetRow[]> {
+  if (configuredNames.length === 0) return [];
+
+  const inClause = configuredNames
+    .map((n) => `'${n.replace(/'/g, "\\'")}'`)
+    .join(",");
+  const soql =
+    `SELECT Id, Name, Label FROM PermissionSet ` +
+    `WHERE IsOwnedByProfile = false AND (Name IN (${inClause}) OR Label IN (${inClause}))`;
+  const available = await sfQueryAll<PermissionSetRow>(
+    instanceUrl,
+    accessToken,
+    soql,
+  );
+
+  const { matched, missing, ambiguous } = matchPermissionSets(
+    configuredNames,
+    available,
+  );
+
+  if (missing.length > 0 || ambiguous.length > 0) {
+    const problems: string[] = [];
+    if (missing.length > 0) {
+      problems.push(`not found: ${missing.join(", ")}`);
+    }
+    if (ambiguous.length > 0) {
+      problems.push(
+        `label matches more than one permission set (use the API Name instead): ${ambiguous.join("; ")}`,
+      );
+    }
+    throw new Error(
+      `[Account Login Import] Permission set lookup failed — ${problems.join(" | ")}. ` +
+        `Fix the "Account Login Permission Sets" config var.`,
+    );
+  }
+
+  // De-duplicate in case a Name and a Label pointed at the same permission set.
+  return [...new Map([...matched.values()].map((p) => [p.Id, p])).values()];
+}
+
+/**
+ * Assigns each permission set to each User, skipping assignments that already
+ * exist so a re-run (or re-upsert of an existing User) is safe.
+ */
+async function assignPermissionSets(
+  instanceUrl: string,
+  accessToken: string,
+  userIds: string[],
+  permissionSets: PermissionSetRow[],
+  logger: {
+    info: (m: string) => void;
+    warn: (m: string) => void;
+    error: (m: string) => void;
+  },
+): Promise<{ created: number; alreadyAssigned: number; failed: number }> {
+  if (userIds.length === 0 || permissionSets.length === 0) {
+    return { created: 0, alreadyAssigned: 0, failed: 0 };
+  }
+
+  const permissionSetIdList = permissionSets.map((p) => `'${p.Id}'`).join(",");
+  const existing = new Set<string>();
+  const CHUNK_SIZE = 200;
+
+  for (let i = 0; i < userIds.length; i += CHUNK_SIZE) {
+    const userIdList = userIds
+      .slice(i, i + CHUNK_SIZE)
+      .map((id) => `'${id}'`)
+      .join(",");
+    const rows = await sfQueryAll<{
+      AssigneeId: string;
+      PermissionSetId: string;
+    }>(
+      instanceUrl,
+      accessToken,
+      `SELECT AssigneeId, PermissionSetId FROM PermissionSetAssignment ` +
+        `WHERE AssigneeId IN (${userIdList}) AND PermissionSetId IN (${permissionSetIdList})`,
+    );
+    for (const row of rows) {
+      existing.add(`${row.AssigneeId}:${row.PermissionSetId}`);
+    }
+  }
+
+  const toInsert: Record<string, unknown>[] = [];
+  for (const userId of userIds) {
+    for (const permissionSet of permissionSets) {
+      if (existing.has(`${userId}:${permissionSet.Id}`)) continue;
+      toInsert.push({
+        attributes: { type: "PermissionSetAssignment" },
+        AssigneeId: userId,
+        PermissionSetId: permissionSet.Id,
+      });
+    }
+  }
+
+  const { created, failed } = await insertViaComposite(
+    toInsert,
+    instanceUrl,
+    accessToken,
+    logger,
+    "[Account Login Import] PermissionSetAssignment",
+  );
+
+  return { created, alreadyAssigned: existing.size, failed };
+}
+
 interface StudentContactInfo {
   contactId: string;
   firstName: string;
@@ -174,6 +396,38 @@ interface StudentContactInfo {
  * Given a list of Student_ID values, returns { studentId → matched Contact info }
  * resolved from the person Account created by Student Import.
  */
+/**
+ * Rebuilds the uploaded User rows from a finished Bulk job's result CSVs.
+ * Used when a job is resumed in a later execution, where the original
+ * records are no longer in memory. Both CSVs repeat every uploaded column;
+ * the sf__ columns Salesforce adds are dropped, and empty cells are omitted
+ * (the upload left unset fields out the same way).
+ */
+export function recordsFromResultCsvs(
+  successfulCsv: string,
+  failedCsv: string,
+): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
+  for (const csv of [successfulCsv, failedCsv]) {
+    if (!csv.trim()) continue;
+    const result: ParseResult<Record<string, string>> = parse(csv, {
+      header: true,
+      skipEmptyLines: true,
+    });
+    for (const row of result.data) {
+      const record: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(row)) {
+        if (key.startsWith("sf__") || value === "" || value === undefined) {
+          continue;
+        }
+        record[key] = value;
+      }
+      if (record.Federation_Identifier__c) records.push(record);
+    }
+  }
+  return records;
+}
+
 async function resolveContactsByStudentId(
   instanceUrl: string,
   accessToken: string,
@@ -216,6 +470,129 @@ async function resolveContactsByStudentId(
   }
 
   return map;
+}
+
+// ── Enrollment check (Enrollment source file) ──────────────────────────────────
+
+/** True when an Enrollment Status value counts as enrolled. */
+export function isEnrolledStatus(status: string | undefined): boolean {
+  return str(status).trim().toLowerCase() === ENROLLED_STATUS;
+}
+
+/** Enrollment TSV stores some IDs as "12345.0" — normalise to "12345". */
+function normaliseStudentId(value: string | undefined): string {
+  return str(value).trim().replace(/\.0$/, "");
+}
+
+/**
+ * Reads an Enrollment TSV stream and returns the subset of `wantedStudentIds`
+ * that have at least one row with Status = "Enrolled". Stops reading as soon
+ * as every wanted ID has been found, so a window whose students all enrolled
+ * early in the file does not read the whole file.
+ */
+export function collectEnrolledStudentIds(
+  stream: Readable | NodeJS.ReadableStream,
+  wantedStudentIds: Set<string>,
+): Promise<{ enrolled: Set<string>; rowsRead: number }> {
+  const enrolled = new Set<string>();
+  let rowsRead = 0;
+
+  return new Promise((resolve, reject) => {
+    if (wantedStudentIds.size === 0) {
+      (stream as Readable).destroy?.();
+      resolve({ enrolled, rowsRead });
+      return;
+    }
+
+    let studentIdIndex = -1;
+    let statusIndex = -1;
+    let headersSeen = false;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      (stream as Readable).destroy?.();
+      resolve({ enrolled, rowsRead });
+    };
+
+    parse(stream as unknown as NodeJS.ReadableStream, {
+      delimiter: "\t",
+      quoteChar: "\x00",
+      header: false,
+      skipEmptyLines: true,
+
+      step: (result: ParseResult<string[]>, parser: Parser) => {
+        if (settled) return;
+        const row = result.data as unknown as string[];
+
+        if (!headersSeen) {
+          headersSeen = true;
+          const headers = row.map((h) =>
+            (h.charCodeAt(0) === 0xfeff ? h.slice(1) : h)
+              .replace(/\r/g, "")
+              .trim(),
+          );
+          studentIdIndex = headers.indexOf("Student_ID");
+          statusIndex = headers.indexOf("Status");
+          if (studentIdIndex === -1 || statusIndex === -1) {
+            settled = true;
+            parser.abort();
+            (stream as Readable).destroy?.();
+            reject(
+              new Error(
+                `[Account Login Import] The Enrollment file has no ` +
+                  `${studentIdIndex === -1 ? '"Student_ID"' : '"Status"'} column. ` +
+                  `Check the "Enrollment File ID" config var points at the Enrollment TSV.`,
+              ),
+            );
+          }
+          return;
+        }
+
+        rowsRead++;
+        if (!isEnrolledStatus(row[statusIndex]?.replace(/\r/g, ""))) return;
+
+        const studentId = normaliseStudentId(
+          row[studentIdIndex]?.replace(/\r/g, ""),
+        );
+        if (!wantedStudentIds.has(studentId)) return;
+
+        enrolled.add(studentId);
+        if (enrolled.size === wantedStudentIds.size) {
+          parser.abort();
+          finish();
+        }
+      },
+
+      complete: () => finish(),
+      error: (err: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      },
+    });
+  });
+}
+
+/** Streams the Enrollment TSV from Google Drive and runs the check above. */
+async function resolveEnrolledStudentIds(
+  enrollmentFileId: string,
+  accessToken: string,
+  wantedStudentIds: Set<string>,
+): Promise<{ enrolled: Set<string>; rowsRead: number }> {
+  if (wantedStudentIds.size === 0) return { enrolled: new Set(), rowsRead: 0 };
+  const response = await axios.get(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(enrollmentFileId)}`,
+    {
+      params: { alt: "media", supportsAllDrives: "true" },
+      headers: { Authorization: `Bearer ${accessToken}` },
+      responseType: "stream",
+    },
+  );
+  return collectEnrolledStudentIds(
+    response.data as NodeJS.ReadableStream,
+    wantedStudentIds,
+  );
 }
 
 // ── Google Drive streaming + TSV parsing ───────────────────────────────────────
@@ -354,7 +731,8 @@ export const accountLoginImport = flow({
   name: "Account Login Import",
   stableKey: "7c1d9e2a-4b3f-4a6c-9d1e-2f3a4b5c6d7e",
   description:
-    "Streams the Account Login TSV from Google Drive, resolves each Student_ID " +
+    "Streams the Account Login TSV from Google Drive, keeps only students with an " +
+    "Enrolled row in the Enrollment TSV, resolves each Student_ID " +
     "against the Account created by Student Import, and upserts Salesforce User " +
     "records (Federation_Identifier__c as the upsert key) via Bulk API 2.0. Must run " +
     "after Student Import. Recurses until the full file is processed.",
@@ -366,6 +744,9 @@ export const accountLoginImport = flow({
 
   onExecution: async (context, params) => {
     const { logger, configVars } = context;
+    // Measured from the start of this execution so the Bulk job wait can stop
+    // before the platform's 15-minute limit.
+    const pollDeadlineMs = Date.now() + POLL_BUDGET_MS;
 
     // ── 1. Read cursor (byteOffset) from trigger payload ──────────────────────
     const triggerBody = (
@@ -385,6 +766,18 @@ export const accountLoginImport = flow({
       typeof triggerBody?.sheetId === "string"
         ? triggerBody.sheetId
         : undefined;
+    // Set when the previous execution handed off a User Bulk job that was
+    // still running. byteOffset is then the start of the NEXT window, and
+    // pendingHasMore says whether that next window exists.
+    const pendingJobId =
+      typeof triggerBody?.pendingJobId === "string"
+        ? triggerBody.pendingJobId
+        : undefined;
+    const pendingHasMore = triggerBody?.pendingHasMore === true;
+    const handoffCount =
+      typeof triggerBody?.handoffCount === "number"
+        ? triggerBody.handoffCount
+        : 0;
 
     logger.info(`[Account Login Import] Starting at byte offset ${byteOffset}`);
 
@@ -394,15 +787,182 @@ export const accountLoginImport = flow({
     const fileId = configVars["Account Login File ID"] as string | undefined;
     const failedFolderId = configVars["Failed Records Folder ID"] as
       string | undefined;
+    const enrollmentFileId = configVars["Enrollment File ID"] as
+      string | undefined;
     const profileName =
       (configVars["Account Login Profile Name"] as string | undefined) ||
       DEFAULT_PROFILE_NAME;
+    const permissionSetNames = parsePermissionSetNames(
+      configVars["Account Login Permission Sets"] as string | undefined,
+    );
 
     if (!fileId) throw new Error("Account Login File ID config var is empty.");
+    if (!enrollmentFileId) {
+      throw new Error(
+        "[Account Login Import] Enrollment File ID config var is empty. It is needed to " +
+          "check which students are enrolled (only enrolled students get a User).",
+      );
+    }
 
     const gdToken = getAccessToken(gdConn);
     const sfToken = getAccessToken(sfConn);
     const sfInstanceUrl = getSfInstanceUrl(sfConn);
+
+    // Re-invokes this flow. Used both to move to the next window and to hand
+    // off a Bulk job that is still running.
+    const invokeSelf = async (payload: Record<string, unknown>) => {
+      await (
+        context as unknown as {
+          invokeFlow(name: string, payload: unknown): Promise<void>;
+        }
+      ).invokeFlow("Account Login Import", payload);
+    };
+
+    // After the User upsert: assign permission sets, write the results
+    // sheet, and return the results sheet Id for the next window.
+    const finishWindow = async (
+      jobResult: BulkJobResult,
+      records: Record<string, unknown>[],
+      permissionSets: PermissionSetRow[],
+    ): Promise<string | undefined> => {
+      // ── 7. Assign permission sets to every User the upsert accepted ────────
+      // successfulResults covers both newly created and updated Users, so a
+      // re-run also back-fills Users imported before this step existed.
+      const userIds = [
+        ...parseSuccessfulSfIds(
+          jobResult.successfulCsv,
+          "Federation_Identifier__c",
+        ).values(),
+      ];
+      try {
+        const assignment = await assignPermissionSets(
+          sfInstanceUrl,
+          sfToken,
+          userIds,
+          permissionSets,
+          logger,
+        );
+        logger.info(
+          `[Account Login Import] Permission sets — ${userIds.length} User(s): ` +
+            `${assignment.created} assignment(s) created, ` +
+            `${assignment.alreadyAssigned} already in place, ${assignment.failed} failed.`,
+        );
+        if (assignment.failed > 0) {
+          logger.warn(
+            `[Account Login Import] Some permission set assignments failed (see errors above). ` +
+              `A common cause is a permission set whose license does not match the Users' ` +
+              `Experience Cloud license. Re-running the flow retries only the missing ones.`,
+          );
+        }
+      } catch (err: unknown) {
+        const e = err as { response?: { status?: number; data?: unknown } };
+        logger.error(
+          `[Account Login Import] Permission set assignment failed.\n` +
+            `  Status : ${e.response?.status ?? "unknown"}\n` +
+            `  Details: ${JSON.stringify(e.response?.data ?? String(err), null, 2)}`,
+        );
+      }
+
+      try {
+        const sheet = await createResultsSheetFromContacts({
+          flowName: "Account Login Import",
+          objectName: "User",
+          contacts: records,
+          externalIdField: "Federation_Identifier__c",
+          failedExternalIds: jobResult.failedExternalIds,
+          successfulCsv: jobResult.successfulCsv,
+          failedCsv: jobResult.failedCsv,
+          accessToken: gdToken,
+          folderId: failedFolderId,
+          spreadsheetId: sheetId,
+        });
+        logger.info(`[Account Login Import] Results sheet: ${sheet.url}`);
+        return sheet.spreadsheetId;
+      } catch (err: unknown) {
+        logger.warn(
+          `[Account Login Import] Could not update results sheet: ${String(err)}`,
+        );
+        return sheetId;
+      }
+    };
+
+    // ── 2b. Resume a User Bulk job handed off by the previous execution ───────
+    // The records were already uploaded; Salesforce kept processing the job
+    // while the flow handed off. This execution only waits for it, finishes
+    // the window, and then moves on to the next window.
+    if (pendingJobId) {
+      logger.info(
+        `[Account Login Import] Resuming window ${windowNumber}: waiting for User Bulk job ` +
+          `${pendingJobId} (hand-off ${handoffCount} of ${MAX_JOB_HANDOFFS}).`,
+      );
+      const permissionSets = await resolvePermissionSets(
+        sfInstanceUrl,
+        sfToken,
+        permissionSetNames,
+      );
+      const jobResult = await collectBulkJobResults(
+        sfInstanceUrl,
+        sfToken,
+        pendingJobId,
+        "Federation_Identifier__c",
+        logger,
+        "[Account Login Import]",
+        pollDeadlineMs,
+      );
+      if (!jobResult) {
+        if (handoffCount >= MAX_JOB_HANDOFFS) {
+          throw new Error(
+            `[Account Login Import] User Bulk job ${pendingJobId} has not finished after ` +
+              `${MAX_JOB_HANDOFFS} hand-offs. Check it in Salesforce Setup → Bulk Data Load Jobs. ` +
+              `To continue once it has finished, start the flow with byteOffset ${byteOffset}.`,
+          );
+        }
+        logger.info(
+          `[Account Login Import] Handing off job ${pendingJobId} to the next execution.`,
+        );
+        await invokeSelf({
+          byteOffset,
+          headers: knownHeaders,
+          windowNumber,
+          sheetId,
+          pendingJobId,
+          pendingHasMore,
+          handoffCount: handoffCount + 1,
+        });
+        return { data: { byteOffset, rowsProcessed: 0, hasMore: true } };
+      }
+
+      // The result CSVs carry every column that was uploaded, so the rows
+      // for the results sheet can be rebuilt from them.
+      const records = recordsFromResultCsvs(
+        jobResult.successfulCsv,
+        jobResult.failedCsv,
+      );
+      const resumedSheetId = await finishWindow(
+        jobResult,
+        records,
+        permissionSets,
+      );
+
+      if (pendingHasMore) {
+        logger.info(
+          `[Account Login Import] More rows remain — invoking next iteration at byte ${byteOffset}`,
+        );
+        await invokeSelf({
+          byteOffset,
+          headers: knownHeaders,
+          windowNumber: windowNumber + 1,
+          sheetId: resumedSheetId,
+        });
+      } else {
+        logger.info(
+          "[Account Login Import] All rows processed — import complete.",
+        );
+      }
+      return {
+        data: { byteOffset, rowsProcessed: 0, hasMore: pendingHasMore },
+      };
+    }
 
     // ── 3. Stream & parse the TSV window from Google Drive ─────────────────────
     logger.info(
@@ -457,6 +1017,20 @@ export const accountLoginImport = flow({
         );
       }
 
+      // ── 4b. Resolve the permission sets once per window ───────────────────
+      // Done before the upsert so a wrong name stops the run before any User
+      // is created without its permission sets.
+      const permissionSets = await resolvePermissionSets(
+        sfInstanceUrl,
+        sfToken,
+        permissionSetNames,
+      );
+      logger.info(
+        `[Account Login Import] Permission sets to assign: ` +
+          (permissionSets.map((p) => `${p.Label} (${p.Name})`).join(", ") ||
+            "(none)"),
+      );
+
       // ── 5. Collapse duplicate Student_ID rows within this window ───────────
       // The source table can carry more than one Account Login row per
       // Student_ID (e.g. a stale row plus the live one). Username/Email/
@@ -475,11 +1049,34 @@ export const accountLoginImport = flow({
           (isActiveByStudentId.get(row.studentId) ?? false) || row.isActive,
         );
       }
-      const dedupedStudentIds = [...isActiveByStudentId.keys()];
-      const duplicateRowCount = rows.length - dedupedStudentIds.length;
+      const uniqueStudentIds = [...isActiveByStudentId.keys()];
+      const duplicateRowCount = rows.length - uniqueStudentIds.length;
       if (duplicateRowCount > 0) {
         logger.info(
           `[Account Login Import] ${duplicateRowCount} duplicate Student_ID row(s) collapsed in this window.`,
+        );
+      }
+
+      // ── 5b. Keep only students enrolled in at least one course ─────────────
+      // Decision 2026-10-21: a User is created only when the Enrollment
+      // source file has a row for this Student_ID with Status = "Enrolled".
+      const { enrolled, rowsRead } = await resolveEnrolledStudentIds(
+        enrollmentFileId,
+        gdToken,
+        new Set(uniqueStudentIds),
+      );
+      const dedupedStudentIds = uniqueStudentIds.filter((id) =>
+        enrolled.has(id),
+      );
+      const droppedNotEnrolled =
+        uniqueStudentIds.length - dedupedStudentIds.length;
+      logger.info(
+        `[Account Login Import] Enrollment check — read ${rowsRead} Enrollment row(s); ` +
+          `${dedupedStudentIds.length} of ${uniqueStudentIds.length} student(s) in this window are Enrolled.`,
+      );
+      if (droppedNotEnrolled > 0) {
+        logger.info(
+          `[Account Login Import] ${droppedNotEnrolled} student(s) have no Enrollment row with Status = "Enrolled" — skipped.`,
         );
       }
 
@@ -537,7 +1134,7 @@ export const accountLoginImport = flow({
 
       // ── 6. Upsert to Salesforce Bulk API 2.0 ──────────────────────────────
       if (records.length > 0) {
-        const jobResult = await runBulkJob(
+        const jobId = await submitBulkJob(
           sfInstanceUrl,
           sfToken,
           "User",
@@ -546,30 +1143,44 @@ export const accountLoginImport = flow({
           logger,
           "[Account Login Import]",
         );
+        const jobResult = await collectBulkJobResults(
+          sfInstanceUrl,
+          sfToken,
+          jobId,
+          "Federation_Identifier__c",
+          logger,
+          "[Account Login Import]",
+          pollDeadlineMs,
+        );
 
-        try {
-          const sheet = await createResultsSheetFromContacts({
-            flowName: "Account Login Import",
-            objectName: "User",
-            contacts: records as unknown as Record<string, unknown>[],
-            externalIdField: "Federation_Identifier__c",
-            failedExternalIds: jobResult.failedExternalIds,
-            successfulCsv: jobResult.successfulCsv,
-            failedCsv: jobResult.failedCsv,
-            accessToken: gdToken,
-            folderId: failedFolderId,
-            spreadsheetId: sheetId,
-          });
-          nextSheetId = sheet.spreadsheetId;
-          logger.info(`[Account Login Import] Results sheet: ${sheet.url}`);
-        } catch (err: unknown) {
-          logger.warn(
-            `[Account Login Import] Could not update results sheet: ${String(err)}`,
+        if (!jobResult) {
+          // The job is still running in Salesforce. Hand it to a new
+          // execution rather than letting this one hit the time limit; the
+          // records are NOT uploaded again.
+          logger.info(
+            `[Account Login Import] Handing off job ${jobId} to the next execution ` +
+              `(it will wait for the job, assign permission sets, then continue at byte ${nextByteOffset}).`,
           );
+          await invokeSelf({
+            byteOffset: nextByteOffset,
+            headers: parsedHeaders,
+            windowNumber,
+            sheetId,
+            pendingJobId: jobId,
+            pendingHasMore: hasMore,
+            handoffCount: 1,
+          });
+          return { data: { byteOffset, rowsProcessed: rows.length, hasMore } };
         }
+
+        nextSheetId = await finishWindow(
+          jobResult,
+          records as unknown as Record<string, unknown>[],
+          permissionSets,
+        );
       } else {
         logger.info(
-          "[Account Login Import] Window contained no upsertable records after Contact resolution.",
+          "[Account Login Import] Window contained no upsertable records after the enrollment check and Contact resolution.",
         );
       }
     } else {
@@ -578,16 +1189,12 @@ export const accountLoginImport = flow({
       );
     }
 
-    // ── 7. Recurse if more rows remain ─────────────────────────────────────────
+    // ── 8. Recurse if more rows remain ─────────────────────────────────────────
     if (hasMore) {
       logger.info(
         `[Account Login Import] More rows remain — invoking next iteration at byte ${nextByteOffset}`,
       );
-      await (
-        context as unknown as {
-          invokeFlow(name: string, payload: unknown): Promise<void>;
-        }
-      ).invokeFlow("Account Login Import", {
+      await invokeSelf({
         byteOffset: nextByteOffset,
         headers: parsedHeaders,
         windowNumber: windowNumber + 1,

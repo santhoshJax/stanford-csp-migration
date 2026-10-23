@@ -73,6 +73,23 @@ export function normaliseCatalogNotes(v: string | undefined | null): string | nu
   return v.replace(/_4DNL_/g, "\n").trim();
 }
 
+/**
+ * Strip HTML tags and cap the result to a max length, for plain Text fields
+ * (unlike normaliseCatalogNotes above, which deliberately keeps HTML since
+ * its targets are Rich Text Area fields). Some source titles contain inline
+ * formatting tags (e.g. <span style="font-style:italic">) that push an
+ * otherwise-short title past a 255-char Text field limit — stripping the
+ * tags removes that bloat; the length cap is a safety net for any title
+ * still too long after stripping.
+ */
+export function stripHtmlForTextField(
+  v: string | undefined | null,
+  maxLength = 255,
+): string {
+  const s = (v ?? "").replace(/<[^>]*>/g, "").trim();
+  return s.slice(0, maxLength);
+}
+
 // ── Notes merge ───────────────────────────────────────────────────────────────
 
 export function mergeNotes(
@@ -255,9 +272,16 @@ export function parseCourseTime(s: string | undefined | null): {
     }
   }
 
+  // Salesforce Time fields require the full ISO form "HH:mm:ss.SSSZ" — a bare
+  // "HH:mm:ss" is accepted by the API but is mishandled by the platform's own
+  // end-after-start check, rejecting valid ranges (confirmed directly against
+  // Stanford_UAT: the exact same literal value succeeds with ".000Z" appended
+  // and fails without it).
+  const start = startRaw ? parseTime12h(startRaw) : null;
+  const end = endRaw ? parseTime12h(endRaw) : null;
   return {
-    startTime: startRaw ? parseTime12h(startRaw) : null,
-    endTime: endRaw ? parseTime12h(endRaw) : null,
+    startTime: start ? `${start}.000Z` : null,
+    endTime: end ? `${end}.000Z` : null,
   };
 }
 

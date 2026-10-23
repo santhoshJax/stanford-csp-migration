@@ -46,6 +46,7 @@ import {
   stripSectionSuffix,
   extractSectionSuffix,
   formatFromSuffix,
+  stripHtmlForTextField,
 } from "./courseUtils";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -228,6 +229,17 @@ async function resolvePersonByName(
         ? ` AND Associate_ID_4D__c != null`
         : "";
 
+  // Also tries MiddleName+LastName (forward OR swapped) as a fallback within
+  // the same query — covers people credited by their middle name instead of
+  // their legal first name (e.g. source "Rufi Thorpe" for an Account stored
+  // as FirstName="Amanda", MiddleName="Rufi", LastName="Thorpe"). Purely
+  // additive: every match that already succeeds continues to match exactly
+  // the same way; this only rescues cases that previously failed.
+  //
+  // Deliberately NOT also trying FirstName+MiddleName with LastName
+  // unconstrained — both FirstName and MiddleName are optional fields in
+  // Salesforce, so matching on that pair alone (no LastName anchor) would be
+  // too loose a match to trust.
   const parsed = splitName(n);
   let id: string | null = null;
   if (parsed) {
@@ -237,7 +249,8 @@ async function resolvePersonByName(
       base,
       token,
       `SELECT PersonContactId FROM Account WHERE IsPersonAccount = true AND ` +
-        `((FirstName = '${f}' AND LastName = '${l}') OR (FirstName = '${l}' AND LastName = '${f}'))` +
+        `((FirstName = '${f}' AND LastName = '${l}') OR (FirstName = '${l}' AND LastName = '${f}') ` +
+        `OR (MiddleName = '${f}' AND LastName = '${l}') OR (MiddleName = '${l}' AND LastName = '${f}'))` +
         `${roleClause} LIMIT 1`,
     );
     id = rows[0]?.PersonContactId ?? null;
@@ -1086,7 +1099,13 @@ export const coursesImport5Year = flow({
                   );
                   const sched: Record<string, unknown> = {
                     CourseOfferingId: courseOfferingId,
-                    Description: title || code || sourceId,
+                    // Strip HTML (some titles contain inline formatting tags,
+                    // e.g. <span style="font-style:italic">) and cap at 255
+                    // chars — this is a plain Text field, not Rich Text, and
+                    // tag-bloated titles were exceeding the length limit.
+                    Description: stripHtmlForTextField(
+                      title || code || sourceId,
+                    ),
                     ...dayFlags,
                   };
                   if (startTime) sched.StartTime = startTime;

@@ -58,6 +58,14 @@ export const configPages = {
         description:
           "Google Drive file ID of the Google Sheet that contains quarter/academic term records.",
       }),
+      "Quarter Before 2013 File ID": configVar({
+        stableKey: "ffa273e0-57a3-4b2b-951e-7c9a9ecbbe7c",
+        dataType: "string",
+        description:
+          "Google Drive file ID of the Excel workbook (or Google Sheet) with the " +
+          "pre-2013 quarter abbreviations and class start and end dates. Used by " +
+          "the Quarter Import Before 2013 flow.",
+      }),
       "Department File ID": configVar({
         stableKey: "a1b2c3d4-1111-4a1b-8c2d-aabbcc001111",
         dataType: "string",
@@ -110,12 +118,12 @@ export const configPages = {
         description:
           "When true, Associate Import only processes records found in the Correction Sheet and applies address overrides. Set to false to process all associate records normally.",
       }),
-      "Correction Sheet ID": configVar({
+      "Student/Instructor/Associate Correction Sheet ID": configVar({
         stableKey: "b6c7d8e9-f0a1-4b2c-9d3e-f4a5b6c7d8e9",
         dataType: "string",
         default: "",
         description:
-          "Google Sheets spreadsheet ID of the shared correction sheet. Used when Student, Instructor, or Associate correction is enabled. Leave blank when no correction is running. Must contain a 'Student', 'Instructor', and/or 'Associate' tab with an 'ID' column plus columns for each corrected field.",
+          "Google Sheets spreadsheet ID of the correction sheet used by Student, Instructor, and Associate Import when their correction mode is enabled. Leave blank when no correction is running. Must contain a 'Student', 'Instructor', and/or 'Associate' tab with an 'ID' column plus columns for each corrected field. Course corrections use the separate Course Correction Sheet ID on the Course Configuration page.",
       }),
     },
   }),
@@ -148,6 +156,20 @@ export const configPages = {
         dataType: "string",
         description:
           "Google Drive file ID of the TSV that contains course records.",
+      }),
+      "Course Correction Enabled": configVar({
+        stableKey: "7d2c4e1a-5b6f-4a8e-9c3d-2e1f0a9b8c7d",
+        dataType: "boolean",
+        default: "false",
+        description:
+          "When true, Course Import - All only processes course IDs found in the Course Correction Sheet and uses that sheet's start and end dates for the CourseOffering. Every other field still comes from the course TSV. Set to false to process all course records normally.",
+      }),
+      "Course Correction Sheet ID": configVar({
+        stableKey: "df025f96-aeb7-4540-94f3-0606654a0833",
+        dataType: "string",
+        default: "",
+        description:
+          "Google Sheets spreadsheet ID of the course correction sheet. Used only when Course Correction Enabled is true; leave blank otherwise. The first tab is read. It needs an 'ID' column matching the course TSV ID, plus 'Start_Date'/'End_Date' (or 'StartDate'/'EndDate') columns in M/D/YYYY or YYYY-MM-DD format. Other columns are ignored.",
       }),
       "Course Instructor File ID": configVar({
         stableKey: "c8d9e0f1-8888-4c1d-5e6f-11223344ccdd",
@@ -281,6 +303,37 @@ export const configPages = {
           "Google Drive file ID of the TSV that contains Registration records. " +
           "Migrates CardPaymentMethod, Order, and Payment records. Must run after Student flow.",
       }),
+      "Purchase Inventory File ID": configVar({
+        stableKey: "pinv2026-1014-4b01-8c20-1b2c3d4e5f01",
+        dataType: "string",
+        description:
+          "Google Drive file ID of the TSV that contains Purchase Inventory records. " +
+          "Migrates Product2 and Standard Price Book PricebookEntry records. " +
+          "Must run before Purchase Item Import.",
+      }),
+      "Purchase File ID": configVar({
+        stableKey: "purc2026-1014-4b02-8c20-1b2c3d4e5f02",
+        dataType: "string",
+        description:
+          "Google Drive file ID of the TSV that contains Purchase records. " +
+          "Migrates CardPaymentMethod, Order, PaymentGroup, and Payment records " +
+          "(External IDs prefixed PUR-). Must run after Student flow.",
+      }),
+      "Purchase Item File ID": configVar({
+        stableKey: "pitm2026-1014-4b03-8c20-1b2c3d4e5f03",
+        dataType: "string",
+        description:
+          "Google Drive file ID of the TSV that contains Purchase Item records. " +
+          "Migrates OrderItem records. Must run after Purchase Inventory Import and Purchase Import.",
+      }),
+      "Payments File ID": configVar({
+        stableKey: "pays2026-1014-4b04-8c20-1b2c3d4e5f04",
+        dataType: "string",
+        description:
+          "Google Drive file ID of the TSV that contains Payments records. " +
+          "Migrates Payment and Refund records (External IDs prefixed PAY-). " +
+          "Must run after Student and Registration Import.",
+      }),
       "Alert File ID": configVar({
         stableKey: "al001122-3344-4556-7788-aabbccddeeff",
         dataType: "string",
@@ -302,7 +355,9 @@ export const configPages = {
         dataType: "string",
         description:
           "Google Drive file ID of the TSV that contains Account Login records. " +
-          "Must run after Student Import — each row is matched to its Account via Student_ID.",
+          "Must run after Student Import — each row is matched to its Account via Student_ID. " +
+          "Only students with a Status = Enrolled row in the Enrollment file " +
+          "(Enrollment File ID, Enrollment Configuration page) get a User.",
       }),
       "Account Login Profile Name": configVar({
         stableKey: "2b4c6d8e-0a1f-4c3e-9b5d-7e8f0a1b2c3d",
@@ -312,6 +367,16 @@ export const configPages = {
           "Exact Name of the Salesforce Profile assigned to every new Account Login " +
           "User. Must match an existing Profile in this org exactly (case-sensitive) — " +
           "the flow throws if no Profile with this Name is found.",
+      }),
+      "Account Login Permission Sets": configVar({
+        stableKey: "6f1a3c5e-7b9d-4e2f-8a0c-1d3e5f7a9b0c",
+        dataType: "string",
+        default: "Buyer, CSP Stap API Access, CSP Student Education Cloud PS",
+        description:
+          "Comma-separated permission sets assigned to every User the Account Login " +
+          "import creates or updates. Each entry can be the API Name or the Label " +
+          "(Label must be unique). Existing assignments are skipped. The flow throws " +
+          "before creating Users if any entry is not found.",
       }),
       "Failed Records Folder ID": configVar({
         stableKey: "e5f6a7b8-5555-4e8f-3b4c-eeff00223344",
