@@ -53,6 +53,14 @@
  *      depend on the Enrollment Import having run. Applied after the
  *      Student_ID de-duplication and before the Contact lookup.
  *
+ * Skipped tab (added 2026-10-26): every row dropped by a rule above — and
+ * every row whose column count does not match the header, and every extra
+ * row merged by the Student_ID de-duplication — is written to a "Skipped" tab
+ * in the results spreadsheet with its Student_ID and reason. The tab is
+ * written BEFORE the User upload, so the rows are recorded even if the
+ * execution later hands off or ends early. Every source row therefore appears
+ * in exactly one of Success, Errors, Not Processed or Skipped.
+ *
  * NOTE — Active/Inactive (confirmed with architect): the source "Inactive"
  * flag IS the duplicate marker — 4D only ever sets it true when a row was
  * identified as a duplicate. So the field names being opposites is expected:
@@ -94,7 +102,11 @@ import {
   SF_API_VERSION,
   type BulkJobResult,
 } from "./utils";
-import { createResultsSheetFromContacts } from "./reportResults";
+import {
+  appendSkippedRecords,
+  createResultsSheetFromContacts,
+  createResultsSpreadsheetWithTab,
+} from "./reportResults";
 import {
   sfQueryAll,
   insertViaComposite,
@@ -145,6 +157,26 @@ const DEFAULT_LANGUAGE_LOCALE_KEY = "en_US";
 const DEFAULT_TIME_ZONE_SID_KEY = "America/Los_Angeles";
 const DEFAULT_EMAIL_ENCODING_KEY = "UTF-8";
 
+// Reasons written to the "Skipped" tab — one per row-skip rule.
+export const SKIP_REASON = {
+  COLUMN_MISMATCH: "Column count does not match header",
+  INVALID_STUDENT_ID: "Invalid Student_ID",
+  DUPLICATE_STUDENT_ID: "Duplicate Student_ID (merged)",
+  NOT_ENROLLED: "Not enrolled",
+  NO_MATCHING_ACCOUNT: "No matching Account",
+  NO_USABLE_EMAIL: "No usable email",
+} as const;
+export const SKIPPED_TAB_HEADERS = [
+  "Student_ID",
+  "Reason",
+  "Detail",
+  "Window #",
+  "Window Start Byte",
+];
+// Raw source text copied into "Detail" is cut to this length so one bad row
+// (e.g. a line with an embedded break) cannot blow past the Sheets cell limit.
+const MAX_DETAIL_CHARS = 500;
+
 // ── Raw TSV shape ──────────────────────────────────────────────────────────────
 
 interface RawAccountLoginRecord {
@@ -158,9 +190,16 @@ interface RawAccountLoginRecord {
 
 // ── Intermediate row shape (pre Contact-lookup enrichment) ───────────────────
 
-interface PendingLoginRow {
+export interface PendingLoginRow {
   studentId: string;
   isActive: boolean;
+}
+
+/** A source row that never became a User. Written to the "Skipped" tab. */
+export interface SkippedLoginRow {
+  studentId: string;
+  reason: string;
+  detail: string;
 }
 
 // ── Salesforce User shape ─────────────────────────────────────────────────────
@@ -189,9 +228,97 @@ interface StreamResult {
   firstId: string;
   lastId: string;
   skippedCount: number;
+  skippedRows: SkippedLoginRow[];
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+/** Cut source text copied into the Skipped tab to MAX_DETAIL_CHARS. */
+function truncateDetail(text: string): string {
+  return text.length > MAX_DETAIL_CHARS
+    ? `${text.slice(0, MAX_DETAIL_CHARS)}…`
+    : text;
+}
+
+/**
+ * Builds the Skipped entry for a source line whose column count does not match
+ * the header. The Student_ID is taken from its column when the line is long
+ * enough to have one, so the row can still be traced.
+ */
+export function describeColumnMismatch(
+  row: string[],
+  headers: string[],
+): SkippedLoginRow {
+  const idIndex = headers.indexOf("Student_ID");
+  const studentId =
+    idIndex >= 0 && idIndex < row.length ? str(row[idIndex]) : "";
+  const rawLine = row.join("\t").replace(/\r/g, "");
+  return {
+    studentId,
+    reason: SKIP_REASON.COLUMN_MISMATCH,
+    detail: truncateDetail(
+      `Expected ${headers.length} columns, found ${row.length}. Line: ${rawLine}`,
+    ),
+  };
+}
+
+/**
+ * Collapses rows that share a Student_ID into one entry per student. A student
+ * is active if ANY of their rows is active (rule confirmed 2026-10-13). Every
+ * row beyond the first for a Student_ID is returned in `duplicates` so it can
+ * be listed on the Skipped tab.
+ */
+export function collapseDuplicateStudentIds(rows: PendingLoginRow[]): {
+  isActiveByStudentId: Map<string, boolean>;
+  uniqueStudentIds: string[];
+  duplicates: SkippedLoginRow[];
+} {
+  const isActiveByStudentId = new Map<string, boolean>();
+  const duplicates: SkippedLoginRow[] = [];
+  for (const row of rows) {
+    const seen = isActiveByStudentId.has(row.studentId);
+    if (seen) {
+      duplicates.push({
+        studentId: row.studentId,
+        reason: SKIP_REASON.DUPLICATE_STUDENT_ID,
+        detail:
+          `Another row in this window has the same Student_ID; merged into one ` +
+          `User (this row: Inactive=${String(!row.isActive).toUpperCase()}).`,
+      });
+    }
+    isActiveByStudentId.set(
+      row.studentId,
+      (isActiveByStudentId.get(row.studentId) ?? false) || row.isActive,
+    );
+  }
+  return {
+    isActiveByStudentId,
+    uniqueStudentIds: [...isActiveByStudentId.keys()],
+    duplicates,
+  };
+}
+
+/** Converts Skipped entries to sheet rows matching SKIPPED_TAB_HEADERS. */
+export function toSkippedSheetRows(
+  rows: SkippedLoginRow[],
+  windowNumber: number,
+  windowStartByte: number,
+): string[][] {
+  return rows.map((r) => [
+    r.studentId,
+    r.reason,
+    r.detail,
+    String(windowNumber),
+    String(windowStartByte),
+  ]);
+}
+
+/** "Not enrolled: 74, No usable email: 2" — for the log line. */
+export function summariseSkipReasons(rows: SkippedLoginRow[]): string {
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(r.reason, (counts.get(r.reason) ?? 0) + 1);
+  return [...counts.entries()].map(([k, v]) => `${k}: ${v}`).join(", ");
+}
 
 /** Alias formula from the mapping doc: LOWER(LEFT(FirstName,1) & LEFT(LastName,7)) */
 function buildAlias(firstName: string, lastName: string): string {
@@ -647,6 +774,7 @@ async function streamAndParseTsv(
     let firstId = "";
     let lastId = "";
     let skippedCount = 0;
+    const skippedRows: SkippedLoginRow[] = [];
     let lastCompletedCursor = byteOffset;
     let stepCount = 0;
 
@@ -683,6 +811,7 @@ async function streamAndParseTsv(
 
         if (row.length !== parsedHeaders.length) {
           skippedCount++;
+          skippedRows.push(describeColumnMismatch(row, parsedHeaders));
           lastCompletedCursor = rowEndByte;
           return;
         }
@@ -697,6 +826,13 @@ async function streamAndParseTsv(
         const studentId = str(record.Student_ID);
         if (!/^[1-9]\d*$/.test(studentId)) {
           skippedCount++;
+          skippedRows.push({
+            studentId,
+            reason: SKIP_REASON.INVALID_STUDENT_ID,
+            detail: truncateDetail(
+              `Student_ID "${studentId}" is blank, 0 or not a whole number.`,
+            ),
+          });
           lastCompletedCursor = rowEndByte;
           return;
         }
@@ -719,6 +855,7 @@ async function streamAndParseTsv(
           firstId,
           lastId,
           skippedCount,
+          skippedRows,
         }),
       error: (err: Error) => reject(err),
     });
@@ -766,6 +903,10 @@ export const accountLoginImport = flow({
       typeof triggerBody?.sheetId === "string"
         ? triggerBody.sheetId
         : undefined;
+    // The results spreadsheet for this run. Can be created during this
+    // execution (first Skipped rows, or first results) and is passed on to
+    // the next execution.
+    let currentSheetId = sheetId;
     // Set when the previous execution handed off a User Bulk job that was
     // still running. byteOffset is then the start of the NEXT window, and
     // pendingHasMore says whether that next window exists.
@@ -874,15 +1015,57 @@ export const accountLoginImport = flow({
           failedCsv: jobResult.failedCsv,
           accessToken: gdToken,
           folderId: failedFolderId,
-          spreadsheetId: sheetId,
+          spreadsheetId: currentSheetId,
         });
         logger.info(`[Account Login Import] Results sheet: ${sheet.url}`);
-        return sheet.spreadsheetId;
+        return sheet.spreadsheetId || currentSheetId;
       } catch (err: unknown) {
         logger.warn(
           `[Account Login Import] Could not update results sheet: ${String(err)}`,
         );
-        return sheetId;
+        return currentSheetId;
+      }
+    };
+
+    // Writes this window's dropped rows to the "Skipped" tab, creating the
+    // results spreadsheet first when this run does not have one yet. Called
+    // before the User upload so the rows are recorded even if the execution
+    // hands off or ends early. A failure here is logged, not thrown: losing
+    // the Skipped rows must not stop the import.
+    const writeSkippedRows = async (
+      skipped: SkippedLoginRow[],
+    ): Promise<void> => {
+      if (skipped.length === 0) return;
+      const sheetRows = toSkippedSheetRows(skipped, windowNumber, byteOffset);
+      try {
+        if (!currentSheetId) {
+          const created = await createResultsSpreadsheetWithTab({
+            flowName: "Account Login Import",
+            objectName: "User",
+            accessToken: gdToken,
+            folderId: failedFolderId,
+            tabName: "Skipped",
+            headers: SKIPPED_TAB_HEADERS,
+          });
+          currentSheetId = created.spreadsheetId;
+          logger.info(`[Account Login Import] Results sheet: ${created.url}`);
+        }
+        await appendSkippedRecords(
+          currentSheetId,
+          gdToken,
+          SKIPPED_TAB_HEADERS,
+          sheetRows,
+        );
+        logger.info(
+          `[Account Login Import] ${skipped.length} skipped row(s) written to the "Skipped" tab ` +
+            `(${summariseSkipReasons(skipped)}).`,
+        );
+      } catch (err: unknown) {
+        logger.warn(
+          `[Account Login Import] Could not write ${skipped.length} row(s) to the "Skipped" tab: ` +
+            `${String(err)}. Skipped Student_IDs: ` +
+            JSON.stringify(skipped.map((r) => [r.studentId, r.reason])),
+        );
       }
     };
 
@@ -924,7 +1107,7 @@ export const accountLoginImport = flow({
           byteOffset,
           headers: knownHeaders,
           windowNumber,
-          sheetId,
+          sheetId: currentSheetId,
           pendingJobId,
           pendingHasMore,
           handoffCount: handoffCount + 1,
@@ -975,8 +1158,14 @@ export const accountLoginImport = flow({
       MAX_ROWS,
       knownHeaders,
     );
-    const { nextByteOffset, parsedHeaders, firstId, lastId, skippedCount } =
-      parsed;
+    const {
+      nextByteOffset,
+      parsedHeaders,
+      firstId,
+      lastId,
+      skippedCount,
+      skippedRows: parseSkippedRows,
+    } = parsed;
     let rows = parsed.rows;
     let hasMore = parsed.hasMore;
 
@@ -1001,7 +1190,8 @@ export const accountLoginImport = flow({
         ` firstId=${firstId}, lastId=${lastId})`,
     );
 
-    let nextSheetId = sheetId;
+    // Every row dropped in this window, with its reason — see writeSkippedRows.
+    const skippedRows: SkippedLoginRow[] = [...parseSkippedRows];
 
     if (rows.length > 0) {
       // ── 4. Resolve the Profile once per window ────────────────────────────
@@ -1042,15 +1232,10 @@ export const accountLoginImport = flow({
       // Inactive = TRUE rows are the stale duplicates. Collapsing here also
       // avoids sending more than one row per external ID in the same Bulk API
       // batch, which Salesforce doesn't guarantee a deterministic result for.
-      const isActiveByStudentId = new Map<string, boolean>();
-      for (const row of rows) {
-        isActiveByStudentId.set(
-          row.studentId,
-          (isActiveByStudentId.get(row.studentId) ?? false) || row.isActive,
-        );
-      }
-      const uniqueStudentIds = [...isActiveByStudentId.keys()];
-      const duplicateRowCount = rows.length - uniqueStudentIds.length;
+      const { isActiveByStudentId, uniqueStudentIds, duplicates } =
+        collapseDuplicateStudentIds(rows);
+      skippedRows.push(...duplicates);
+      const duplicateRowCount = duplicates.length;
       if (duplicateRowCount > 0) {
         logger.info(
           `[Account Login Import] ${duplicateRowCount} duplicate Student_ID row(s) collapsed in this window.`,
@@ -1065,9 +1250,18 @@ export const accountLoginImport = flow({
         gdToken,
         new Set(uniqueStudentIds),
       );
-      const dedupedStudentIds = uniqueStudentIds.filter((id) =>
-        enrolled.has(id),
-      );
+      const dedupedStudentIds: string[] = [];
+      for (const id of uniqueStudentIds) {
+        if (enrolled.has(id)) {
+          dedupedStudentIds.push(id);
+        } else {
+          skippedRows.push({
+            studentId: id,
+            reason: SKIP_REASON.NOT_ENROLLED,
+            detail: 'No row in the Enrollment file with Status = "Enrolled".',
+          });
+        }
+      }
       const droppedNotEnrolled =
         uniqueStudentIds.length - dedupedStudentIds.length;
       logger.info(
@@ -1095,12 +1289,25 @@ export const accountLoginImport = flow({
         const contact = contactsByStudentId.get(studentId);
         if (!contact) {
           droppedNoContact++;
+          skippedRows.push({
+            studentId,
+            reason: SKIP_REASON.NO_MATCHING_ACCOUNT,
+            detail: `No Account with Student_ID_4D__c = ${studentId}. Run Student Import first.`,
+          });
           continue;
         }
 
         const email = cleanEmail(contact.email);
         if (!email) {
           droppedNoEmail++;
+          skippedRows.push({
+            studentId,
+            reason: SKIP_REASON.NO_USABLE_EMAIL,
+            detail: truncateDetail(
+              `Contact ${contact.contactId} has email "${contact.email}", ` +
+                `which is blank or not a valid address.`,
+            ),
+          });
           continue;
         }
 
@@ -1131,6 +1338,9 @@ export const accountLoginImport = flow({
           `[Account Login Import] ${droppedNoEmail} row(s) matched a Contact with no usable email — skipped (Username/Email are required).`,
         );
       }
+
+      // ── 6a. Record the dropped rows before the upload ──────────────────────
+      await writeSkippedRows(skippedRows);
 
       // ── 6. Upsert to Salesforce Bulk API 2.0 ──────────────────────────────
       if (records.length > 0) {
@@ -1165,7 +1375,7 @@ export const accountLoginImport = flow({
             byteOffset: nextByteOffset,
             headers: parsedHeaders,
             windowNumber,
-            sheetId,
+            sheetId: currentSheetId,
             pendingJobId: jobId,
             pendingHasMore: hasMore,
             handoffCount: 1,
@@ -1173,7 +1383,7 @@ export const accountLoginImport = flow({
           return { data: { byteOffset, rowsProcessed: rows.length, hasMore } };
         }
 
-        nextSheetId = await finishWindow(
+        currentSheetId = await finishWindow(
           jobResult,
           records as unknown as Record<string, unknown>[],
           permissionSets,
@@ -1187,6 +1397,8 @@ export const accountLoginImport = flow({
       logger.info(
         "[Account Login Import] Window contained no records; skipping upload.",
       );
+      // Rows rejected by the parser still need to reach the Skipped tab.
+      await writeSkippedRows(skippedRows);
     }
 
     // ── 8. Recurse if more rows remain ─────────────────────────────────────────
@@ -1198,7 +1410,7 @@ export const accountLoginImport = flow({
         byteOffset: nextByteOffset,
         headers: parsedHeaders,
         windowNumber: windowNumber + 1,
-        sheetId: nextSheetId,
+        sheetId: currentSheetId,
       });
     } else {
       logger.info(

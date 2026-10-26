@@ -227,9 +227,9 @@ async function addTabPair(
 
 async function writeRowsToResultsSheet(
   sHeaders: string[],
-  sRows: string[][],
+  initialSRows: string[][],
   eHeaders: string[],
-  eRows: string[][],
+  initialERows: string[][],
   uHeaders: string[],
   uRows: string[][],
   existingSpreadsheetId: string | undefined,
@@ -238,6 +238,10 @@ async function writeRowsToResultsSheet(
   auth: { Authorization: string },
   folderId: string | undefined,
 ): Promise<{ url: string; spreadsheetId: string }> {
+  // Reassigned when a missing tab is created with its rows already in it.
+  let sRows = initialSRows;
+  let eRows = initialERows;
+
   // ── Append to existing sheet (subsequent windows) ─────────────────────────
   if (existingSpreadsheetId) {
     const sid = existingSpreadsheetId;
@@ -246,12 +250,55 @@ async function writeRowsToResultsSheet(
     const sTab = tabName("Success", idx);
     const eTab = tabName("Errors", idx);
 
-    const sCount = await getTabRowCount(sid, sTab, auth);
-    const eCount = await getTabRowCount(sid, eTab, auth);
+    // The spreadsheet can exist without its Success/Errors tabs — e.g. it was
+    // created earlier in the run only to hold a "Skipped" tab
+    // (createResultsSpreadsheetWithTab). Create the missing tabs with headers
+    // here; appending to a tab that does not exist would fail.
+    const missingTabs = [sTab, eTab].filter((t) => !tabTitles.includes(t));
+    if (missingTabs.length > 0) {
+      await axios.post(
+        `${SHEETS_BASE}/${sid}:batchUpdate`,
+        {
+          requests: missingTabs.map((t) => ({
+            addSheet: { properties: { title: t } },
+          })),
+        },
+        { headers: auth },
+      );
+      const initialData: { range: string; values: string[][] }[] = [];
+      if (missingTabs.includes(sTab)) {
+        initialData.push({
+          range: `${sTab}!A1`,
+          values:
+            sHeaders.length > 0 ? [sHeaders, ...sRows] : [["(no records)"]],
+        });
+      }
+      if (missingTabs.includes(eTab)) {
+        initialData.push({
+          range: `${eTab}!A1`,
+          values:
+            eHeaders.length > 0 ? [eHeaders, ...eRows] : [["(no records)"]],
+        });
+      }
+      await axios.post(
+        `${SHEETS_BASE}/${sid}/values:batchUpdate`,
+        { valueInputOption: "RAW", data: initialData },
+        { headers: auth },
+      );
+      // Rows for the newly created tabs are already written above.
+      if (missingTabs.includes(sTab)) sRows = [];
+      if (missingTabs.includes(eTab)) eRows = [];
+    }
 
+    const sCount = sRows.length > 0 ? await getTabRowCount(sid, sTab, auth) : 0;
+    const eCount = eRows.length > 0 ? await getTabRowCount(sid, eTab, auth) : 0;
+
+    // Only roll over to a new tab pair when there is something left to write.
+    const hasRowsToAppend = sRows.length > 0 || eRows.length > 0;
     if (
-      sCount + sRows.length > MAX_ROWS_PER_TAB ||
-      eCount + eRows.length > MAX_ROWS_PER_TAB
+      hasRowsToAppend &&
+      (sCount + sRows.length > MAX_ROWS_PER_TAB ||
+        eCount + eRows.length > MAX_ROWS_PER_TAB)
     ) {
       await addTabPair(sid, idx + 1, sHeaders, sRows, eHeaders, eRows, auth);
     } else {
@@ -783,6 +830,66 @@ export async function appendSkippedRecords(
       },
     );
   }
+}
+
+/**
+ * Creates a results spreadsheet (same title format and folder as
+ * createResultsSheetFromContacts) whose only tab is `tabName`, with `headers`
+ * in row 1. Used when a flow needs to record rows before any record has gone
+ * to Salesforce in this run — e.g. a window where every row was skipped. The
+ * Success/Errors tabs are added later by writeRowsToResultsSheet when the
+ * first results are written.
+ */
+export async function createResultsSpreadsheetWithTab(params: {
+  flowName: string;
+  objectName: string;
+  accessToken: string;
+  folderId?: string;
+  tabName: string;
+  headers: string[];
+}): Promise<{ url: string; spreadsheetId: string }> {
+  const auth = { Authorization: `Bearer ${params.accessToken}` };
+  const datetime = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const title = `Stanford CSP - ${params.flowName} - ${params.objectName} - ${datetime}`;
+
+  const { data: created } = await axios.post(
+    SHEETS_BASE,
+    {
+      properties: { title },
+      sheets: [{ properties: { title: params.tabName } }],
+    },
+    { headers: auth },
+  );
+  const spreadsheetId = created.spreadsheetId as string;
+
+  await axios.post(
+    `${SHEETS_BASE}/${spreadsheetId}/values:batchUpdate`,
+    {
+      valueInputOption: "RAW",
+      data: [{ range: `${params.tabName}!A1`, values: [params.headers] }],
+    },
+    { headers: auth },
+  );
+
+  if (params.folderId) {
+    await axios.patch(
+      `${DRIVE_FILES}/${spreadsheetId}`,
+      {},
+      {
+        params: {
+          addParents: params.folderId,
+          removeParents: "root",
+          supportsAllDrives: "true",
+        },
+        headers: auth,
+      },
+    );
+  }
+
+  return {
+    url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}`,
+    spreadsheetId,
+  };
 }
 
 // ── Per-object tab helpers ─────────────────────────────────────────────────────
