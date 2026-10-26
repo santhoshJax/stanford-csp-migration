@@ -42,42 +42,39 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-26
-**Status:** at risk — 15,000 missing rows traced to non-enrolled students (Rule 4) & incomplete runs. Job 750WH00000gdMIFYA2 status still unknown.
+**Status:** at risk — Skipped-tab feature coded & pushed (6dd614b); awaiting deploy & validation. LIMIT_EXCEEDED blocker & job 750WH00000gdMIFYA2 status still un…
 
 **Done this session**
-- Root cause confirmed: ~15,000 rows filtered before sheet write (Rules 1–6, mostly Rule 4: not enrolled)
-- Identified all six filtering rules and their log signatures
-- Located two incomplete runs: 22 Oct job 750WH00000ga5nNYAQ (1,664 Users, timeout), 23 Oct job 750WH00000gdMIFYA2 (360 Users, socket hang up)
-- Documented how to manually split 15,000 rows across logs and sheets
+- Skipped tab feature implemented: captures all filtered rows (column mismatch, invalid ID, duplicate, not enrolled, no Account, no email)
+- 4 files changed (+451/−30); all 22 Account Login tests pass including new skipped.test.ts
+- Commit 6dd614b pushed to stanford-csp-orchestrate branch on GitHub
 
 **Open items**
-- Check job 750WH00000gdMIFYA2 in Bulk Data Load Jobs; confirm 360 Users created or identify failures
-- Check Salesforce Setup: Student_Profile user licences and storage usage (org limit issue)
-- Check Setup → Object Manager → User → Triggers and Flows; check Experience Cloud welcome email setting
-- Verify Total_Hours__c, Tuition_Adjustment__c, Tuition_Adjustment_Note__c exist on CourseOffering
-- Deploy Course 5-Year flow & run test; confirm values appear on CourseOffering records
-- Redeploy Account Login integration from stanford-csp-orchestrate & resume from byte 18,468,950
-- Merge PR #1 (Course Correction Sheet ID config) to main & deploy
-- Open PR for Account Login batching & retry fixes to main
+- Open PR from stanford-csp-orchestrate to main; review & merge
+- Deploy merged code to org via Deploy session
+- Run one batch post-deploy; verify Skipped tab row count matches log (sum skipped=, collapsed, no Enrollment, no Account, no email)
+- Confirm job 750WH00000gdMIFYA2 status & 360 User record count in Bulk Data Load Jobs
+- Check Setup → Company Information: Student_Profile licences & storage (LIMIT_EXCEEDED persists)
+- Resume full import from byte 18,468,950 once LIMIT_EXCEEDED resolved
+- Redeploy Account Login integration with timeout & retry fixes
 
 **Decisions**
 - MAX_ROWS = 500 per run; POLL_BUDGET_MS = 10 min; MAX_JOB_HANDOFFS = 6
-- Hand-off passes pendingJobId & file position; recordsFromResultCsvs rebuilds from Salesforce CSVs
-- Account Login retry: up to 5 attempts, exponential backoff 2s–30s; non-retryable errors (401/404) fail immediately
-- Course 5-Year flow uses same file ID setting as 2-year flow; All Courses flow unchanged
-- TEST_MODE = false; next run is full import from byte 18,468,950
+- Skipped tab rolls over same as Success/Errors tabs when full
+- Account Login retry: up to 5 attempts, exponential backoff 2s–30s; non-retryable errors fail immediately
+- TEST_MODE = false for next full run
 
 **Blockers**
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
-- Job 750WH00000gdMIFYA2 final status unknown after socket hang up; may have finished or failed
+- Job 750WH00000gdMIFYA2 final status unknown after socket hang up
 
 **Next**
-- Manually count 15,000 rows: search logs for skipped=, collapsed, no Enrollment, no Account, no email, timeouts, socket hangs
-- Check all Account Login sheets in Failed Records folder for Not Processed or (2) tabs
-- Confirm job 750WH00000gdMIFYA2 status and 360 User record count in Bulk Data Load Jobs
-- Check Setup → Company Information for Student_Profile licences & storage if LIMIT_EXCEEDED persists
-- Decide: implement Skipped tab in Account Login flow or add to backlog
-- Redeploy Account Login integration and resume from byte 18,468,950
+- Open pull request from stanford-csp-orchestrate to main
+- Review & merge PR to main
+- Schedule Deploy session to ship merged code to org
+- Post-deploy: run one batch and validate Skipped tab row count vs. log
+- Check Setup → Company Information for Student_Profile licence/storage limits
+- Confirm job 750WH00000gdMIFYA2 status in Bulk Data Load Jobs
 
 **Checked live on 2026-10-26:** the repository
 ### Last session — 2026-10-26
@@ -89,19 +86,21 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-I found the cause in the code; nothing was changed. **The results sheet only lists Users that were actually sent to Salesforce.** Every row the flow filters out before the upload is counted in the run log but never written to any tab. A few runs also ended before they reached the sheet step. That's where your ~15,000 rows are.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch stanford-csp-orchestrate)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-I couldn't count them by cause, because I can't see the run logs or the Drive files from this session. The steps at the end show how to split the 15,000.
+I pushed the Skipped-tab change to `stanford-csp-orchestrate` as commit `6dd614b`, and the branch on GitHub now points to it. It changes 4 files (+451 / −30). It isn't deployed or run yet.
 
-## The rules the flow applies before creating a User
-A row goes through these in order, and each one drops rows **without writing them to the sheet**:
-
-| # | Rule | Where it shows | In the sheet? |
-|---|---|---|---|
-| 1 | Line has a different number of columns from the header (for example a tab or line break inside a field) | `skipped=` in the "Parsed 500 rows" line | No |
-| 2 | Student_ID blank, `0`, not a number, or ending in `.0` | `skipped=` (same count as 1) | No |
-| 3 | Same Student_ID more than once in a window: merged into one User | "N duplicate Student_ID row(s) collapsed" | Only 1 row per student |
-| 4 | **Not enrolled:** no Enrollment row with Status = "Enrolled" | "N student(s) have no Enrollm
+**What changes**
+- Each results spreadsheet now gets a **Skipped** tab, next to Success and Errors. It lists every row the flow drops before the Salesforce upload, with the Student_ID, the reason, and a short copy of the source line.
+- Reasons used: column count mismatch, invalid Student_ID, duplicate Student_ID merged, not enrolled, no matching Account, no usable email.
+- The Skipped tab rolls over the same way the other tabs do once it gets full.
+- After this, every source row ends up in exactly one of Success, Errors
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
