@@ -42,13 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-26
-**Status:** at risk — Skipped-tab feature deployed & awaiting validation; workbook now conflicts with code on ATE, Order.Status, OrderItems, and multi-term keys—…
+**Status:** blocked — I read the Purchase, Purchase Item, Payments and Purchase Inventory tabs, plus the Object Level Mapping tab.
 
 **Done this session**
-- Read workbook (Oct 23) Registration, Enrollment, Object Level Mapping tabs
-- Compared workbook against repo ARCHITECTURE.md, registrationFlow.ts, enrollmentFlow.ts
-- Identified 4 code–workbook conflicts: ATE population, Order.Status (Draft vs Activated), OrderItem creation, ATE multi-term key
-- Mapped 5 decisions needed: Adjustment OrderItems, Dropped enrollment charges, UnitPrice source, Payment-only registrations, Product Name source
+- I read the Purchase, Purchase Item, Payments and Purchase Inventory tabs, plus the Object Level Mapping tab. I did not re-check the code for this pass. The statements about 4D business meaning are my inference from the sample data, so plea…
 
 **Open items**
 - Resolve architect conflict: ATE population for past data (Sep 28 decision vs workbook)
@@ -79,7 +76,7 @@
 - Draft Excel delta sheet (field-level old vs new, owner, status) or PR on stanford-csp-orchestrate for team review
 - Post-deploy: run one batch and validate Skipped tab row count vs. log (from previous state)
 
-**Checked live on 2026-10-26:** the Salesforce org, Google Workspace, the repository
+**Checked live on 2026-10-26:** Google Workspace
 ### Last session — 2026-10-26
 | | |
 |---|---|
@@ -89,26 +86,27 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements |
 | Session | `51a1a748-4e1f-426c-9437-2dafc7a5da2b` |
 **In its own words (excerpt):**
-The workbook now links enrollments to registrations through a new OrderItem/Product layer and a registration-to-enrollment link, but several pieces conflict with the code in the repo or are incomplete.
+I read the Purchase, Purchase Item, Payments and Purchase Inventory tabs, plus the Object Level Mapping tab. I did not re-check the code for this pass. The statements about 4D business meaning are my inference from the sample data, so please confirm them.
 
-**What I read:**
-- The workbook (modified Oct 23), tabs `Registration`, `Enrollment` and `Object Level Mapping`.
-- The repo's `ARCHITECTURE.md` and `registrationFlow.ts` (default branch).
-- `enrollmentFlow.ts` (your working branch).
+## In plain words
 
-**Caveat on "what changed":** I can't see the sheet's version history. I inferred the changes from the workbook's own `[PREVIOUS]/[UPDATED]` notes and from comparing it with the code, which reflects the earlier mapping. Please confirm that matches what you edited.
+Think of a shop with a price list, receipts, receipt lines and a till:
 
-## 1. What changed in the workbook
+| 4D table | Everyday meaning | Lands in Salesforce as |
+|---|---|---|
+| **Purchase Inventory** | The price list, about 9 items such as "Manuscript surcharge" or transcript fee | `Product2` + `PricebookEntry` |
+| **Purchase** | The receipt for non-course buys, with card details and totals | `Order` + `CardPaymentMethod` |
+| **Purchase Item** | The lines on that receipt (what, how many, price) | `OrderItem` |
+| **Payments** | The till log, with one row per charge or refund | `Payment` (+ `Refund`) |
+| **Registration** (new tab) | The receipt for signing up for courses | `Order` + `OrderItem` + `AcademicTermEnrollment` |
+| **Enrollment** | The seat in the course | `CourseOfferingParticipant` |
 
-**Registration tab**
-- **Target objects:** the Object Level row now lists `AcademicTermEnrollment, CardPaymentMethod, Order, Payment`. Previously it was the last three plus PaymentGroup.
-- **New OrderItem rows:**
-  - `OrderId` is the created Order.
-  - `UnitPrice` comes from `Enrollment.Tuition`.
-  - `Quantity` is 1.
-  - `Course_Offering__c` comes from `Enrollment.Course_ID`.
-  - `Product2Id` is found via the Course Offering.
-  - `Student__c` comes from `St
+## Diagram
+
+```mermaid
+flowchart TD
+    INV["Purchase Inventory<br/>(price list)"] --> PROD["Product2 + PricebookEntry"]
+    COURSE["Course"] -->|"cou
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
