@@ -41,17 +41,17 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-10-23
-**Status:** at risk — Results sheet field coverage reviewed; 5-Year missing fields root cause found. Job 750WH00000gdMIFYA2 status & org limits still unknown.
+### Engagement state — 2026-10-26
+**Status:** at risk — 15,000 missing rows traced to non-enrolled students (Rule 4) & incomplete runs. Job 750WH00000gdMIFYA2 status still unknown.
 
 **Done this session**
-- Code review: identified why Total_Hours__c, Tuition_Adjustment__c, Tuition_Adjustment_Note__c missing from 5-Year sheet (PapaParse drops columns absent in first row)
-- Found shared sheet writer bug: reportResults.ts never reads existing header on append, misaligns values across windows
-- Identified 50+ optional CourseOffering fields missing from 2-Year flow; lookup values show as [object Object]
-- Confirmed 16 Bulk-API flows are fine (use Salesforce result files); identified 10 flows affected by shared writer bug
+- Root cause confirmed: ~15,000 rows filtered before sheet write (Rules 1–6, mostly Rule 4: not enrolled)
+- Identified all six filtering rules and their log signatures
+- Located two incomplete runs: 22 Oct job 750WH00000ga5nNYAQ (1,664 Users, timeout), 23 Oct job 750WH00000gdMIFYA2 (360 Users, socket hang up)
+- Documented how to manually split 15,000 rows across logs and sheets
 
 **Open items**
-- Check job 750WH00000gdMIFYA2 in Bulk Data Load Jobs; confirm 360 Users created or identify LIMIT_EXCEEDED failures
+- Check job 750WH00000gdMIFYA2 in Bulk Data Load Jobs; confirm 360 Users created or identify failures
 - Check Salesforce Setup: Student_Profile user licences and storage usage (org limit issue)
 - Check Setup → Object Manager → User → Triggers and Flows; check Experience Cloud welcome email setting
 - Verify Total_Hours__c, Tuition_Adjustment__c, Tuition_Adjustment_Note__c exist on CourseOffering
@@ -72,32 +72,36 @@
 - Job 750WH00000gdMIFYA2 final status unknown after socket hang up; may have finished or failed
 
 **Next**
-- Confirm today's 5-Year sheet to verify missing fields match root cause found
-- Decide: create Jira backlog for results sheet fixes or hand to Build session
-- Check job 750WH00000gdMIFYA2 status and record counts in Bulk Data Load Jobs
-- Check Setup → Company Information for Student_Profile licences & storage usage if LIMIT_EXCEEDED persists
-- Redeploy Account Login integration and resume import from byte 18,468,950
+- Manually count 15,000 rows: search logs for skipped=, collapsed, no Enrollment, no Account, no email, timeouts, socket hangs
+- Check all Account Login sheets in Failed Records folder for Not Processed or (2) tabs
+- Confirm job 750WH00000gdMIFYA2 status and 360 User record count in Bulk Data Load Jobs
+- Check Setup → Company Information for Student_Profile licences & storage if LIMIT_EXCEEDED persists
+- Decide: implement Skipped tab in Account Login flow or add to backlog
+- Redeploy Account Login integration and resume from byte 18,468,950
 
-**Checked live on 2026-10-23:** the repository
-### Last session — 2026-10-23
+**Checked live on 2026-10-26:** the repository
+### Last session — 2026-10-26
 | | |
 |---|---|
-| Type | REVIEW |
+| Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-SuccessFailGoogleSheetColumn-Review |
-| Session | `8bb34aed-4a66-4102-bb48-d51e190354df` |
+| Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
+| Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-The sheets do not always include every field the flow sent to Salesforce, and I found the cause of your 5 Year problem. This is a code review only. I changed no code and did not open any past Drive sheets, so please check today's 5 Year sheet to confirm. The report has been attached to this session as **D01 – Results Sheet Field Coverage Review**.
+I found the cause in the code; nothing was changed. **The results sheet only lists Users that were actually sent to Salesforce.** Every row the flow filters out before the upload is counted in the run log but never written to any tab. A few runs also ended before they reached the sheet step. That's where your ~15,000 rows are.
 
-**Why the three new fields are missing**
-- The three Course Import flows (5 Year, 2 Year, All Time) build their sheet CSV with `papaUnparse(rows)` and no column list. PapaParse takes the columns from the first row only and drops any field that appears only in later rows. I confirmed this by running it.
-- `Total_Hours__c`, `Tuition_Adjustment__c` and `Tuition_Adjustment_Note__c` are only set when the row matches a Course Submission record. If the first CourseOffering row in a window has no match, the columns never appear and the rest of that window loses them too.
-- The same applies to about 50 other optional CourseOffering fields in the 2 Year flow.
-- Lookup values in these flows (LearningCourse, AcademicSession, Learning and so on) show as `[object Object]` in the sheet.
+I couldn't count them by cause, because I can't see the run logs or the Drive files from this session. The steps at the end show how to split the 15,000.
 
-**Other problems found**
-- **Enrollment Waiver:** the sheet shows
+## The rules the flow applies before creating a User
+A row goes through these in order, and each one drops rows **without writing them to the sheet**:
+
+| # | Rule | Where it shows | In the sheet? |
+|---|---|---|---|
+| 1 | Line has a different number of columns from the header (for example a tab or line break inside a field) | `skipped=` in the "Parsed 500 rows" line | No |
+| 2 | Student_ID blank, `0`, not a number, or ending in `.0` | `skipped=` (same count as 1) | No |
+| 3 | Same Student_ID more than once in a window: merged into one User | "N duplicate Student_ID row(s) collapsed" | Only 1 row per student |
+| 4 | **Not enrolled:** no Enrollment row with Status = "Enrolled" | "N student(s) have no Enrollm
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
