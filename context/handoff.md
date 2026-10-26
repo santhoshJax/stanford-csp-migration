@@ -42,65 +42,73 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-26
-**Status:** at risk — Skipped-tab feature coded & pushed (6dd614b); awaiting deploy & validation. LIMIT_EXCEEDED blocker & job 750WH00000gdMIFYA2 status still un…
+**Status:** at risk — Skipped-tab feature deployed & awaiting validation; workbook now conflicts with code on ATE, Order.Status, OrderItems, and multi-term keys—…
 
 **Done this session**
-- Skipped tab feature implemented: captures all filtered rows (column mismatch, invalid ID, duplicate, not enrolled, no Account, no email)
-- 4 files changed (+451/−30); all 22 Account Login tests pass including new skipped.test.ts
-- Commit 6dd614b pushed to stanford-csp-orchestrate branch on GitHub
+- Read workbook (Oct 23) Registration, Enrollment, Object Level Mapping tabs
+- Compared workbook against repo ARCHITECTURE.md, registrationFlow.ts, enrollmentFlow.ts
+- Identified 4 code–workbook conflicts: ATE population, Order.Status (Draft vs Activated), OrderItem creation, ATE multi-term key
+- Mapped 5 decisions needed: Adjustment OrderItems, Dropped enrollment charges, UnitPrice source, Payment-only registrations, Product Name source
 
 **Open items**
-- Open PR from stanford-csp-orchestrate to main; review & merge
-- Deploy merged code to org via Deploy session
-- Run one batch post-deploy; verify Skipped tab row count matches log (sum skipped=, collapsed, no Enrollment, no Account, no email)
-- Confirm job 750WH00000gdMIFYA2 status & 360 User record count in Bulk Data Load Jobs
-- Check Setup → Company Information: Student_Profile licences & storage (LIMIT_EXCEEDED persists)
-- Resume full import from byte 18,468,950 once LIMIT_EXCEEDED resolved
-- Redeploy Account Login integration with timeout & retry fixes
+- Resolve architect conflict: ATE population for past data (Sep 28 decision vs workbook)
+- Confirm Order.Status: Draft on load then activate, or Activated (FAILED_ACTIVATION risk)
+- Define external ID prefixes for Order, OrderItem, Product to avoid collision with Purchase/Purchase_Item
+- Fix ATE lookup key to include term (registration-plus-term) for multi-term checkouts
+- Answer: does Registration use a prefix? Does Product Name have a source?
+- Decide: Adjustment records get OrderItem? Dropped enrollments charged? UnitPrice = Tuition or Extension?
+- De-duplicate Product and PricebookEntry between Registration and Purchase_Inventory flows
+- Update ARCHITECTURE.md flow order and open items once decisions made
 
 **Decisions**
 - MAX_ROWS = 500 per run; POLL_BUDGET_MS = 10 min; MAX_JOB_HANDOFFS = 6
 - Skipped tab rolls over same as Success/Errors tabs when full
 - Account Login retry: up to 5 attempts, exponential backoff 2s–30s; non-retryable errors fail immediately
 - TEST_MODE = false for next full run
+- ENR- prefix for Enrollment ID (existing, confirmed in workbook)
 
 **Blockers**
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
-- Job 750WH00000gdMIFYA2 final status unknown after socket hang up
+- Code–workbook sync broken on ATE, Order.Status, OrderItem, and multi-term key—blocks Registration flow update
 
 **Next**
-- Open pull request from stanford-csp-orchestrate to main
-- Review & merge PR to main
-- Schedule Deploy session to ship merged code to org
-- Post-deploy: run one batch and validate Skipped tab row count vs. log
-- Check Setup → Company Information for Student_Profile licence/storage limits
-- Confirm job 750WH00000gdMIFYA2 status in Bulk Data Load Jobs
+- Architect to confirm: ATE population for past data (Sep 28 decision stands or reverses?)
+- Confirm Order.Status strategy: Draft + activate, or Activated with FAILED_ACTIVATION mitigation
+- Define external ID prefixes for Order, OrderItem, Product; answer Registration prefix & Product Name source
+- Update workbook Registration tab: add ATE rows (key, Person Account, AcademicTerm, dates), AcademicOrder, Pricebook fields; fix ATE key to term-aware
+- Draft Excel delta sheet (field-level old vs new, owner, status) or PR on stanford-csp-orchestrate for team review
+- Post-deploy: run one batch and validate Skipped tab row count vs. log (from previous state)
 
-**Checked live on 2026-10-26:** the repository
+**Checked live on 2026-10-26:** the Salesforce org, Google Workspace, the repository
 ### Last session — 2026-10-26
 | | |
 |---|---|
-| Type | BUILD |
+| Type | GENERAL |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
-| Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
+| Name | Stanford-Data-Migration-Registration-Enhancements |
+| Session | `51a1a748-4e1f-426c-9437-2dafc7a5da2b` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch stanford-csp-orchestrate)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The workbook now links enrollments to registrations through a new OrderItem/Product layer and a registration-to-enrollment link, but several pieces conflict with the code in the repo or are incomplete.
 
-I pushed the Skipped-tab change to `stanford-csp-orchestrate` as commit `6dd614b`, and the branch on GitHub now points to it. It changes 4 files (+451 / −30). It isn't deployed or run yet.
+**What I read:**
+- The workbook (modified Oct 23), tabs `Registration`, `Enrollment` and `Object Level Mapping`.
+- The repo's `ARCHITECTURE.md` and `registrationFlow.ts` (default branch).
+- `enrollmentFlow.ts` (your working branch).
 
-**What changes**
-- Each results spreadsheet now gets a **Skipped** tab, next to Success and Errors. It lists every row the flow drops before the Salesforce upload, with the Student_ID, the reason, and a short copy of the source line.
-- Reasons used: column count mismatch, invalid Student_ID, duplicate Student_ID merged, not enrolled, no matching Account, no usable email.
-- The Skipped tab rolls over the same way the other tabs do once it gets full.
-- After this, every source row ends up in exactly one of Success, Errors
+**Caveat on "what changed":** I can't see the sheet's version history. I inferred the changes from the workbook's own `[PREVIOUS]/[UPDATED]` notes and from comparing it with the code, which reflects the earlier mapping. Please confirm that matches what you edited.
+
+## 1. What changed in the workbook
+
+**Registration tab**
+- **Target objects:** the Object Level row now lists `AcademicTermEnrollment, CardPaymentMethod, Order, Payment`. Previously it was the last three plus PaymentGroup.
+- **New OrderItem rows:**
+  - `OrderId` is the created Order.
+  - `UnitPrice` comes from `Enrollment.Tuition`.
+  - `Quantity` is 1.
+  - `Course_Offering__c` comes from `Enrollment.Course_ID`.
+  - `Product2Id` is found via the Course Offering.
+  - `Student__c` comes from `St
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
