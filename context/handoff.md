@@ -42,10 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** blocked — The duplicate check only looks inside one window.
+**Status:** at risk — Skipped rows spread across sheets & logs; architect decisions still pending on IDs/pricing/rows
 
 **Done this session**
-- The duplicate check only looks inside one window. It does not compare across windows. I read the code on `stanford-csp-orchestrate` at `d831965` and changed nothing. ## When the same Student_ID shows up in two windows - **Same window:** th…
+- Identified why skipped rows are incomplete: restarts create new sheets, failed writes log only to console, pre-6dd614b runs have no record
 
 **Open items**
 - Rebuild 5-Year integration in Prismatic (npm run import) if not done since 2ab766a
@@ -55,7 +55,7 @@
 - Architect: confirm UnitPrice source (Tuition or Extension) and fee/discount handling
 - Architect: confirm OrderItem rows follow deduplicated COP or all enrollments; dropped course handling
 - Architect: confirm historical Orders end as Draft or Activated; who builds activation step
-- Add price book entries for course Products and set Order.Pricebook2Id, OrderItem.PricebookEntryId for both streams
+- Combine Skipped tabs from all Account Login sheets in Failed Records folder + log warnings into one list
 
 **Decisions**
 - Product2 step: IsActive=FALSE, no price book entries created yet
@@ -73,15 +73,15 @@
 - Architect has not confirmed whether OrderItems follow deduplicated COP rows or all enrollment rows
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
 - 5-Year integration may not be rebuilt since fix was pushed—old build still running in Prismatic
+- Skipped rows from Account Login import are fragmented across multiple sheets and logs; no single authoritative list exists
 
 **Next**
-- Send 14 architect questions (structure, IDs/keys, pricing, rows/status, payments) with suggested load order to decision-maker
-- Await architect confirmation on: order types, external ID prefixes, price book entry value, UnitPrice source, OrderItem row logic, activation step owner
-- Check: has 5-Year integration been rebuilt (npm run import) since commit 2ab766a; rebuild if needed
-- Once prefixes decided, update purchaseInventoryFlow.ts and courseFlow.ts; add Purchase flow skeleton
-- Design Payments reconciliation: single source, Order lookup, CardPaymentMethod and PaymentGroup links
+- Combine all Skipped tabs from Failed Records folder + log warnings into one complete list for review
+- Send 14 architect questions with suggested load order; await confirmation on order types, ID prefixes, pricing, row logic, activation owner
+- Check if 5-Year integration rebuilt since 2ab766a; rebuild if needed
+- Decide: implement three code changes to prevent future sheet fragmentation, or manually combine existing sheets via Google Workspace connector
 
-**Checked live on 2026-10-27:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-10-27:** the repository
 ### Last session — 2026-10-27
 | | |
 |---|---|
@@ -91,15 +91,16 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-The duplicate check only looks inside one window. It does not compare across windows. I read the code on `stanford-csp-orchestrate` at `d831965` and changed nothing.
+You already have this for one continuous run. All windows in a run write to the same Skipped tab, each row with its reason. The problem is that it falls apart if the run is restarted or a sheet write fails. I read the code on `stanford-csp-orchestrate` at `aa93334` and changed nothing.
 
-## When the same Student_ID shows up in two windows
-- **Same window:** the extra rows go to the Skipped tab as "Duplicate Student_ID merged". The detail text reads "Another row **in this window** has the same Student_ID".
-- **Different windows:** neither row is skipped. Each window sends that student to Salesforce, and because Users are upserted on Federation Id, the second window updates the User the first one created. So the student appears **twice in Success** (once "Created", once "Updated"), or in Errors if that window failed. They never go to Skipped.
+## How it works today
+- **One run, one sheet.** The first window creates the results spreadsheet. Each window passes its `sheetId` to the next, so every window adds its skipped rows to the **same Skipped tab**, with the Window # and the reason.
+- **The reasons recorded** are: column count mismatch, invalid Student_ID, duplicate Student_ID merged, not enrolled, no matching Account, and no usable email.
+- **Same student in two windows:** this isn't treated as a skip. Both windows send the User, and the second one updates it. That's why it never shows up in Skipped.
 
-**So cross-window duplicates aren't part of your 2,409.** They add extra Success rows rather than leaving rows out. If you compare by row count, that can actually hide missing rows, so compare unique Student_IDs.
-
-**There is a separate risk here.** Within a window, a student counts as active if *any* of their rows is active. Across windows, the last window wins. If window 3 has the active row and window 7 has a stale `Inactive=TRUE` row, the User ends up **inactiv
+## Why you might still not have the full list
+1. **Each restart creates a new spreadsheet.** A run started by hand has no `sheetId`, so it creates a new "Account Login Import - User - <date time>" sheet, and the Window # starts again at 1. Skipped rows end up spread across several sheets in the Failed Records folder.
+2. **A failed write on
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
