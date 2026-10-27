@@ -42,12 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Product descriptions fixed & tested (commit 2ab766a); 5-Year flow may still run old build—rebuild & re-run needed to confirm fix works end-…
+**Status:** blocked — The Product-per-course part of the mapping is already built in the repo, but the Registration flow doesn't use it yet.
 
 **Done this session**
-- Confirmed description fix works: old build had <br> tags & raw 4k char cut; new code strips HTML, decodes entities, counts Salesforce storage size
-- Verified both sample descriptions (6.3k raw, with codes) now pass at 3,999 chars by Salesforce count
-- Identified root cause: 5-Year integration may not be rebuilt since commit 2ab766a was pushed to repo
+- The Product-per-course part of the mapping is already built in the repo, but the Registration flow doesn't use it yet. It still creates no OrderItems, and the Products it would point at have no price list entry. I read the live Registratio…
 
 **Open items**
 - Rebuild 5-Year integration in Prismatic (npm run import) if not done since 2ab766a
@@ -81,26 +79,30 @@
 - Re-run All & 2-Year flows with confirmed prefix logic
 - Open PR to main once prefix decision made
 
-**Checked live on 2026-10-27:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-10-27:** the Salesforce org, Google Workspace, the repository
 ### Last session — 2026-10-27
 | | |
 |---|---|
-| Type | BUILD |
+| Type | GENERAL |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-CourseEnhancement-Products |
-| Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
+| Name | Stanford-Data-Migration-Registration-Enhancements |
+| Session | `51a1a748-4e1f-426c-9437-2dafc7a5da2b` |
 **In its own words (excerpt):**
-This error most likely came from the **old build**, not from the fix in commit `2ab766a`. Two things point that way:
+The Product-per-course part of the mapping is already built in the repo, but the Registration flow doesn't use it yet. It still creates no OrderItems, and the Products it would point at have no price list entry. I read the live Registration and Course tabs (the workbook was modified today at 11:59 UTC) and the code on `stanford-csp-orchestrate`. I didn't run any flows or check the org, so org-behaviour points below are flagged as unverified.
 
-1. **The value sent still has `<br><br>` in it.** The new code turns every `<br>` into a line break before sending. If the new code had run on this row, there would be no `<br>` in the text.
-2. **The current code can't go over 4,000 the way Salesforce counts.** I ran two fake descriptions built from your error text through the current code: one 6,300 characters long with raw `<br>` tags, `Q&amp;A` and curly quotes, and one with the HTML stored as `&lt;br&gt;` codes. Both came out at 3,999 by Salesforce's count, and both tests passed.
+## 1. What changed in the workbook
 
-The old code just cut the raw 4D text at 4,000 characters. Salesforce then counted it as longer than that, which is exactly the error you got.
+- **Product rows moved out of Registration.** The Registration tab no longer has Product rows. My earlier read of it had four, for Name, Description, ProductCode and IsActive. The tab now ends at the `Product.Course_Offering__c` row.
+- **Product rows now live on the Course tab.** They are rows 127–131:
 
-**Check this first:** has the 5-Year integration been rebuilt and imported into Prismatic (`npm run import`) since `2ab766a` was pushed? If the 2-Year one was rebuilt but the 5-Year one wasn't, that would explain why only the 5-Year window failed. Once it's on the new build, re-run that window. The Course Offering already saved, and the Product will be created without making a duplicate.
-
-**One
+| Product field | Source | Rule |
+|---|---|---|
+| `Name` | `Course.Title` | Direct map |
+| `Course_Offering__c` | `Course.ID` | Lookup to the Course Offering |
+| `Description` | `Course.Description` | Direct map |
+| `ProductCode` | `Course.Code` | Full code with section suffix, e.g. `OWC 303 A`, same as `CourseOffering.Name`. Blank if Code is empty. |
+| `IsActive` | none | Default **FALSE** (the earlier Regis
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
