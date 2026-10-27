@@ -308,9 +308,33 @@ Upsert key: `Student_ID_4D__c`
 
 #### Enrollment filter (added 2026-10-21)
 
-Only students who are enrolled in a course get a User. For each window, after duplicate `Student_ID` rows are collapsed, the flow streams the Enrollment TSV (the "Enrollment File ID" config var on the Enrollment Configuration page) and keeps a `Student_ID` only if it has at least one Enrollment row with `Status = "Enrolled"` (case-insensitive; `12345.0` is read as `12345`). Wait List, Drop, Cancelled and every other status do not count. The check reads the source file, not Salesforce, so it does not depend on the Enrollment Import having run. The scan stops as soon as every student in the window has been found. The run stops with an error if "Enrollment File ID" is empty or the file has no `Student_ID` or `Status` column. Skipped students are counted in the log.
+Only students who are enrolled in a course get a User. The flow reads the Enrollment TSV (the "Enrollment File ID" config var on the Enrollment Configuration page) and keeps a `Student_ID` only if it has at least one Enrollment row with `Status = "Enrolled"` (case-insensitive; `12345.0` is read as `12345`). Wait List, Drop, Cancelled and every other status do not count. The check reads the source file, not Salesforce, so it does not depend on the Enrollment Import having run. Since 2026-10-28 the Enrollment file is read once per run, when the Student index is built (below), instead of once per window. The run stops with an error if "Enrollment File ID" is empty or the file has no `Student_ID` or `Status` column. Skipped students are counted in the log.
 
-**Skipped tab (2026-10-26).** Every row the flow drops before the User upload is written to a "Skipped" tab in the results spreadsheet, with columns `Student_ID`, `Reason`, `Detail`, `Window #` and `Window Start Byte`. Reasons: *Column count does not match header*, *Invalid Student_ID*, *Duplicate Student_ID (merged)* (one row per extra row), *Not enrolled*, *No matching Account*, *No usable email*. The tab is written before the upload, so its rows are kept even if the execution later hands off or ends early. If the run has no spreadsheet yet, one is created to hold it, and the Success/Errors tabs are added when the first results arrive. A failed write is logged with the skipped Student_IDs and does not stop the import. Every source row now lands in exactly one of Success, Errors, Not Processed or Skipped.
+**Skipped tab (2026-10-26).** Every row the flow drops before the User upload is written to a "Skipped" tab in the results spreadsheet, with columns `Student_ID`, `Reason`, `Detail`, `Window #` and `Window Start Byte`. Reasons: *Column count does not match header*, *Invalid Student_ID*, *Duplicate Student_ID (merged)* (one row per extra row), *Not enrolled*, *No matching Account*, *No usable email*. The tab is written before the upload, so its rows are kept even if the execution later hands off or ends early. If the run has no spreadsheet yet, one is created to hold it, and the Success/Errors tabs are added when the first results arrive. Since 2026-10-28 a write that still fails after retries stops the run (see below).
+
+#### Student index and row accounting (added 2026-10-28)
+
+**Problem.** Duplicates were merged only inside one 500-row window. A student in two windows was sent twice, and the later window decided `IsActive`, so an old `Inactive=TRUE` row could switch off a User an earlier window had made active. About 2,409 source rows were also in no tab, and nothing in the run flagged it.
+
+**Student index.** Before window 1, the flow reads the whole Account Login file once (`src/accountLoginIndex.ts`) and saves a JSON index to Drive, in the Failed Records folder, named `Stanford CSP - Account Login Import - Student Index - <file id>.json`. For each `Student_ID` the index records:
+- its first valid row (start byte, line number and window)
+- whether any of its rows is active
+- how many rows it has
+- whether it is enrolled
+
+The index also records the header row and every window's start byte. It holds IDs, flags and positions only, no names or email addresses. It is reused while the Account Login file, the Enrollment file and the window size are unchanged (same size and modified time), and rebuilt otherwise. Its ID is passed from one window to the next.
+
+**One User per student.** A window sends a student only from that student's first row in the file, with `IsActive = true` if any of the student's rows is active. Every other row for that `Student_ID`, in the same window or a later one, goes to Skipped as *Duplicate Student_ID (merged)*, with the line and window it was merged into.
+
+**Restarts.** A run started by hand at a byte offset takes its headers and window number from the index. Before this, a restart without `headers` in the payload read its first data line as the header row and dropped every later row as *Invalid Student_ID*. To keep writing to the same results spreadsheet, set the optional **"Account Login Results Spreadsheet ID"** config var to the sheet ID from the first run's log. Leave it empty for a fresh run, because a sheet from before this change has no `Window #` column.
+
+**Row accounting.**
+- Success, Errors and Not Processed rows start with a `Window #` column.
+- A sent `Student_ID` that Salesforce returns in neither result file is written to Not Processed, including after a job hand-off.
+- Each window checks that rows read = Skipped + sent before uploading, and that sent = Success + Errors + Not Processed after the results are written.
+- Each window writes one row to a **Window Log** tab: Window #, start and end byte, rows read, blank lines, Skipped, sent, Success, Errors, Not Processed, Check (`OK` / `MISMATCH`) and finish time.
+- Google Sheets writes are retried on dropped connections, 429 and 5xx. If a Skipped or results write still fails, or a count check fails, the run stops with an error naming the byte offset to restart from. A failed Window Log write is only logged, because the window's rows are already on their tabs by then.
+- At the end, the log gives the file's total data rows. Success + Errors + Not Processed + Skipped across all windows should equal that number.
 
 #### Objects Created
 
@@ -953,3 +977,4 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | 21 | **Account Login — only enrolled students get a User** | **Decision (2026-10-21):** import an Account Login row only when its `Student_ID` has a `Status = "Enrolled"` row in the Enrollment source file. Implemented in the flow; reuses the "Enrollment File ID" config var |
 | 22 | **Account Login — User Bulk job can outlast one execution** | **Fixed (2026-10-22):** window 2 of the full run timed out (E100) waiting on a 1,664-User job. Windows cut to 500 rows; the flow hands a still-running job to the next execution instead of waiting past the limit |
 | 23 | **Account Login — skipped rows missing from the results sheet** | **Fixed (2026-10-26):** about 15,000 rows were in neither Success nor Errors because rows dropped before the upload were only counted in the log. They are now written to a "Skipped" tab with their reason |
+| 24 | **Account Login — duplicates across windows; rows in no tab** | **Fixed (2026-10-28):** a Student index built from the whole file once sends one User per `Student_ID` (first row, active if any row is active); the rest go to Skipped. Each window's counts are checked and logged on a Window Log tab, and the run stops when a row cannot be placed or a sheet write fails |

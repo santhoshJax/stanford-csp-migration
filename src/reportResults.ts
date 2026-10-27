@@ -582,14 +582,26 @@ export interface ContactResultsParams {
   spreadsheetId?: string;
 }
 
+/** Rows written to each tab by createResultsSheetFromContacts. */
+export interface ResultTabCounts {
+  success: number;
+  errors: number;
+  notProcessed: number;
+}
+
 /**
  * Write results using the contacts array as the source of truth.
- * Every record is guaranteed to appear in either Success or Errors — no gaps.
- * Salesforce Record IDs and error messages are merged in from the Bulk API CSVs.
+ * Every record appears in exactly one of Success, Errors or Not Processed.
+ * Salesforce Record IDs and error messages are merged in from the Bulk API
+ * CSVs. Returns how many rows went to each tab so callers can check counts.
  */
 export async function createResultsSheetFromContacts(
   params: ContactResultsParams,
-): Promise<{ url: string; spreadsheetId: string }> {
+): Promise<{
+  url: string;
+  spreadsheetId: string;
+  counts: ResultTabCounts;
+}> {
   const {
     contacts,
     externalIdField,
@@ -608,6 +620,7 @@ export async function createResultsSheetFromContacts(
         ? `https://docs.google.com/spreadsheets/d/${params.spreadsheetId}`
         : "",
       spreadsheetId: params.spreadsheetId ?? "",
+      counts: { success: 0, errors: 0, notProcessed: 0 },
     };
   }
 
@@ -681,7 +694,7 @@ export async function createResultsSheetFromContacts(
     }
   }
 
-  return writeRowsToResultsSheet(
+  const written = await writeRowsToResultsSheet(
     sHeaders,
     sRows,
     eHeaders,
@@ -694,6 +707,14 @@ export async function createResultsSheetFromContacts(
     auth,
     folderId,
   );
+  return {
+    ...written,
+    counts: {
+      success: sRows.length,
+      errors: eRows.length,
+      notProcessed: uRows.length,
+    },
+  };
 }
 
 export { describeAxiosError };

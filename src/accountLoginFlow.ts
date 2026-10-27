@@ -50,16 +50,25 @@
  *      who have at least one row in the Enrollment source file (the
  *      "Enrollment File ID" config var) with Status = "Enrolled" get a User.
  *      The check reads the source file, not Salesforce, so it does not
- *      depend on the Enrollment Import having run. Applied after the
- *      Student_ID de-duplication and before the Contact lookup.
+ *      depend on the Enrollment Import having run. The Enrollment file is
+ *      read once per run, when the Student index is built.
+ *   5. Not the student's first row in the file → skip as a duplicate
+ *      (2026-10-28). One User is sent per Student_ID across the whole file,
+ *      from its first row, with IsActive = true if ANY of its rows is active.
+ *      See src/accountLoginIndex.ts.
  *
  * Skipped tab (added 2026-10-26): every row dropped by a rule above — and
- * every row whose column count does not match the header, and every extra
- * row merged by the Student_ID de-duplication — is written to a "Skipped" tab
- * in the results spreadsheet with its Student_ID and reason. The tab is
- * written BEFORE the User upload, so the rows are recorded even if the
- * execution later hands off or ends early. Every source row therefore appears
- * in exactly one of Success, Errors, Not Processed or Skipped.
+ * every row whose column count does not match the header — is written to a
+ * "Skipped" tab in the results spreadsheet with its Student_ID and reason.
+ * The tab is written BEFORE the User upload.
+ *
+ * Row accounting (added 2026-10-28): every window checks that the rows it
+ * read equal Skipped + Success + Errors + Not Processed, writes one row to a
+ * "Window Log" tab, and STOPS the run — naming the byte offset to restart
+ * from — when the counts do not add up or a Skipped / results write still
+ * fails after retries. Success, Errors and Not Processed rows carry a
+ * "Window #" column. The optional "Account Login Results Spreadsheet ID"
+ * config var keeps a restarted run writing to the same spreadsheet.
  *
  * NOTE — Active/Inactive (confirmed with architect): the source "Inactive"
  * flag IS the duplicate marker — 4D only ever sets it true when a row was
@@ -90,11 +99,12 @@
 import { flow } from "@prismatic-io/spectral";
 import axios from "axios";
 import { parse, type ParseResult, type Parser } from "papaparse";
-import { Transform, type Readable } from "stream";
+import { type Readable } from "stream";
 import {
   str,
-  toBool,
   cleanEmail,
+  describeHttpError,
+  withTransientRetry,
   getAccessToken,
   getSfInstanceUrl,
   submitBulkJob,
@@ -106,12 +116,33 @@ import {
   appendSkippedRecords,
   createResultsSheetFromContacts,
   createResultsSpreadsheetWithTab,
+  type ResultTabCounts,
 } from "./reportResults";
+import {
+  SKIP_REASON,
+  applyStudentIndex,
+  classifyDataLine,
+  isBlankLine,
+  loadOrBuildStudentIndex,
+  scanTsvLines,
+  truncateDetail,
+  windowNumberForByte,
+  type PendingLoginRow,
+  type SkippedLoginRow,
+} from "./accountLoginIndex";
 import {
   sfQueryAll,
   insertViaComposite,
   parseSuccessfulSfIds,
 } from "./commerceShared";
+
+// Re-exported so existing imports from this module keep working.
+export {
+  SKIP_REASON,
+  describeColumnMismatch,
+  type PendingLoginRow,
+  type SkippedLoginRow,
+} from "./accountLoginIndex";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -157,15 +188,6 @@ const DEFAULT_LANGUAGE_LOCALE_KEY = "en_US";
 const DEFAULT_TIME_ZONE_SID_KEY = "America/Los_Angeles";
 const DEFAULT_EMAIL_ENCODING_KEY = "UTF-8";
 
-// Reasons written to the "Skipped" tab — one per row-skip rule.
-export const SKIP_REASON = {
-  COLUMN_MISMATCH: "Column count does not match header",
-  INVALID_STUDENT_ID: "Invalid Student_ID",
-  DUPLICATE_STUDENT_ID: "Duplicate Student_ID (merged)",
-  NOT_ENROLLED: "Not enrolled",
-  NO_MATCHING_ACCOUNT: "No matching Account",
-  NO_USABLE_EMAIL: "No usable email",
-} as const;
 export const SKIPPED_TAB_HEADERS = [
   "Student_ID",
   "Reason",
@@ -173,34 +195,25 @@ export const SKIPPED_TAB_HEADERS = [
   "Window #",
   "Window Start Byte",
 ];
-// Raw source text copied into "Detail" is cut to this length so one bad row
-// (e.g. a line with an embedded break) cannot blow past the Sheets cell limit.
-const MAX_DETAIL_CHARS = 500;
-
-// ── Raw TSV shape ──────────────────────────────────────────────────────────────
-
-interface RawAccountLoginRecord {
-  // Username is intentionally unused — per mapping doc, User.Username is
-  // always derived from the matched Contact's email, not this column.
-  Username?: string;
-  Student_ID?: string;
-  Inactive?: string;
-  [key: string]: string | undefined;
-}
-
-// ── Intermediate row shape (pre Contact-lookup enrichment) ───────────────────
-
-export interface PendingLoginRow {
-  studentId: string;
-  isActive: boolean;
-}
-
-/** A source row that never became a User. Written to the "Skipped" tab. */
-export interface SkippedLoginRow {
-  studentId: string;
-  reason: string;
-  detail: string;
-}
+// One row per window in the "Window Log" tab (added 2026-10-28). "Rows Read"
+// should equal Skipped + Success + Errors + Not Processed; "Check" says so.
+export const WINDOW_LOG_TAB = "Window Log";
+export const WINDOW_LOG_HEADERS = [
+  "Window #",
+  "Start Byte",
+  "End Byte",
+  "Rows Read",
+  "Blank Lines",
+  "Skipped",
+  "Sent to Salesforce",
+  "Success",
+  "Errors",
+  "Not Processed",
+  "Check",
+  "Finished At",
+];
+// Column added in front of every Success / Errors / Not Processed row.
+const WINDOW_NUMBER_COLUMN = "Window #";
 
 // ── Salesforce User shape ─────────────────────────────────────────────────────
 
@@ -224,77 +237,122 @@ interface StreamResult {
   rows: PendingLoginRow[];
   hasMore: boolean;
   nextByteOffset: number;
-  parsedHeaders: string[];
   firstId: string;
   lastId: string;
-  skippedCount: number;
+  /** Non-blank data lines read — every one must end up in a tab. */
+  dataLines: number;
+  blankLines: number;
   skippedRows: SkippedLoginRow[];
+}
+
+/**
+ * One window's bookkeeping. Carried in the hand-off payload when the User job
+ * outlasts an execution, so the execution that finishes the window can run
+ * the count check and write the Window Log row.
+ */
+export interface WindowState {
+  windowNumber: number;
+  startByte: number;
+  endByte: number;
+  dataLines: number;
+  blankLines: number;
+  skippedCount: number;
+  /** Student_IDs sent to Salesforce; null when not known (older hand-off). */
+  sentStudentIds: string[] | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-/** Cut source text copied into the Skipped tab to MAX_DETAIL_CHARS. */
-function truncateDetail(text: string): string {
-  return text.length > MAX_DETAIL_CHARS
-    ? `${text.slice(0, MAX_DETAIL_CHARS)}…`
-    : text;
+/**
+ * Returns a description of the problem when a window's rows do not add up,
+ * or null when every row read is either skipped or sent to Salesforce.
+ */
+export function checkWindowCounts(
+  dataLines: number,
+  skipped: number,
+  sent: number,
+): string | null {
+  if (skipped + sent === dataLines) return null;
+  return (
+    `read ${dataLines} row(s) but recorded ${skipped} skipped + ${sent} sent = ` +
+    `${skipped + sent}`
+  );
+}
+
+/** Builds the Window Log row (columns of WINDOW_LOG_HEADERS). */
+export function toWindowLogRow(
+  window: WindowState,
+  counts: ResultTabCounts,
+  finishedAt: string,
+): string[] {
+  const placed =
+    window.skippedCount + counts.success + counts.errors + counts.notProcessed;
+  const check =
+    window.sentStudentIds === null
+      ? ""
+      : placed === window.dataLines
+        ? "OK"
+        : `MISMATCH (${placed} placed)`;
+  return [
+    String(window.windowNumber),
+    String(window.startByte),
+    String(window.endByte),
+    String(window.dataLines),
+    String(window.blankLines),
+    String(window.skippedCount),
+    window.sentStudentIds === null ? "" : String(window.sentStudentIds.length),
+    String(counts.success),
+    String(counts.errors),
+    String(counts.notProcessed),
+    check,
+    finishedAt,
+  ];
 }
 
 /**
- * Builds the Skipped entry for a source line whose column count does not match
- * the header. The Student_ID is taken from its column when the line is long
- * enough to have one, so the row can still be traced.
+ * Rows for the results sheet: each record with "Window #" in front, plus a
+ * bare row for every sent Student_ID Salesforce returned in neither result
+ * file, so it lands on the Not Processed tab instead of disappearing.
  */
-export function describeColumnMismatch(
-  row: string[],
-  headers: string[],
-): SkippedLoginRow {
-  const idIndex = headers.indexOf("Student_ID");
-  const studentId =
-    idIndex >= 0 && idIndex < row.length ? str(row[idIndex]) : "";
-  const rawLine = row.join("\t").replace(/\r/g, "");
-  return {
-    studentId,
-    reason: SKIP_REASON.COLUMN_MISMATCH,
-    detail: truncateDetail(
-      `Expected ${headers.length} columns, found ${row.length}. Line: ${rawLine}`,
-    ),
-  };
-}
-
-/**
- * Collapses rows that share a Student_ID into one entry per student. A student
- * is active if ANY of their rows is active (rule confirmed 2026-10-13). Every
- * row beyond the first for a Student_ID is returned in `duplicates` so it can
- * be listed on the Skipped tab.
- */
-export function collapseDuplicateStudentIds(rows: PendingLoginRow[]): {
-  isActiveByStudentId: Map<string, boolean>;
-  uniqueStudentIds: string[];
-  duplicates: SkippedLoginRow[];
-} {
-  const isActiveByStudentId = new Map<string, boolean>();
-  const duplicates: SkippedLoginRow[] = [];
-  for (const row of rows) {
-    const seen = isActiveByStudentId.has(row.studentId);
-    if (seen) {
-      duplicates.push({
-        studentId: row.studentId,
-        reason: SKIP_REASON.DUPLICATE_STUDENT_ID,
-        detail:
-          `Another row in this window has the same Student_ID; merged into one ` +
-          `User (this row: Inactive=${String(!row.isActive).toUpperCase()}).`,
+export function toResultSheetRecords(
+  records: Record<string, unknown>[],
+  sentStudentIds: string[] | null,
+  windowNumber: number,
+): Record<string, unknown>[] {
+  const rows: Record<string, unknown>[] = records.map((r) => ({
+    [WINDOW_NUMBER_COLUMN]: String(windowNumber),
+    ...r,
+  }));
+  if (sentStudentIds === null) return rows;
+  const present = new Set(
+    records.map((r) => String(r.Federation_Identifier__c ?? "")),
+  );
+  for (const id of sentStudentIds) {
+    if (!present.has(id)) {
+      rows.push({
+        [WINDOW_NUMBER_COLUMN]: String(windowNumber),
+        Federation_Identifier__c: id,
       });
     }
-    isActiveByStudentId.set(
-      row.studentId,
-      (isActiveByStudentId.get(row.studentId) ?? false) || row.isActive,
-    );
   }
+  return rows;
+}
+
+/** Reads the WindowState passed in a hand-off payload, if any. */
+function parseWindowState(value: unknown): WindowState | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const v = value as Record<string, unknown>;
+  const num = (x: unknown) => (typeof x === "number" ? x : 0);
   return {
-    isActiveByStudentId,
-    uniqueStudentIds: [...isActiveByStudentId.keys()],
-    duplicates,
+    windowNumber: num(v.windowNumber) || 1,
+    startByte: num(v.startByte),
+    endByte: num(v.endByte),
+    dataLines: num(v.dataLines),
+    blankLines: num(v.blankLines),
+    skippedCount: num(v.skippedCount),
+    sentStudentIds: Array.isArray(v.sentStudentIds)
+      ? (v.sentStudentIds as unknown[]).map(String)
+      : null,
   };
 }
 
@@ -724,12 +782,74 @@ async function resolveEnrolledStudentIds(
 
 // ── Google Drive streaming + TSV parsing ───────────────────────────────────────
 
+/**
+ * Reads one window from a stream that starts at byteOffset. Uses the header
+ * row from the Student index, so a run restarted by hand at any byte offset
+ * reads the columns correctly. (Before 2026-10-28 a restart without headers
+ * in the payload took its first data line as the header row and dropped every
+ * later row as "Invalid Student_ID".) The window ends at the first non-blank
+ * line after maxRows valid rows — the same rule the index uses.
+ */
+export async function parseWindowFromStream(
+  source: NodeJS.ReadableStream,
+  byteOffset: number,
+  maxRows: number,
+  headers: string[],
+): Promise<StreamResult> {
+  const rows: PendingLoginRow[] = [];
+  const skippedRows: SkippedLoginRow[] = [];
+  let dataLines = 0;
+  let blankLines = 0;
+  // At byte 0 the first non-blank line is the header row.
+  let headerSeen = byteOffset > 0;
+
+  const { stoppedAtByte, endByte } = await scanTsvLines(
+    source,
+    byteOffset,
+    (row, lineStartByte) => {
+      if (isBlankLine(row)) {
+        blankLines++;
+        return "continue";
+      }
+      if (!headerSeen) {
+        headerSeen = true;
+        return "continue";
+      }
+      if (rows.length >= maxRows) return "stop";
+
+      dataLines++;
+      const line = classifyDataLine(row, headers);
+      if (line.kind === "skipped") {
+        skippedRows.push(line.skipped);
+        return "continue";
+      }
+      rows.push({
+        studentId: line.studentId,
+        isActive: line.isActive,
+        lineStartByte,
+      });
+      return "continue";
+    },
+  );
+
+  return {
+    rows,
+    hasMore: stoppedAtByte !== null,
+    nextByteOffset: stoppedAtByte ?? endByte,
+    firstId: rows[0]?.studentId ?? "",
+    lastId: rows[rows.length - 1]?.studentId ?? "",
+    dataLines,
+    blankLines,
+    skippedRows,
+  };
+}
+
 async function streamAndParseTsv(
   fileId: string,
   accessToken: string,
   byteOffset: number,
   maxRows: number,
-  knownHeaders: string[],
+  headers: string[],
 ): Promise<StreamResult> {
   const reqHeaders: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
@@ -744,122 +864,12 @@ async function streamAndParseTsv(
       responseType: "stream",
     },
   );
-
-  const lineEndBytes: number[] = [];
-  let totalBytesReceived = 0;
-
-  const byteTracker = new Transform({
-    transform(
-      chunk: Buffer,
-      _encoding: BufferEncoding,
-      callback: (err?: Error | null, data?: Buffer) => void,
-    ) {
-      for (let i = 0; i < chunk.length; i++) {
-        if (chunk[i] === 0x0a) {
-          lineEndBytes.push(byteOffset + totalBytesReceived + i + 1);
-        }
-      }
-      totalBytesReceived += chunk.length;
-      callback(null, chunk);
-    },
-  });
-
-  (response.data as NodeJS.ReadableStream).pipe(byteTracker);
-
-  return new Promise((resolve, reject) => {
-    let parsedHeaders: string[] =
-      knownHeaders.length > 0 ? [...knownHeaders] : [];
-    const rows: PendingLoginRow[] = [];
-    let aborted = false;
-    let firstId = "";
-    let lastId = "";
-    let skippedCount = 0;
-    const skippedRows: SkippedLoginRow[] = [];
-    let lastCompletedCursor = byteOffset;
-    let stepCount = 0;
-
-    parse(byteTracker as unknown as NodeJS.ReadableStream, {
-      delimiter: "\t",
-      header: false,
-      skipEmptyLines: false,
-      quoteChar: "\x00",
-
-      step: (result: ParseResult<string[]>, parser: Parser) => {
-        if (aborted) return;
-
-        const row = result.data as unknown as string[];
-        const rowEndByte =
-          lineEndBytes[stepCount] ?? byteOffset + totalBytesReceived;
-        stepCount++;
-
-        if (row.length === 0 || row.every((c) => c.replace(/\r/g, "") === "")) {
-          lastCompletedCursor = rowEndByte;
-          return;
-        }
-
-        if (parsedHeaders.length === 0) {
-          parsedHeaders = row.map((h) => h.replace(/\r/g, "").trim());
-          lastCompletedCursor = rowEndByte;
-          return;
-        }
-
-        if (rows.length >= maxRows) {
-          aborted = true;
-          parser.abort();
-          return;
-        }
-
-        if (row.length !== parsedHeaders.length) {
-          skippedCount++;
-          skippedRows.push(describeColumnMismatch(row, parsedHeaders));
-          lastCompletedCursor = rowEndByte;
-          return;
-        }
-
-        const record: RawAccountLoginRecord = {};
-        parsedHeaders.forEach((header, i) => {
-          record[header] = row[i] ?? "";
-        });
-
-        // Skip rule #1 (mapping doc): no Student_ID, or Student_ID = 0.
-        // /^[1-9]\d*$/ rejects blank, non-numeric, and "0"/"00" style values.
-        const studentId = str(record.Student_ID);
-        if (!/^[1-9]\d*$/.test(studentId)) {
-          skippedCount++;
-          skippedRows.push({
-            studentId,
-            reason: SKIP_REASON.INVALID_STUDENT_ID,
-            detail: truncateDetail(
-              `Student_ID "${studentId}" is blank, 0 or not a whole number.`,
-            ),
-          });
-          lastCompletedCursor = rowEndByte;
-          return;
-        }
-
-        // Inverted — see "NOTE — Active/Inactive" in the file header comment.
-        const isActive = !toBool(record.Inactive);
-
-        if (!firstId) firstId = studentId;
-        lastId = studentId;
-        rows.push({ studentId, isActive });
-        lastCompletedCursor = rowEndByte;
-      },
-
-      complete: () =>
-        resolve({
-          rows,
-          hasMore: aborted,
-          nextByteOffset: lastCompletedCursor,
-          parsedHeaders,
-          firstId,
-          lastId,
-          skippedCount,
-          skippedRows,
-        }),
-      error: (err: Error) => reject(err),
-    });
-  });
+  return parseWindowFromStream(
+    response.data as NodeJS.ReadableStream,
+    byteOffset,
+    maxRows,
+    headers,
+  );
 }
 
 // ── Flow ───────────────────────────────────────────────────────────────────────
@@ -868,11 +878,13 @@ export const accountLoginImport = flow({
   name: "Account Login Import",
   stableKey: "7c1d9e2a-4b3f-4a6c-9d1e-2f3a4b5c6d7e",
   description:
-    "Streams the Account Login TSV from Google Drive, keeps only students with an " +
-    "Enrolled row in the Enrollment TSV, resolves each Student_ID " +
-    "against the Account created by Student Import, and upserts Salesforce User " +
-    "records (Federation_Identifier__c as the upsert key) via Bulk API 2.0. Must run " +
-    "after Student Import. Recurses until the full file is processed.",
+    "Builds a Student index from the whole Account Login TSV once, then streams the " +
+    "file in windows. Sends one User per Student_ID (its first row, active if any " +
+    "row is active), only for students with an Enrolled row in the Enrollment TSV, " +
+    "resolves each Student_ID against the Account created by Student Import, and " +
+    "upserts Salesforce User records (Federation_Identifier__c as the upsert key) " +
+    "via Bulk API 2.0. Every row is written to Success, Errors, Not Processed or " +
+    "Skipped. Must run after Student Import. Recurses until the full file is processed.",
 
   onTrigger: async (_context, payload) => {
     await Promise.resolve();
@@ -885,28 +897,28 @@ export const accountLoginImport = flow({
     // before the platform's 15-minute limit.
     const pollDeadlineMs = Date.now() + POLL_BUDGET_MS;
 
-    // ── 1. Read cursor (byteOffset) from trigger payload ──────────────────────
+    // ── 1. Read cursor (byteOffset) and hand-off state from the payload ───────
     const triggerBody = (
       params.onTrigger.results as unknown as
         { body?: { data?: unknown } } | undefined
     )?.body?.data as Record<string, unknown> | undefined;
     const byteOffset =
       typeof triggerBody?.byteOffset === "number" ? triggerBody.byteOffset : 0;
-    const knownHeaders = Array.isArray(triggerBody?.headers)
+    const payloadHeaders = Array.isArray(triggerBody?.headers)
       ? (triggerBody.headers as string[])
       : [];
-    const windowNumber =
+    const payloadWindowNumber =
       typeof triggerBody?.windowNumber === "number"
         ? triggerBody.windowNumber
-        : 1;
-    const sheetId =
+        : undefined;
+    const payloadSheetId =
       typeof triggerBody?.sheetId === "string"
         ? triggerBody.sheetId
         : undefined;
-    // The results spreadsheet for this run. Can be created during this
-    // execution (first Skipped rows, or first results) and is passed on to
-    // the next execution.
-    let currentSheetId = sheetId;
+    const payloadIndexFileId =
+      typeof triggerBody?.indexFileId === "string"
+        ? triggerBody.indexFileId
+        : undefined;
     // Set when the previous execution handed off a User Bulk job that was
     // still running. byteOffset is then the start of the NEXT window, and
     // pendingHasMore says whether that next window exists.
@@ -915,6 +927,7 @@ export const accountLoginImport = flow({
         ? triggerBody.pendingJobId
         : undefined;
     const pendingHasMore = triggerBody?.pendingHasMore === true;
+    const pendingWindow = parseWindowState(triggerBody?.pendingWindow);
     const handoffCount =
       typeof triggerBody?.handoffCount === "number"
         ? triggerBody.handoffCount
@@ -922,7 +935,7 @@ export const accountLoginImport = flow({
 
     logger.info(`[Account Login Import] Starting at byte offset ${byteOffset}`);
 
-    // ── 2. Resolve connections and file ID ─────────────────────────────────────
+    // ── 2. Resolve connections and config vars ────────────────────────────────
     const gdConn = configVars["Google Drive Connection"];
     const sfConn = configVars["Salesforce Connection"];
     const fileId = configVars["Account Login File ID"] as string | undefined;
@@ -936,12 +949,28 @@ export const accountLoginImport = flow({
     const permissionSetNames = parsePermissionSetNames(
       configVars["Account Login Permission Sets"] as string | undefined,
     );
+    const configuredSheetId =
+      str(
+        configVars["Account Login Results Spreadsheet ID"] as
+          string | undefined,
+      ).trim() || undefined;
 
     if (!fileId) throw new Error("Account Login File ID config var is empty.");
     if (!enrollmentFileId) {
       throw new Error(
         "[Account Login Import] Enrollment File ID config var is empty. It is needed to " +
           "check which students are enrolled (only enrolled students get a User).",
+      );
+    }
+
+    // The results spreadsheet for this run. The payload wins (later windows of
+    // the same run); otherwise the config var, so a run restarted by hand keeps
+    // writing to the same sheet; otherwise one is created on first write.
+    let currentSheetId = payloadSheetId ?? configuredSheetId;
+    if (!payloadSheetId && configuredSheetId) {
+      logger.info(
+        `[Account Login Import] Writing to the results spreadsheet set in ` +
+          `"Account Login Results Spreadsheet ID": ${configuredSheetId}`,
       );
     }
 
@@ -959,13 +988,122 @@ export const accountLoginImport = flow({
       ).invokeFlow("Account Login Import", payload);
     };
 
+    // Retries a Google Sheets write on dropped connections, 429 and 5xx.
+    const withSheetRetry = <T>(what: string, fn: () => Promise<T>) =>
+      withTransientRetry(fn, {
+        onRetry: (attempt, err, delayMs) =>
+          logger.warn(
+            `[Account Login Import] ${what} failed (${describeHttpError(err)}); ` +
+              `retry ${attempt} in ${delayMs / 1000}s.`,
+          ),
+      });
+
+    // Stops the run when a window's rows could not be recorded. Carrying on
+    // would leave those rows out of every tab without anyone noticing.
+    const stopRun = (problem: string, resumeByte: number): never => {
+      throw new Error(
+        `[Account Login Import] ${problem} The run has stopped so that no rows go ` +
+          `unrecorded. To continue, start the flow with byteOffset ${resumeByte}` +
+          (currentSheetId
+            ? ` and set "Account Login Results Spreadsheet ID" to ${currentSheetId} ` +
+              `to keep writing to the same results sheet.`
+            : "."),
+      );
+    };
+
+    // Writes this window's dropped rows to the "Skipped" tab, creating the
+    // results spreadsheet first when this run does not have one yet. Called
+    // before the User upload. If the write still fails after retries, the run
+    // stops (nothing has been uploaded for this window yet).
+    const writeSkippedRows = async (
+      skipped: SkippedLoginRow[],
+      window: WindowState,
+    ): Promise<void> => {
+      if (skipped.length === 0) return;
+      const sheetRows = toSkippedSheetRows(
+        skipped,
+        window.windowNumber,
+        window.startByte,
+      );
+      try {
+        if (!currentSheetId) {
+          const created = await withSheetRetry(
+            "Creating the results sheet",
+            () =>
+              createResultsSpreadsheetWithTab({
+                flowName: "Account Login Import",
+                objectName: "User",
+                accessToken: gdToken,
+                folderId: failedFolderId,
+                tabName: "Skipped",
+                headers: SKIPPED_TAB_HEADERS,
+              }),
+          );
+          currentSheetId = created.spreadsheetId;
+          logger.info(`[Account Login Import] Results sheet: ${created.url}`);
+        }
+        const sheetId = currentSheetId;
+        await withSheetRetry('Writing the "Skipped" tab', () =>
+          appendSkippedRecords(
+            sheetId,
+            gdToken,
+            SKIPPED_TAB_HEADERS,
+            sheetRows,
+          ),
+        );
+        logger.info(
+          `[Account Login Import] ${skipped.length} skipped row(s) written to the "Skipped" tab ` +
+            `(${summariseSkipReasons(skipped)}).`,
+        );
+      } catch (err: unknown) {
+        logger.error(
+          `[Account Login Import] Could not write ${skipped.length} row(s) to the "Skipped" tab ` +
+            `for window ${window.windowNumber}. Skipped Student_IDs: ` +
+            JSON.stringify(skipped.map((r) => [r.studentId, r.reason])),
+        );
+        stopRun(
+          `Writing the "Skipped" tab for window ${window.windowNumber} failed: ` +
+            `${describeHttpError(err)}. No Users were sent for this window.`,
+          window.startByte,
+        );
+      }
+    };
+
+    // One row per window on the "Window Log" tab. A failure here is only
+    // logged: every row of the window is already on a tab by this point.
+    const writeWindowLog = async (
+      window: WindowState,
+      counts: ResultTabCounts,
+    ): Promise<void> => {
+      if (!currentSheetId) return;
+      const sheetId = currentSheetId;
+      const row = toWindowLogRow(window, counts, new Date().toISOString());
+      try {
+        await withSheetRetry('Writing the "Window Log" tab', () =>
+          appendSkippedRecords(
+            sheetId,
+            gdToken,
+            WINDOW_LOG_HEADERS,
+            [row],
+            WINDOW_LOG_TAB,
+          ),
+        );
+      } catch (err: unknown) {
+        logger.warn(
+          `[Account Login Import] Could not write the "Window Log" row for window ` +
+            `${window.windowNumber}: ${describeHttpError(err)}. Row: ${JSON.stringify(row)}`,
+        );
+      }
+    };
+
     // After the User upsert: assign permission sets, write the results
-    // sheet, and return the results sheet Id for the next window.
+    // sheet, check the window's counts and write its Window Log row.
     const finishWindow = async (
       jobResult: BulkJobResult,
       records: Record<string, unknown>[],
       permissionSets: PermissionSetRow[],
-    ): Promise<string | undefined> => {
+      window: WindowState,
+    ): Promise<void> => {
       // ── 7. Assign permission sets to every User the upsert accepted ────────
       // successfulResults covers both newly created and updated Users, so a
       // re-run also back-fills Users imported before this step existed.
@@ -1004,67 +1142,61 @@ export const accountLoginImport = flow({
         );
       }
 
+      // ── 8. Results sheet ───────────────────────────────────────────────────
+      const sheetRecords = toResultSheetRecords(
+        records,
+        window.sentStudentIds,
+        window.windowNumber,
+      );
+      let counts: ResultTabCounts;
       try {
-        const sheet = await createResultsSheetFromContacts({
-          flowName: "Account Login Import",
-          objectName: "User",
-          contacts: records,
-          externalIdField: "Federation_Identifier__c",
-          failedExternalIds: jobResult.failedExternalIds,
-          successfulCsv: jobResult.successfulCsv,
-          failedCsv: jobResult.failedCsv,
-          accessToken: gdToken,
-          folderId: failedFolderId,
-          spreadsheetId: currentSheetId,
-        });
-        logger.info(`[Account Login Import] Results sheet: ${sheet.url}`);
-        return sheet.spreadsheetId || currentSheetId;
-      } catch (err: unknown) {
-        logger.warn(
-          `[Account Login Import] Could not update results sheet: ${String(err)}`,
-        );
-        return currentSheetId;
-      }
-    };
-
-    // Writes this window's dropped rows to the "Skipped" tab, creating the
-    // results spreadsheet first when this run does not have one yet. Called
-    // before the User upload so the rows are recorded even if the execution
-    // hands off or ends early. A failure here is logged, not thrown: losing
-    // the Skipped rows must not stop the import.
-    const writeSkippedRows = async (
-      skipped: SkippedLoginRow[],
-    ): Promise<void> => {
-      if (skipped.length === 0) return;
-      const sheetRows = toSkippedSheetRows(skipped, windowNumber, byteOffset);
-      try {
-        if (!currentSheetId) {
-          const created = await createResultsSpreadsheetWithTab({
+        const sheet = await withSheetRetry("Writing the results sheet", () =>
+          createResultsSheetFromContacts({
             flowName: "Account Login Import",
             objectName: "User",
+            contacts: sheetRecords,
+            externalIdField: "Federation_Identifier__c",
+            failedExternalIds: jobResult.failedExternalIds,
+            successfulCsv: jobResult.successfulCsv,
+            failedCsv: jobResult.failedCsv,
             accessToken: gdToken,
             folderId: failedFolderId,
-            tabName: "Skipped",
-            headers: SKIPPED_TAB_HEADERS,
-          });
-          currentSheetId = created.spreadsheetId;
-          logger.info(`[Account Login Import] Results sheet: ${created.url}`);
-        }
-        await appendSkippedRecords(
-          currentSheetId,
-          gdToken,
-          SKIPPED_TAB_HEADERS,
-          sheetRows,
+            spreadsheetId: currentSheetId,
+          }),
         );
-        logger.info(
-          `[Account Login Import] ${skipped.length} skipped row(s) written to the "Skipped" tab ` +
-            `(${summariseSkipReasons(skipped)}).`,
-        );
+        logger.info(`[Account Login Import] Results sheet: ${sheet.url}`);
+        currentSheetId = sheet.spreadsheetId || currentSheetId;
+        counts = sheet.counts;
       } catch (err: unknown) {
-        logger.warn(
-          `[Account Login Import] Could not write ${skipped.length} row(s) to the "Skipped" tab: ` +
-            `${String(err)}. Skipped Student_IDs: ` +
-            JSON.stringify(skipped.map((r) => [r.studentId, r.reason])),
+        return stopRun(
+          `Writing the Success / Errors tabs for window ${window.windowNumber} failed: ` +
+            `${describeHttpError(err)}. Salesforce job ${jobResult.jobId} has already ` +
+            `processed this window's ${records.length} User(s); restarting at this window ` +
+            `sends them again and they show as "Updated".`,
+          window.startByte,
+        );
+      }
+
+      logger.info(
+        `[Account Login Import] Window ${window.windowNumber}: ${window.dataLines} row(s) read — ` +
+          `${window.skippedCount} skipped, ${counts.success} success, ${counts.errors} errors, ` +
+          `${counts.notProcessed} not processed.`,
+      );
+      await writeWindowLog(window, counts);
+
+      // ── 8b. Count check — every row read is on exactly one tab ────────────
+      const placed =
+        window.skippedCount +
+        counts.success +
+        counts.errors +
+        counts.notProcessed;
+      if (window.sentStudentIds !== null && placed !== window.dataLines) {
+        stopRun(
+          `Count check failed for window ${window.windowNumber}: read ${window.dataLines} ` +
+            `row(s) but placed ${placed} on the Skipped, Success, Errors and Not Processed ` +
+            `tabs. Check that window's rows before carrying on; the next window starts at ` +
+            `byte ${window.endByte}.`,
+          window.endByte,
         );
       }
     };
@@ -1074,8 +1206,19 @@ export const accountLoginImport = flow({
     // while the flow handed off. This execution only waits for it, finishes
     // the window, and then moves on to the next window.
     if (pendingJobId) {
+      // A hand-off from the previous code version has no window state; the
+      // count check is then skipped for that one window.
+      const window: WindowState = pendingWindow ?? {
+        windowNumber: payloadWindowNumber ?? 1,
+        startByte: byteOffset,
+        endByte: byteOffset,
+        dataLines: 0,
+        blankLines: 0,
+        skippedCount: 0,
+        sentStudentIds: null,
+      };
       logger.info(
-        `[Account Login Import] Resuming window ${windowNumber}: waiting for User Bulk job ` +
+        `[Account Login Import] Resuming window ${window.windowNumber}: waiting for User Bulk job ` +
           `${pendingJobId} (hand-off ${handoffCount} of ${MAX_JOB_HANDOFFS}).`,
       );
       const permissionSets = await resolvePermissionSets(
@@ -1105,11 +1248,12 @@ export const accountLoginImport = flow({
         );
         await invokeSelf({
           byteOffset,
-          headers: knownHeaders,
-          windowNumber,
+          windowNumber: window.windowNumber,
           sheetId: currentSheetId,
+          indexFileId: payloadIndexFileId,
           pendingJobId,
           pendingHasMore,
+          pendingWindow: window,
           handoffCount: handoffCount + 1,
         });
         return { data: { byteOffset, rowsProcessed: 0, hasMore: true } };
@@ -1121,11 +1265,7 @@ export const accountLoginImport = flow({
         jobResult.successfulCsv,
         jobResult.failedCsv,
       );
-      const resumedSheetId = await finishWindow(
-        jobResult,
-        records,
-        permissionSets,
-      );
+      await finishWindow(jobResult, records, permissionSets, window);
 
       if (pendingHasMore) {
         logger.info(
@@ -1133,13 +1273,14 @@ export const accountLoginImport = flow({
         );
         await invokeSelf({
           byteOffset,
-          headers: knownHeaders,
-          windowNumber: windowNumber + 1,
-          sheetId: resumedSheetId,
+          windowNumber: window.windowNumber + 1,
+          sheetId: currentSheetId,
+          indexFileId: payloadIndexFileId,
         });
       } else {
         logger.info(
-          "[Account Login Import] All rows processed — import complete.",
+          `[Account Login Import] All rows processed — import complete. The "Window Log" tab ` +
+            `has one row per window.`,
         );
       }
       return {
@@ -1147,33 +1288,76 @@ export const accountLoginImport = flow({
       };
     }
 
-    // ── 3. Stream & parse the TSV window from Google Drive ─────────────────────
+    // ── 3. Student index (built once per source file, then reused) ────────────
+    const { index, indexFileId, built } = await loadOrBuildStudentIndex({
+      accountLoginFileId: fileId,
+      enrollmentFileId,
+      folderId: failedFolderId,
+      indexFileId: payloadIndexFileId,
+      maxRows: MAX_ROWS,
+      accessToken: gdToken,
+      resolveEnrolled: async (ids) =>
+        (await resolveEnrolledStudentIds(enrollmentFileId, gdToken, ids))
+          .enrolled,
+      logger,
+    });
+    if (built && byteOffset > 0) {
+      logger.warn(
+        `[Account Login Import] The Student index was rebuilt part-way through the file ` +
+          `(byte ${byteOffset}). If a source file was replaced, start again from byte 0.`,
+      );
+    }
+    const windowNumber = windowNumberForByte(
+      index.windowStartBytes,
+      byteOffset,
+    );
+    if (!index.windowStartBytes.includes(byteOffset)) {
+      logger.warn(
+        `[Account Login Import] Byte ${byteOffset} is not where a window starts in a full run. ` +
+          `Window numbers continue from window ${windowNumber}, the window that contains it.`,
+      );
+    }
+    if (
+      payloadWindowNumber !== undefined &&
+      payloadWindowNumber !== windowNumber
+    ) {
+      logger.info(
+        `[Account Login Import] Window number from the payload (${payloadWindowNumber}) ` +
+          `differs from the index (${windowNumber}); using ${windowNumber}.`,
+      );
+    }
+    if (
+      payloadHeaders.length > 0 &&
+      payloadHeaders.join("\t") !== index.headers.join("\t")
+    ) {
+      logger.warn(
+        `[Account Login Import] The headers passed in the payload differ from the file's ` +
+          `header row; using the file's header row.`,
+      );
+    }
+
+    // ── 4. Stream & parse the TSV window from Google Drive ─────────────────────
     logger.info(
-      `[Account Login Import] Streaming from byte ${byteOffset} of Drive file ${fileId}…`,
+      `[Account Login Import] Window ${windowNumber} of ${index.totals.windows}: streaming ` +
+        `from byte ${byteOffset} of Drive file ${fileId}…`,
     );
     const parsed = await streamAndParseTsv(
       fileId,
       gdToken,
       byteOffset,
       MAX_ROWS,
-      knownHeaders,
+      index.headers,
     );
-    const {
-      nextByteOffset,
-      parsedHeaders,
-      firstId,
-      lastId,
-      skippedCount,
-      skippedRows: parseSkippedRows,
-    } = parsed;
-    let rows = parsed.rows;
-    let hasMore = parsed.hasMore;
+    const { nextByteOffset, firstId, lastId, blankLines } = parsed;
+    let { rows, hasMore, dataLines } = parsed;
 
     if (TEST_MODE && rows.length > TEST_RECORD_LIMIT) {
       logger.info(
         `[Account Login Import] TEST MODE — TEST_RECORD_LIMIT is ${TEST_RECORD_LIMIT}; ` +
           `trimming ${rows.length} parsed rows down to the first ${TEST_RECORD_LIMIT} and skipping recursion.`,
       );
+      // Trimmed rows are not processed, so they leave the count check too.
+      dataLines -= rows.length - TEST_RECORD_LIMIT;
       rows = rows.slice(0, TEST_RECORD_LIMIT);
       hasMore = false;
     } else if (TEST_MODE) {
@@ -1185,16 +1369,18 @@ export const accountLoginImport = flow({
     }
 
     logger.info(
-      `[Account Login Import] Parsed ${rows.length} rows` +
-        ` (hasMore=${hasMore}, nextByte=${nextByteOffset}, skipped=${skippedCount},` +
-        ` firstId=${firstId}, lastId=${lastId})`,
+      `[Account Login Import] Read ${dataLines} row(s): ${rows.length} with a usable Student_ID, ` +
+        `${parsed.skippedRows.length} rejected by the parser, ${blankLines} blank line(s) ` +
+        `(hasMore=${hasMore}, nextByte=${nextByteOffset}, firstId=${firstId}, lastId=${lastId})`,
     );
 
     // Every row dropped in this window, with its reason — see writeSkippedRows.
-    const skippedRows: SkippedLoginRow[] = [...parseSkippedRows];
+    const skippedRows: SkippedLoginRow[] = [...parsed.skippedRows];
+    const records: SalesforceUserRecord[] = [];
+    let permissionSets: PermissionSetRow[] = [];
 
     if (rows.length > 0) {
-      // ── 4. Resolve the Profile once per window ────────────────────────────
+      // ── 5. Resolve the Profile once per window ────────────────────────────
       const profileId = await resolveProfileId(
         sfInstanceUrl,
         sfToken,
@@ -1207,10 +1393,10 @@ export const accountLoginImport = flow({
         );
       }
 
-      // ── 4b. Resolve the permission sets once per window ───────────────────
+      // ── 5b. Resolve the permission sets once per window ───────────────────
       // Done before the upsert so a wrong name stops the run before any User
       // is created without its permission sets.
-      const permissionSets = await resolvePermissionSets(
+      permissionSets = await resolvePermissionSets(
         sfInstanceUrl,
         sfToken,
         permissionSetNames,
@@ -1221,71 +1407,51 @@ export const accountLoginImport = flow({
             "(none)"),
       );
 
-      // ── 5. Collapse duplicate Student_ID rows within this window ───────────
-      // The source table can carry more than one Account Login row per
-      // Student_ID (e.g. a stale row plus the live one). Username/Email/
-      // FirstName/LastName/Alias all come from the matched Contact — identical
-      // regardless of which row triggered the lookup — so IsActive is the only
-      // field that actually varies between duplicate rows. Rule (confirmed
-      // against real data, 2026-10-13): if ANY row for a Student_ID has
-      // Inactive = FALSE, the person is active — that's the one live record;
-      // Inactive = TRUE rows are the stale duplicates. Collapsing here also
-      // avoids sending more than one row per external ID in the same Bulk API
-      // batch, which Salesforce doesn't guarantee a deterministic result for.
-      const { isActiveByStudentId, uniqueStudentIds, duplicates } =
-        collapseDuplicateStudentIds(rows);
+      // ── 6. One User per student across the WHOLE file ─────────────────────
+      // Only the student's first row in the file is sent, with IsActive = true
+      // if ANY of their rows is active (rule confirmed 2026-10-13). Every other
+      // row for that Student_ID, in this window or any other, goes to Skipped
+      // naming the row it was merged into. Before 2026-10-28 this was done
+      // per window only, so a student in two windows was sent twice and the
+      // last window decided IsActive.
+      const { owners, duplicates } = applyStudentIndex(rows, index);
       skippedRows.push(...duplicates);
-      const duplicateRowCount = duplicates.length;
-      if (duplicateRowCount > 0) {
+      if (duplicates.length > 0) {
         logger.info(
-          `[Account Login Import] ${duplicateRowCount} duplicate Student_ID row(s) collapsed in this window.`,
+          `[Account Login Import] ${duplicates.length} row(s) merged into their student's first row.`,
         );
       }
 
-      // ── 5b. Keep only students enrolled in at least one course ─────────────
-      // Decision 2026-10-21: a User is created only when the Enrollment
-      // source file has a row for this Student_ID with Status = "Enrolled".
-      const { enrolled, rowsRead } = await resolveEnrolledStudentIds(
-        enrollmentFileId,
-        gdToken,
-        new Set(uniqueStudentIds),
-      );
-      const dedupedStudentIds: string[] = [];
-      for (const id of uniqueStudentIds) {
-        if (enrolled.has(id)) {
-          dedupedStudentIds.push(id);
+      // ── 6b. Keep only students enrolled in at least one course ─────────────
+      // Decision 2026-10-21. Taken from the index, which read the Enrollment
+      // file once (rows with Status = "Enrolled").
+      const enrolledOwners: { studentId: string; isActive: boolean }[] = [];
+      for (const owner of owners) {
+        if (owner.enrolled) {
+          enrolledOwners.push(owner);
         } else {
           skippedRows.push({
-            studentId: id,
+            studentId: owner.studentId,
             reason: SKIP_REASON.NOT_ENROLLED,
             detail: 'No row in the Enrollment file with Status = "Enrolled".',
           });
         }
       }
-      const droppedNotEnrolled =
-        uniqueStudentIds.length - dedupedStudentIds.length;
       logger.info(
-        `[Account Login Import] Enrollment check — read ${rowsRead} Enrollment row(s); ` +
-          `${dedupedStudentIds.length} of ${uniqueStudentIds.length} student(s) in this window are Enrolled.`,
+        `[Account Login Import] Enrollment check — ${enrolledOwners.length} of ${owners.length} ` +
+          `student(s) sent from this window are Enrolled.`,
       );
-      if (droppedNotEnrolled > 0) {
-        logger.info(
-          `[Account Login Import] ${droppedNotEnrolled} student(s) have no Enrollment row with Status = "Enrolled" — skipped.`,
-        );
-      }
 
-      // ── 6. Resolve Student_ID → Contact/Email/Name via the migrated Account ─
+      // ── 7. Resolve Student_ID → Contact/Email/Name via the migrated Account ─
       const contactsByStudentId = await resolveContactsByStudentId(
         sfInstanceUrl,
         sfToken,
-        dedupedStudentIds,
+        enrolledOwners.map((o) => o.studentId),
       );
 
       let droppedNoContact = 0;
       let droppedNoEmail = 0;
-      const records: SalesforceUserRecord[] = [];
-
-      for (const studentId of dedupedStudentIds) {
+      for (const { studentId, isActive } of enrolledOwners) {
         const contact = contactsByStudentId.get(studentId);
         if (!contact) {
           droppedNoContact++;
@@ -1314,7 +1480,7 @@ export const accountLoginImport = flow({
         records.push({
           Federation_Identifier__c: studentId,
           ContactId: contact.contactId,
-          IsActive: isActiveByStudentId.get(studentId) ?? false,
+          IsActive: isActive,
           FirstName: contact.firstName || undefined,
           LastName: contact.lastName,
           Alias: buildAlias(contact.firstName, contact.lastName),
@@ -1338,83 +1504,109 @@ export const accountLoginImport = flow({
           `[Account Login Import] ${droppedNoEmail} row(s) matched a Contact with no usable email — skipped (Username/Email are required).`,
         );
       }
-
-      // ── 6a. Record the dropped rows before the upload ──────────────────────
-      await writeSkippedRows(skippedRows);
-
-      // ── 6. Upsert to Salesforce Bulk API 2.0 ──────────────────────────────
-      if (records.length > 0) {
-        const jobId = await submitBulkJob(
-          sfInstanceUrl,
-          sfToken,
-          "User",
-          "Federation_Identifier__c",
-          records as unknown as Record<string, unknown>[],
-          logger,
-          "[Account Login Import]",
-        );
-        const jobResult = await collectBulkJobResults(
-          sfInstanceUrl,
-          sfToken,
-          jobId,
-          "Federation_Identifier__c",
-          logger,
-          "[Account Login Import]",
-          pollDeadlineMs,
-        );
-
-        if (!jobResult) {
-          // The job is still running in Salesforce. Hand it to a new
-          // execution rather than letting this one hit the time limit; the
-          // records are NOT uploaded again.
-          logger.info(
-            `[Account Login Import] Handing off job ${jobId} to the next execution ` +
-              `(it will wait for the job, assign permission sets, then continue at byte ${nextByteOffset}).`,
-          );
-          await invokeSelf({
-            byteOffset: nextByteOffset,
-            headers: parsedHeaders,
-            windowNumber,
-            sheetId: currentSheetId,
-            pendingJobId: jobId,
-            pendingHasMore: hasMore,
-            handoffCount: 1,
-          });
-          return { data: { byteOffset, rowsProcessed: rows.length, hasMore } };
-        }
-
-        currentSheetId = await finishWindow(
-          jobResult,
-          records as unknown as Record<string, unknown>[],
-          permissionSets,
-        );
-      } else {
-        logger.info(
-          "[Account Login Import] Window contained no upsertable records after the enrollment check and Contact resolution.",
-        );
-      }
-    } else {
-      logger.info(
-        "[Account Login Import] Window contained no records; skipping upload.",
-      );
-      // Rows rejected by the parser still need to reach the Skipped tab.
-      await writeSkippedRows(skippedRows);
     }
 
-    // ── 8. Recurse if more rows remain ─────────────────────────────────────────
+    const window: WindowState = {
+      windowNumber,
+      startByte: byteOffset,
+      endByte: nextByteOffset,
+      dataLines,
+      blankLines,
+      skippedCount: skippedRows.length,
+      sentStudentIds: records.map((r) => r.Federation_Identifier__c),
+    };
+
+    // ── 7a. Count check before anything is written or sent ─────────────────
+    const countProblem = checkWindowCounts(
+      dataLines,
+      skippedRows.length,
+      records.length,
+    );
+    if (countProblem) {
+      stopRun(
+        `Count check failed for window ${windowNumber}: ${countProblem}. Nothing was sent ` +
+          `for this window.`,
+        byteOffset,
+      );
+    }
+
+    // ── 7b. Record the dropped rows before the upload ────────────────────────
+    await writeSkippedRows(skippedRows, window);
+
+    // ── 7c. Upsert to Salesforce Bulk API 2.0 ────────────────────────────────
+    if (records.length > 0) {
+      const jobId = await submitBulkJob(
+        sfInstanceUrl,
+        sfToken,
+        "User",
+        "Federation_Identifier__c",
+        records as unknown as Record<string, unknown>[],
+        logger,
+        "[Account Login Import]",
+      );
+      const jobResult = await collectBulkJobResults(
+        sfInstanceUrl,
+        sfToken,
+        jobId,
+        "Federation_Identifier__c",
+        logger,
+        "[Account Login Import]",
+        pollDeadlineMs,
+      );
+
+      if (!jobResult) {
+        // The job is still running in Salesforce. Hand it to a new
+        // execution rather than letting this one hit the time limit; the
+        // records are NOT uploaded again.
+        logger.info(
+          `[Account Login Import] Handing off job ${jobId} to the next execution ` +
+            `(it will wait for the job, assign permission sets, then continue at byte ${nextByteOffset}).`,
+        );
+        await invokeSelf({
+          byteOffset: nextByteOffset,
+          windowNumber,
+          sheetId: currentSheetId,
+          indexFileId,
+          pendingJobId: jobId,
+          pendingHasMore: hasMore,
+          pendingWindow: window,
+          handoffCount: 1,
+        });
+        return { data: { byteOffset, rowsProcessed: rows.length, hasMore } };
+      }
+
+      await finishWindow(
+        jobResult,
+        records as unknown as Record<string, unknown>[],
+        permissionSets,
+        window,
+      );
+    } else {
+      logger.info(
+        `[Account Login Import] Window ${windowNumber}: ${dataLines} row(s) read, all skipped; ` +
+          `nothing to send.`,
+      );
+      await writeWindowLog(window, { success: 0, errors: 0, notProcessed: 0 });
+    }
+
+    // ── 9. Recurse if more rows remain ─────────────────────────────────────────
     if (hasMore) {
       logger.info(
         `[Account Login Import] More rows remain — invoking next iteration at byte ${nextByteOffset}`,
       );
       await invokeSelf({
         byteOffset: nextByteOffset,
-        headers: parsedHeaders,
         windowNumber: windowNumber + 1,
         sheetId: currentSheetId,
+        indexFileId,
       });
     } else {
+      const t = index.totals;
       logger.info(
-        "[Account Login Import] All rows processed — import complete.",
+        `[Account Login Import] All rows processed — import complete. The file has ` +
+          `${t.dataLines} row(s) (${t.uniqueStudents} unique Student_IDs); across every ` +
+          `window, Success + Errors + Not Processed + Skipped should add up to ${t.dataLines}. ` +
+          `The "Window Log" tab has one row per window.`,
       );
     }
 

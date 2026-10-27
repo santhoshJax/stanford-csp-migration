@@ -4,45 +4,12 @@
  * calls are made.
  */
 import {
-  collapseDuplicateStudentIds,
   describeColumnMismatch,
   SKIP_REASON,
   SKIPPED_TAB_HEADERS,
   summariseSkipReasons,
   toSkippedSheetRows,
 } from "./accountLoginFlow";
-
-describe("collapseDuplicateStudentIds", () => {
-  it("keeps one entry per student and lists each extra row as a duplicate", () => {
-    // Student 1 appears three times; only the extra two are duplicates.
-    const result = collapseDuplicateStudentIds([
-      { studentId: "1", isActive: false },
-      { studentId: "2", isActive: true },
-      { studentId: "1", isActive: true },
-      { studentId: "1", isActive: false },
-    ]);
-    expect(result.uniqueStudentIds).toEqual(["1", "2"]);
-    expect(result.duplicates).toHaveLength(2);
-    expect(result.duplicates.every((d) => d.studentId === "1")).toBe(true);
-    expect(result.duplicates[0].reason).toBe(SKIP_REASON.DUPLICATE_STUDENT_ID);
-  });
-
-  it("marks a student active when any of their rows is active", () => {
-    const result = collapseDuplicateStudentIds([
-      { studentId: "1", isActive: false },
-      { studentId: "1", isActive: true },
-    ]);
-    expect(result.isActiveByStudentId.get("1")).toBe(true);
-  });
-
-  it("returns no duplicates when every Student_ID is unique", () => {
-    const result = collapseDuplicateStudentIds([
-      { studentId: "1", isActive: true },
-      { studentId: "2", isActive: true },
-    ]);
-    expect(result.duplicates).toEqual([]);
-  });
-});
 
 describe("describeColumnMismatch", () => {
   const headers = ["ID", "Student_ID", "Inactive"];
