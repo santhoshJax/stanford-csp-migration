@@ -42,12 +42,14 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Transcript Request filtering confirmed; Product2 External_ID clash still blocks both flows until prefixes assigned
+**Status:** at risk — Transcript Request & Product2 flows built & committed; Product2 prefix clash still blocks production—PR pending, deploy validate skipped
 
 **Done this session**
-- Validated Transcript Request row filters: Missing ID (skipped silent), 2-year scope (2024-07-07 fixed cutoff), empty entries dropped
-- Confirmed unmatched Student IDs sent to error CSV per decision; blank Student_ID rows sent without Student__c value
-- Identified stale code comment in buildRecords (says 'filter by account match', no longer accurate)
+- Transcript Request flow: row filters validated (Missing ID silent skip, 2-year scope 2024-07-07 fixed cutoff, empty entries dropped)
+- Product2 step built into all three course flows, committed to stanford-csp-orchestrate (commit 8e29ccc)
+- Product2 mapping: Name (255 char), Description (4000 char), ProductCode, IsActive=FALSE, Course_Offering__c lookup confirmed
+- Mapping sheet rows 127–131 ticked for All & 5-Year flows; ARCHITECTURE.md updated
+- Type check clean, 7 new Product tests pass, code pushed to GitHub
 
 **Open items**
 - Architect decision: assign Product2 external ID prefix format (e.g. CRS-{CourseID}, keep numeric for Purchase Inventory)
@@ -55,9 +57,9 @@
 - Run sf deploy validate on updated code to confirm no org conflicts
 - Open PR, review, merge to main once approved
 - Schedule Deploy session to push Transcript Request and prefix-corrected flows to org
-- Validate code deploy (sf deploy validate) on commit 3bfbfd7 before PR merge
 - Architect confirm: ATE population for past data (Sep 28 decision vs workbook)
 - Confirm Order.Status: Draft on load then activate, or Activated (FAILED_ACTIVATION risk)
+- Verify Product2.Course_Offering__c and External_ID_4D__c live in org before first run
 
 **Decisions**
 - MAX_ROWS = 500 per run; POLL_BUDGET_MS = 10 min; MAX_JOB_HANDOFFS = 6
@@ -66,17 +68,18 @@
 - TEST_MODE = false for next full run
 - ENR- prefix for Enrollment ID (existing, confirmed in workbook)
 - Transcript Request: unmatched Student IDs sent to error CSV with warning log; no blocking
+- Product2 step: IsActive=FALSE, no price book entries created yet
 
 **Blockers**
-- Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
-- Code–workbook sync broken on ATE, Order.Status, OrderItem, and multi-term key—blocks Registration flow update
 - Product2.External_ID_4D__c clash: Purchase Inventory (ID 1,2,3…) and Course flows (ID 1,2,3…) both upsert same field—silent overwrites break downstream lookups; requires prefix assignment before either flow runs in production
+- Code–workbook sync broken on ATE, Order.Status, OrderItem, and multi-term key—blocks Registration flow update
+- Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
 
 **Next**
 - Architect decision: assign Product2 external ID prefix format (e.g. CRS-{CourseID}, keep numeric for Purchase Inventory)
 - Update purchaseInventoryFlow.ts and courseFlow.ts with confirmed prefix logic
 - Run sf deploy validate on updated code to confirm no org conflicts
-- Open PR, review, merge to main once approved
+- Open PR to main, review, merge once approved
 - Schedule Deploy session to push both Transcript Request and prefix-corrected flows to org
 
 **Checked live on 2026-10-27:** the repository
@@ -86,27 +89,28 @@
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-TranscriptRequestUpdates |
-| Session | `142b7fd5-2422-4c75-8ca4-5c332d6519db` |
+| Name | Stanford-Data-Migration-CourseEnhancement-Products |
+| Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-The Transcript Request import drops rows in only two places. Everything else is per-field cleanup that never removes a record. I checked this in `src/transcriptRequestFlow.ts` on `stanford-csp-orchestrate`.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch stanford-csp-orchestrate)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## Filters that drop whole rows
+The Product step is built into all three course flows and pushed to `stanford-csp-orchestrate` as commit `8e29ccc`. I checked that the remote branch now points at that commit and that nothing is left uncommitted.
 
-| # | Filter | Rule in code | What happens to the row |
-|---|---|---|---|
-| 1 | **Missing ID** | `ID`, with any trailing `.0` removed, is empty | Skipped without being logged, and not counted in the source-row total |
-| 2 | **2-year scope** | `Request_Date` must be on or after **2024-07-07** (`TWO_YEAR_CUTOFF`) | Skipped and counted as "filtered (outside 2yr window)" in the run log |
-
-**One side effect of filter 2:** rows where `Request_Date` is blank, can't be parsed, or is the 4D null value `00/00/00` are also dropped. These rows aren't old; they just have no usable date. They are counted together with the out-of-window rows, so the log can't tell the two apart.
-
-**The cutoff date is fixed:** 2024-07-07 is written directly into the code. It does not move forward over time, so a later run uses the same date.
-
-The code comment puts the scope at **2,154 of 26,020** source records.
-
-## Filter on child items (Transcript_Request_Item__c)
-
-- One item
+**What it does**
+- After each Course Offering is saved, the flow upserts a Product2 keyed on `External_ID_4D__c` = Course.ID (for example `20081_WSP 138`).
+- The Product's `Course_Offering__c` lookup points at that Course Offering.
+- Field values:
+  - `Name` is the cleaned-up Title, up to 255 characters.
+  - `Description` is cut to 4,000 characters.
+  - `ProductCode` is the full code as it is (for example `OWC 303 A`).
+  - `IsActive` is FALSE.
+- If the Course Offering fails, no Product is created
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
