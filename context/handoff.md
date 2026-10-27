@@ -42,23 +42,22 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Code committed & pushed (96e3ddf); not deployed yet. Architect decisions still pending on IDs/pricing/rows.
+**Status:** at risk — Code committed (96e3ddf); config bug found & fix ready. PR review & deploy still pending.
 
 **Done this session**
-- Committed 7-file change (+1,716 / −458) to stanford-csp-orchestrate branch (96e3ddf)
-- Pushed to GitHub; type check clean, all 32 Account Login tests pass
-- Implemented deduplication: one Student_ID per run, later rows marked Skipped with window #
-- Added row count validation & byte-offset resume for restarts on same sheet
+- Identified root cause: Account Login Results Spreadsheet ID missing default value in configPages.ts
+- Confirmed fix: add `default: ""` (one line) to match other optional sheet ID settings
+- Verified flow logic already handles blank/whitespace as 'create new sheet'
 
 **Open items**
+- Add `default: ""` to Account Login Results Spreadsheet ID in src/configPages.ts and commit to stanford-csp-orchestrate
 - Open/review/merge PR to main; then run Deploy session to ship code live
 - Run full integration on ~160,000 rows; verify Success + Errors + Not Processed + Skipped = source count
 - Architect: confirm two order types (Registration, Purchase) or add third for transcripts
-- Architect: decide Order/OrderItem/Product external ID prefixes (REG-, PUR-, ENR-, PIT-, CRS-) to prevent collisions
-- Architect: confirm price book entry value for course Products (Tuition Rule or 0)
-- Architect: confirm UnitPrice source (Tuition or Extension) and fee/discount handling
-- Architect: confirm OrderItem rows follow deduplicated COP or all enrollments; dropped course handling
-- Combine Skipped tabs from all Account Login sheets in Failed Records folder into one authoritative list
+- Architect: decide Order/OrderItem/Product external ID prefixes (REG-, PUR-, ENR-, PIT-, CRS-)
+- Architect: confirm price book entry value for course Products and UnitPrice source
+- Architect: confirm OrderItem rows follow deduplicated COP or all enrollments
+- Combine Skipped tabs from all Account Login sheets in Failed Records folder into one list
 
 **Decisions**
 - Product2 step: IsActive=FALSE, no price book entries created yet
@@ -67,7 +66,7 @@
 - ENR- prefix for Enrollment ID
 - TEST_MODE=false for next full run
 - Product descriptions: HTML stripped, plain text only, 4,000-char limit
-- Two order streams exist: Registration (tuition) and Purchase (non-course items)
+- Two order streams: Registration (tuition) and Purchase (non-course items)
 - Deduplication: one Student_ID per run; later rows marked Skipped with window #; restart reuses index from Drive
 
 **Blockers**
@@ -79,12 +78,12 @@
 - Code not deployed yet; integration still running old build
 
 **Next**
+- Confirm: add `default: ""` to Account Login Results Spreadsheet ID and push to stanford-csp-orchestrate
 - Open PR from stanford-csp-orchestrate to main; review & merge
 - Run Deploy session to ship code live to Salesforce org
 - Run full integration on ~160,000 rows; verify row counts balance across four tabs
-- Send 14 architect questions with suggested load order; await confirmation on order types, ID prefixes, pricing, row logic, activation owner
 
-**Checked live on 2026-10-27:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-10-27:** the repository
 ### Last session — 2026-10-27
 | | |
 |---|---|
@@ -94,21 +93,20 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch 96e3ddf)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You're right, and the bug is mine. The description calls the setting "Optional", but I didn't give it a default value. Without a default, the config screen treats it as required and won't save it empty. The other optional sheet IDs in this file, such as "Course Correction Sheet ID" and "Student/Instructor/Associate Correction Sheet ID", have `default: ""`, which is why they can be left blank. The fix is to add that same line to this setting.
 
-I pushed the change to `stanford-csp-orchestrate` as commit `96e3ddf`, and the branch on GitHub now points to it. It changes 7 files (+1,716 / −458). It hasn't been deployed or run yet.
+## What the setting is for, with an example
 
-The first commit attempt failed because this checkout had no git author set, so nothing was written then. I committed again under the same author as the branch's earlier commits (Santhosh). My working notes in `tasks/` were left out of the commit.
+The flow reads the ~160,000-row file in windows of 500 rows, which is about 320 windows. All the results go into one results spreadsheet with Success, Errors, Not Processed and Skipped tabs.
 
-**What changes in the next run**
-- **The whole file is read once before window 1.** This builds an index with one entry per Student_ID and saves it to Drive. A restart on the same file reuses that index.
-- **Each student is sent to Salesforce once,** using their first row and marked active if an
+**Run with no problems:**
+- Window 1 creates the spreadsheet, say "Account Login Import – 28 Oct 10:00", with ID `1AbC…xyz`.
+- Window 1 passes that ID to window 2, window 2 passes it to window 3, and so on.
+- All 320 windows write to that one sheet. You don't need the setting at all.
+
+**Run that stops partway:**
+- Windows 1–120 write to sheet `1AbC…xyz`. Then window 121 stops, for example on `LIMIT_EXCEEDED` or a failed sheet write.
+- The log says: resume from byte X and set "Account Login Results Spreadsheet I
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
