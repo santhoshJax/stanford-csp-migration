@@ -42,20 +42,23 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Skipped rows spread across sheets & logs; architect decisions still pending on IDs/pricing/rows
+**Status:** at risk — Code committed & pushed (96e3ddf); not deployed yet. Architect decisions still pending on IDs/pricing/rows.
 
 **Done this session**
-- Identified why skipped rows are incomplete: restarts create new sheets, failed writes log only to console, pre-6dd614b runs have no record
+- Committed 7-file change (+1,716 / −458) to stanford-csp-orchestrate branch (96e3ddf)
+- Pushed to GitHub; type check clean, all 32 Account Login tests pass
+- Implemented deduplication: one Student_ID per run, later rows marked Skipped with window #
+- Added row count validation & byte-offset resume for restarts on same sheet
 
 **Open items**
-- Rebuild 5-Year integration in Prismatic (npm run import) if not done since 2ab766a
+- Open/review/merge PR to main; then run Deploy session to ship code live
+- Run full integration on ~160,000 rows; verify Success + Errors + Not Processed + Skipped = source count
 - Architect: confirm two order types (Registration, Purchase) or add third for transcripts
 - Architect: decide Order/OrderItem/Product external ID prefixes (REG-, PUR-, ENR-, PIT-, CRS-) to prevent collisions
 - Architect: confirm price book entry value for course Products (Tuition Rule or 0)
 - Architect: confirm UnitPrice source (Tuition or Extension) and fee/discount handling
 - Architect: confirm OrderItem rows follow deduplicated COP or all enrollments; dropped course handling
-- Architect: confirm historical Orders end as Draft or Activated; who builds activation step
-- Combine Skipped tabs from all Account Login sheets in Failed Records folder + log warnings into one list
+- Combine Skipped tabs from all Account Login sheets in Failed Records folder into one authoritative list
 
 **Decisions**
 - Product2 step: IsActive=FALSE, no price book entries created yet
@@ -65,6 +68,7 @@
 - TEST_MODE=false for next full run
 - Product descriptions: HTML stripped, plain text only, 4,000-char limit
 - Two order streams exist: Registration (tuition) and Purchase (non-course items)
+- Deduplication: one Student_ID per run; later rows marked Skipped with window #; restart reuses index from Drive
 
 **Blockers**
 - Product2.External_ID_4D__c clash: Purchase Inventory and Course flows both upsert same field—silent overwrites break downstream lookups; prefix format not decided
@@ -72,16 +76,15 @@
 - Architect has not confirmed price book entry value for course Products or UnitPrice source (Tuition vs Extension)
 - Architect has not confirmed whether OrderItems follow deduplicated COP rows or all enrollment rows
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
-- 5-Year integration may not be rebuilt since fix was pushed—old build still running in Prismatic
-- Skipped rows from Account Login import are fragmented across multiple sheets and logs; no single authoritative list exists
+- Code not deployed yet; integration still running old build
 
 **Next**
-- Combine all Skipped tabs from Failed Records folder + log warnings into one complete list for review
+- Open PR from stanford-csp-orchestrate to main; review & merge
+- Run Deploy session to ship code live to Salesforce org
+- Run full integration on ~160,000 rows; verify row counts balance across four tabs
 - Send 14 architect questions with suggested load order; await confirmation on order types, ID prefixes, pricing, row logic, activation owner
-- Check if 5-Year integration rebuilt since 2ab766a; rebuild if needed
-- Decide: implement three code changes to prevent future sheet fragmentation, or manually combine existing sheets via Google Workspace connector
 
-**Checked live on 2026-10-27:** the repository
+**Checked live on 2026-10-27:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-10-27
 | | |
 |---|---|
@@ -91,16 +94,21 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-You already have this for one continuous run. All windows in a run write to the same Skipped tab, each row with its reason. The problem is that it falls apart if the run is restarted or a sheet write fails. I read the code on `stanford-csp-orchestrate` at `aa93334` and changed nothing.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch 96e3ddf)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## How it works today
-- **One run, one sheet.** The first window creates the results spreadsheet. Each window passes its `sheetId` to the next, so every window adds its skipped rows to the **same Skipped tab**, with the Window # and the reason.
-- **The reasons recorded** are: column count mismatch, invalid Student_ID, duplicate Student_ID merged, not enrolled, no matching Account, and no usable email.
-- **Same student in two windows:** this isn't treated as a skip. Both windows send the User, and the second one updates it. That's why it never shows up in Skipped.
+I pushed the change to `stanford-csp-orchestrate` as commit `96e3ddf`, and the branch on GitHub now points to it. It changes 7 files (+1,716 / −458). It hasn't been deployed or run yet.
 
-## Why you might still not have the full list
-1. **Each restart creates a new spreadsheet.** A run started by hand has no `sheetId`, so it creates a new "Account Login Import - User - <date time>" sheet, and the Window # starts again at 1. Skipped rows end up spread across several sheets in the Failed Records folder.
-2. **A failed write on
+The first commit attempt failed because this checkout had no git author set, so nothing was written then. I committed again under the same author as the branch's earlier commits (Santhosh). My working notes in `tasks/` were left out of the commit.
+
+**What changes in the next run**
+- **The whole file is read once before window 1.** This builds an index with one entry per Student_ID and saves it to Drive. A restart on the same file reuses that index.
+- **Each student is sent to Salesforce once,** using their first row and marked active if an
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
