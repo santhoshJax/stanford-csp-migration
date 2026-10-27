@@ -41,21 +41,25 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-10-26
-**Status:** blocked — I read the Purchase, Purchase Item, Payments and Purchase Inventory tabs, plus the Object Level Mapping tab.
+### Engagement state — 2026-10-27
+**Status:** at risk — Transcript Request flow code committed & pushed (3bfbfd7); not yet validated or deployed. Blocker: ATE/Order.Status/OrderItem architect dec…
 
 **Done this session**
-- I read the Purchase, Purchase Item, Payments and Purchase Inventory tabs, plus the Object Level Mapping tab. I did not re-check the code for this pass. The statements about 4D business meaning are my inference from the sample data, so plea…
+- Transcript Request flow refactored: Student__c now resolves Person Account by Student_ID_4D__c match
+- Contact__c populated from PersonContactId; deleted Account__c and Student_ID__c fields
+- Unmatched Student IDs logged as warnings, sent to error CSV for visibility
+- 5 new unit tests added (bulk case + edge cases); all pass
+- Code committed to branch 3bfbfd7 and pushed to GitHub; typecheck clean
 
 **Open items**
-- Resolve architect conflict: ATE population for past data (Sep 28 decision vs workbook)
+- Validate code deploy (sf deploy validate) before PR merge
+- Open PR on stanford-csp-orchestrate, review, merge to main
+- Run Deploy session to ship to org (not live yet)
+- Architect confirm: ATE population for past data (Sep 28 decision vs workbook)
 - Confirm Order.Status: Draft on load then activate, or Activated (FAILED_ACTIVATION risk)
-- Define external ID prefixes for Order, OrderItem, Product to avoid collision with Purchase/Purchase_Item
+- Define external ID prefixes for Order, OrderItem, Product; confirm Registration prefix & Product Name source
 - Fix ATE lookup key to include term (registration-plus-term) for multi-term checkouts
-- Answer: does Registration use a prefix? Does Product Name have a source?
 - Decide: Adjustment records get OrderItem? Dropped enrollments charged? UnitPrice = Tuition or Extension?
-- De-duplicate Product and PricebookEntry between Registration and Purchase_Inventory flows
-- Update ARCHITECTURE.md flow order and open items once decisions made
 
 **Decisions**
 - MAX_ROWS = 500 per run; POLL_BUDGET_MS = 10 min; MAX_JOB_HANDOFFS = 6
@@ -63,50 +67,47 @@
 - Account Login retry: up to 5 attempts, exponential backoff 2s–30s; non-retryable errors fail immediately
 - TEST_MODE = false for next full run
 - ENR- prefix for Enrollment ID (existing, confirmed in workbook)
+- Transcript Request: unmatched Student IDs sent to error CSV with warning log; no blocking
 
 **Blockers**
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
 - Code–workbook sync broken on ATE, Order.Status, OrderItem, and multi-term key—blocks Registration flow update
+- Transcript Request flow not yet validated or deployed; first org run will reveal unmatched Student ID volume
 
 **Next**
-- Architect to confirm: ATE population for past data (Sep 28 decision stands or reverses?)
-- Confirm Order.Status strategy: Draft + activate, or Activated with FAILED_ACTIVATION mitigation
-- Define external ID prefixes for Order, OrderItem, Product; answer Registration prefix & Product Name source
-- Update workbook Registration tab: add ATE rows (key, Person Account, AcademicTerm, dates), AcademicOrder, Pricebook fields; fix ATE key to term-aware
-- Draft Excel delta sheet (field-level old vs new, owner, status) or PR on stanford-csp-orchestrate for team review
-- Post-deploy: run one batch and validate Skipped tab row count vs. log (from previous state)
+- Run sf deploy validate on commit 3bfbfd7 to confirm no org conflicts
+- Open PR on GitHub, request review, merge to main once approved
+- Schedule Deploy session to push to Salesforce org
+- Architect decision meeting: confirm ATE past-data strategy and Order.Status approach
+- Once architect decisions made, update Registration tab workbook and draft delta sheet for team review
 
-**Checked live on 2026-10-26:** Google Workspace
-### Last session — 2026-10-26
+**Checked live on 2026-10-27:** the repository
+### Last session — 2026-10-27
 | | |
 |---|---|
-| Type | GENERAL |
+| Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Registration-Enhancements |
-| Session | `51a1a748-4e1f-426c-9437-2dafc7a5da2b` |
+| Name | Stanford-Data-Migration-TranscriptRequestUpdates |
+| Session | `142b7fd5-2422-4c75-8ca4-5c332d6519db` |
 **In its own words (excerpt):**
-I read the Purchase, Purchase Item, Payments and Purchase Inventory tabs, plus the Object Level Mapping tab. I did not re-check the code for this pass. The statements about 4D business meaning are my inference from the sample data, so please confirm them.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch 3bfbfd7)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## In plain words
+I pushed the change to `stanford-csp-orchestrate` as commit `3bfbfd7`, and the remote branch now points at it. No PR was opened, as you asked.
 
-Think of a shop with a price list, receipts, receipt lines and a till:
+**What the Transcript Request flow does now:**
+- **`Student__c`** gets the Id of the Person Account whose `Student_ID_4D__c` matches the source Student_ID.
+- **`Contact__c`** gets that Person Account's `PersonContactId`.
+- **The deleted fields** `Account__c` and `Student_ID__c` are no longer sent.
+- **Rows with no matching Person Account** are still sent, as you decided. The raw Student_ID goes into `Student__c`, so Salesforce rejects the record and it shows up in the results-sheet error CSV. The flow also logs a warning listing the unmatched Student IDs.
 
-| 4D table | Everyday meaning | Lands in Salesforce as |
-|---|---|---|
-| **Purchase Inventory** | The price list, about 9 items such as "Manuscript surcharge" or transcript fee | `Product2` + `PricebookEntry` |
-| **Purchase** | The receipt for non-course buys, with card details and totals | `Order` + `CardPaymentMethod` |
-| **Purchase Item** | The lines on that receipt (what, how many, price) | `OrderItem` |
-| **Payments** | The till log, with one row per charge or refund | `Payment` (+ `Refund`) |
-| **Registration** (new tab) | The receipt for signing up for courses | `Order` + `OrderItem` + `AcademicTermEnrollment` |
-| **Enrollment** | The seat in the course | `CourseOfferingParticipant` |
-
-## Diagram
-
-```mermaid
-flowchart TD
-    INV["Purchase Inventory<br/>(price list)"] --> PROD["Product2 + PricebookEntry"]
-    COURSE["Course"] -->|"cou
+**The commit has 3 files:
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
