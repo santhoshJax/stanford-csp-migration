@@ -42,22 +42,22 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Product description fix verified & tested (commit 2ab766a); 4 failed Products await re-run. Prefix clash & org limits still block productio…
+**Status:** at risk — Product descriptions fixed & tested (commit 2ab766a); 5-Year flow may still run old build—rebuild & re-run needed to confirm fix works end-…
 
 **Done this session**
-- Verified Product2 description mapping in code: HTML→plain text, 4,000-char limit with Salesforce encoding rules
-- Confirmed description handling: Learning Course HTML (32k), Product2 plain text (4k), Course Offering not written
-- Re-ran 13 Product tests; all pass including row 75 (previously failed STRING_TOO_LONG)
+- Confirmed description fix works: old build had <br> tags & raw 4k char cut; new code strips HTML, decodes entities, counts Salesforce storage size
+- Verified both sample descriptions (6.3k raw, with codes) now pass at 3,999 chars by Salesforce count
+- Identified root cause: 5-Year integration may not be rebuilt since commit 2ab766a was pushed to repo
 
 **Open items**
+- Rebuild 5-Year integration in Prismatic (npm run import) if not done since 2ab766a
+- Re-run 5-Year flow to create 4 failed Products with fixed descriptions
+- Decide: fix HTML-as-codes edge case (decode before strip) and add test, or accept literal <br> in output
 - Architect decision: assign Product2 external ID prefix format (CRS-{CourseID} vs numeric) to resolve clash
-- Re-run All, 2-Year, 5-Year flows to create 4 failed Products with fixed descriptions
+- Re-run All & 2-Year flows to create remaining failed Products
 - Update purchaseInventoryFlow.ts and courseFlow.ts with confirmed prefix logic
 - Run sf deploy validate on updated code to confirm no org conflicts
 - Resolve code–workbook sync on ATE, Order.Status, OrderItem, multi-term key (blocks Registration flow)
-- Address Salesforce org licence/storage limit (User creates rejected with LIMIT_EXCEEDED)
-- Open PR to main, review, merge once prefix decision made
-- Schedule Deploy session to push both Transcript Request and prefix-corrected flows to org
 
 **Decisions**
 - Product2 step: IsActive=FALSE, no price book entries created yet
@@ -71,14 +71,15 @@
 **Blockers**
 - Product2.External_ID_4D__c clash: Purchase Inventory and Course flows both upsert same field with numeric values—silent overwrites break downstream lookups
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
+- 5-Year integration may not be rebuilt since fix was pushed—old build still running in Prismatic
 
 **Next**
-- Architect: decide Product2 external ID prefix format (e.g. CRS-{CourseID}, keep numeric for Purchase Inventory)
-- Re-run All, 2-Year, 5-Year flows to create 4 failed Products with fixed descriptions
-- Update purchaseInventoryFlow.ts and courseFlow.ts with confirmed prefix logic
-- Run sf deploy validate on updated code
-- Open PR to main, review, merge
-- Schedule Deploy session to push both Transcript Request and prefix-corrected flows to org
+- Check: has 5-Year integration been rebuilt (npm run import) since commit 2ab766a?
+- Rebuild 5-Year in Prismatic if needed, then re-run 5-Year flow
+- Decide: fix HTML-as-codes edge case (decode before strip) or accept literal <br> in output
+- Architect: decide Product2 external ID prefix format (CRS-{CourseID} or numeric split)
+- Re-run All & 2-Year flows with confirmed prefix logic
+- Open PR to main once prefix decision made
 
 **Checked live on 2026-10-27:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-10-27
@@ -90,14 +91,16 @@
 | Name | Stanford-Data-Migration-CourseEnhancement-Products |
 | Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-Yes, that's how the code works now. The description-length error from your log (`STRING_TOO_LONG` on rows 75, 80, 81 and 91) shouldn't happen again. I can't promise "no errors" yet, though, because the fix hasn't run against the org.
+This error most likely came from the **old build**, not from the fix in commit `2ab766a`. Two things point that way:
 
-**What happens to each description** (`courseUtils.ts`, commit `2ab766a`, used by the All, 2-Year and 5-Year flows):
-1. **HTML is removed.** Tags like `<span style=…>` are stripped. `<br/>`, `<li>` and paragraph breaks become line breaks. Codes like `&amp;`, `&#39;` and `&quot;` become the real characters.
-2. **The text is capped at 4,000 the way Salesforce counts it.** Your log shows Salesforce turns `&`, `<`, `>`, `"` and `'` into codes and stores line breaks as two characters. Text that looked shorter than 4,000 still went over, and that's why those 4 rows failed. The cap now counts each of those characters at its stored size, so the text it sends stays under the limit.
-3. **Long text is cut at a clean point** and trailing spaces are removed. If nothing is left after the HTML is removed, the description is left out instead of being sent empty.
+1. **The value sent still has `<br><br>` in it.** The new code turns every `<br>` into a line break before sending. If the new code had run on this row, there would be no `<br>` in the text.
+2. **The current code can't go over 4,000 the way Salesforce counts.** I ran two fake descriptions built from your error text through the current code: one 6,300 characters long with raw `<br>` tags, `Q&amp;A` and curly quotes, and one with the HTML stored as `&lt;br&gt;` codes. Both came out at 3,999 by Salesforce's count, and both tests passed.
 
-**What I checked just now:** I re-ran the 13 Product tests and all pass. One of them uses the row 75 desc
+The old code just cut the raw 4D text at 4,000 characters. Salesforce then counted it as longer than that, which is exactly the error you got.
+
+**Check this first:** has the 5-Year integration been rebuilt and imported into Prismatic (`npm run import`) since `2ab766a` was pushed? If the 2-Year one was rebuilt but the 5-Year one wasn't, that would explain why only the 5-Year window failed. Once it's on the new build, re-run that window. The Course Offering already saved, and the Product will be created without making a duplicate.
+
+**One
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
