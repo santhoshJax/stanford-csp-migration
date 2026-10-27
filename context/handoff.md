@@ -42,22 +42,22 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Transcript Request deployed & validated; critical Product2 External_ID clash found in Purchase Inventory vs Course flows—blocks both until…
+**Status:** at risk — Transcript Request filtering confirmed; Product2 External_ID clash still blocks both flows until prefixes assigned
 
 **Done this session**
-- Identified root cause: Purchase Inventory & Course flows both upsert Product2 on External_ID_4D__c with overlapping numeric IDs (1,2,3…)
-- Confirmed clash silently overwrites Products—no Salesforce error, breaks downstream Purchase Item lookups by Name
-- Mapped fix: assign prefixes (e.g. CRS-3 for courses, keep 3 for Purchase Inventory) to separate External_ID ranges
+- Validated Transcript Request row filters: Missing ID (skipped silent), 2-year scope (2024-07-07 fixed cutoff), empty entries dropped
+- Confirmed unmatched Student IDs sent to error CSV per decision; blank Student_ID rows sent without Student__c value
+- Identified stale code comment in buildRecords (says 'filter by account match', no longer accurate)
 
 **Open items**
+- Architect decision: assign Product2 external ID prefix format (e.g. CRS-{CourseID}, keep numeric for Purchase Inventory)
+- Update purchaseInventoryFlow.ts and courseFlow.ts with confirmed prefix logic
+- Run sf deploy validate on updated code to confirm no org conflicts
+- Open PR, review, merge to main once approved
+- Schedule Deploy session to push Transcript Request and prefix-corrected flows to org
 - Validate code deploy (sf deploy validate) on commit 3bfbfd7 before PR merge
-- Open PR on stanford-csp-orchestrate, review, merge to main
-- Run Deploy session to ship Transcript Request to org
 - Architect confirm: ATE population for past data (Sep 28 decision vs workbook)
 - Confirm Order.Status: Draft on load then activate, or Activated (FAILED_ACTIVATION risk)
-- Define external ID prefixes for Order, OrderItem, Product; confirm Registration prefix & Product Name source
-- Fix ATE lookup key to include term (registration-plus-term) for multi-term checkouts
-- Decide: Adjustment records get OrderItem? Dropped enrollments charged? UnitPrice = Tuition or Extension?
 
 **Decisions**
 - MAX_ROWS = 500 per run; POLL_BUDGET_MS = 10 min; MAX_JOB_HANDOFFS = 6
@@ -79,38 +79,34 @@
 - Open PR, review, merge to main once approved
 - Schedule Deploy session to push both Transcript Request and prefix-corrected flows to org
 
-**Checked live on 2026-10-27:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-10-27:** the repository
 ### Last session — 2026-10-27
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-CourseEnhancement-Products |
-| Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
+| Name | Stanford-Data-Migration-TranscriptRequestUpdates |
+| Session | `142b7fd5-2422-4c75-8ca4-5c332d6519db` |
 **In its own words (excerpt):**
-Here it is in plain terms. I re-checked `src/purchaseInventoryFlow.ts` on `stanford-csp-orchestrate` to make sure this matches the code.
+The Transcript Request import drops rows in only two places. Everything else is per-field cleanup that never removes a record. I checked this in `src/transcriptRequestFlow.ts` on `stanford-csp-orchestrate`.
 
-## The clash is on one field: `Product2.External_ID_4D__c`
+## Filters that drop whole rows
 
-It isn't about the Course Offering's external ID. `CourseOffering.External_ID_4D__c` holds only Course Offerings, so it's safe. The clash happens because **two different 4D tables would write their IDs into the same field on the same object (Product2)**.
+| # | Filter | Rule in code | What happens to the row |
+|---|---|---|---|
+| 1 | **Missing ID** | `ID`, with any trailing `.0` removed, is empty | Skipped without being logged, and not counted in the source-row total |
+| 2 | **2-year scope** | `Request_Date` must be on or after **2024-07-07** (`TWO_YEAR_CUTOFF`) | Skipped and counted as "filtered (outside 2yr window)" in the run log |
 
-## How Purchase Inventory relates to Product
+**One side effect of filter 2:** rows where `Request_Date` is blank, can't be parsed, or is the 4D null value `00/00/00` are also dropped. These rows aren't old; they just have no usable date. They are counted together with the out-of-window rows, so the log can't tell the two apart.
 
-The Purchase Inventory flow already creates Products. Each row in the 4D Purchase Inventory table (things you can buy, such as a transcript fee or a manuscript surcharge) becomes one Product2:
+**The cutoff date is fixed:** 2024-07-07 is written directly into the code. It does not move forward over time, so a later run uses the same date.
 
-| Purchase Inventory (4D) | → | Product2 field |
-|---|---|---|
-| ID | → | `External_ID_4D__c` |
-| Item_Type | → | `Name` and `ProductCode` |
-| Description | → | `Description` |
-| Active | → | `IsActive` |
+The code comment puts the scope at **2,154 of 26,020** source records.
 
-It saves with an **upsert on `External_ID_4D__c`**: "if a Product with this ID already exists, update it, otherwise create it." Then it adds a price book entry for each of those Products.
+## Filter on child items (Transcript_Request_Item__c)
 
-## Why that causes a clash with courses
-
-The new course step would also upsert Products on `External_ID_4D__c`,
+- One item
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
