@@ -42,12 +42,12 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Product description fix committed & tested (2ab766a); 4 failed Products await re-run. Prefix clash & org limits still block production.
+**Status:** at risk — Product description fix verified in code (2ab766a); 4 failed Products await re-run. Prefix clash & org limits still block production.
 
 **Done this session**
-- Confirmed Product description mapping: HTML→plain text, 4,000-char limit applied per Salesforce storage rules
-- Verified fix in courseUtils.ts (commit 2ab766a) is live on stanford-csp-orchestrate branch
-- Clarified Course.Description routing: Learning Course (HTML, 32k), Product2 (plain text, 4k), Course Offering (not written)
+- Verified Product2 description mapping: HTML→plain text, 4,000-char limit in courseUtils.ts (commit 2ab766a)
+- Confirmed Course.Description routing across all three flows (Learning Course HTML 32k, Product2 plain text 4k, Course Offering not written)
+- Documented description persistence: Learning Course shared by sections, Product per section, 2-Year flow only refreshes on re-run
 
 **Open items**
 - Architect decision: assign Product2 external ID prefix format (CRS-{CourseID} vs numeric) to resolve clash
@@ -90,20 +90,22 @@
 | Name | Stanford-Data-Migration-CourseEnhancement-Products |
 | Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-We don't save the course description on the Course Offering. None of the three flows writes a description field to Course Offering. Course.Description goes to the **Learning Course** instead, and since this session it also goes to the new Product.
+The source `Course.Description` from 4D is saved in **two places**. I checked this in the code on `stanford-csp-orchestrate` at commit `2ab766a`.
 
-**Where Course.Description ends up**
+| # | Salesforce record | Field | How it's written | Which flows |
+|---|---|---|---|---|
+| 1 | **Learning Course** | `Description` | The HTML stays as it is, because this is a rich text field. `_4DNL_` becomes a line break. The text is cut at 32,000 characters, and nothing is written if the 4D value is blank. | All, 2-Year, 5-Year |
+| 2 | **Product2** (added this session) | `Description` | The HTML is converted to plain text and cut at 4,000 characters. | All, 2-Year, 5-Year |
 
-| Record | Field | How it's written |
-|---|---|---|
-| **Learning Course** | `Description` | HTML kept as-is (it's a rich text field). `_4DNL_` becomes a line break. Capped at 32,000 characters. Not written if the 4D value is blank. |
-| **Product2** (new) | `Description` | HTML turned into plain text, capped at 4,000 characters (the fix in `2ab766a`). |
-| **Course Offering** | — | Not written. |
+**Where it happens in the code**
+- **Learning Course:** `lc.Description = normaliseCatalogNotes(row.Description).slice(0, 32000)`
+  - `coursesImportAllTime.ts`, line 769
+  - `coursesImport2Year.ts`, line 1372
+  - `coursesImport5Year.ts`, line 930
+- **Product2:** each flow passes `description: row.Description` (All line 910, 2-Year line 1759, 5-Year line 1158) to `buildCourseProductPayload` in `courseUtils.ts`. That function converts the text and sets `payload.Description`.
 
-All three flows do the Learning Course part the same way: `lc.Description = normaliseCatalogNotes(row.Description).slice(0, 32000)` in `coursesImportAllTime.ts`, `coursesImport2Year.ts` and `coursesImport5Year.ts`.
-
-**What this means in practice**
-- **The description belongs to the base course, not to each section.** Several Course Offerings (for example `POL 68 H` and `POL 68 Z`) share one Learning Course (`POL 68`), so they share one description. Wherever the 4D text differs by section, only one version is 
+**Where the description is *not* saved**
+- **Course Offering:** no flow writes `Course.Desc
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
