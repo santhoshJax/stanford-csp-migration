@@ -42,16 +42,16 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Code committed (96e3ddf); config bug found & fix ready. PR review & deploy still pending.
+**Status:** at risk — Fix committed (4ff3d77); PR & deploy still pending. Config bug resolved; integration not live yet.
 
 **Done this session**
-- Identified root cause: Account Login Results Spreadsheet ID missing default value in configPages.ts
-- Confirmed fix: add `default: ""` (one line) to match other optional sheet ID settings
-- Verified flow logic already handles blank/whitespace as 'create new sheet'
+- Added `default: ""` to Account Login Results Spreadsheet ID in src/configPages.ts
+- Committed fix to stanford-csp-orchestrate (4ff3d77) and pushed to GitHub
+- Type check clean; all 32 Account Login tests pass
 
 **Open items**
-- Add `default: ""` to Account Login Results Spreadsheet ID in src/configPages.ts and commit to stanford-csp-orchestrate
-- Open/review/merge PR to main; then run Deploy session to ship code live
+- Open PR from stanford-csp-orchestrate to main; review & merge
+- Run Deploy session to ship code live to Salesforce org
 - Run full integration on ~160,000 rows; verify Success + Errors + Not Processed + Skipped = source count
 - Architect: confirm two order types (Registration, Purchase) or add third for transcripts
 - Architect: decide Order/OrderItem/Product external ID prefixes (REG-, PUR-, ENR-, PIT-, CRS-)
@@ -78,10 +78,11 @@
 - Code not deployed yet; integration still running old build
 
 **Next**
-- Confirm: add `default: ""` to Account Login Results Spreadsheet ID and push to stanford-csp-orchestrate
-- Open PR from stanford-csp-orchestrate to main; review & merge
+- Open PR from stanford-csp-orchestrate to main
+- Review and merge PR to main
 - Run Deploy session to ship code live to Salesforce org
-- Run full integration on ~160,000 rows; verify row counts balance across four tabs
+- Run full integration on ~160,000 rows with blank Account Login Results Spreadsheet ID setting
+- Verify row counts balance: Success + Errors + Not Processed + Skipped = source count
 
 **Checked live on 2026-10-27:** the repository
 ### Last session — 2026-10-27
@@ -93,20 +94,20 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-You're right, and the bug is mine. The description calls the setting "Optional", but I didn't give it a default value. Without a default, the config screen treats it as required and won't save it empty. The other optional sheet IDs in this file, such as "Course Correction Sheet ID" and "Student/Instructor/Associate Correction Sheet ID", have `default: ""`, which is why they can be left blank. The fix is to add that same line to this setting.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch stanford-csp-orchestrate)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## What the setting is for, with an example
+I pushed the fix to `stanford-csp-orchestrate` as commit `4ff3d77`. GitHub confirms the branch now points to that commit. It isn't deployed yet.
 
-The flow reads the ~160,000-row file in windows of 500 rows, which is about 320 windows. All the results go into one results spreadsheet with Success, Errors, Not Processed and Skipped tabs.
+**What changed:** I added one line, `default: ""`, to the "Account Login Results Spreadsheet ID" setting in `src/configPages.ts`. The other optional sheet IDs, such as "Course Correction Sheet ID", already have this line. Once it's deployed, the config screen will save with that setting left blank, which is what you want for a fresh run. The flow logic is unchanged, and it already treats a blank value as "create a new results sheet".
 
-**Run with no problems:**
-- Window 1 creates the spreadsheet, say "Account Login Import – 28 Oct 10:00", with ID `1AbC…xyz`.
-- Window 1 passes that ID to window 2, window 2 passes it to window 3, and so on.
-- All 320 windows write to that one sheet. You don't need the setting at all.
-
-**Run that stops partway:**
-- Windows 1–120 write to sheet `1AbC…xyz`. Then window 121 stops, for example on `LIMIT_EXCEEDED` or a failed sheet write.
-- The log says: resume from byte X and set "Account Login Results Spreadsheet I
+**What happened along the way:**
+- The checkout from earlier in this session wasn't on this machine any more, so I cloned the bran
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
