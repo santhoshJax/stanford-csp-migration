@@ -42,13 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Two order streams confirmed (Registration + Purchase); 14 architect questions block build decisions on pricing, keys, and activation
+**Status:** blocked — The duplicate check only looks inside one window.
 
 **Done this session**
-- Confirmed two separate order streams: Registration/Enrollment → Order+OrderItem (tuition) and Purchase/Purchase Item → Order+OrderItem (non-course)
-- Identified transcript fees as possible third stream (unconfirmed)
-- Read live Purchase, Purchase Item, Payments tabs; mapped data flow for both streams
-- Listed 19 pending items across both streams and shared dependencies
+- The duplicate check only looks inside one window. It does not compare across windows. I read the code on `stanford-csp-orchestrate` at `d831965` and changed nothing. ## When the same Student_ID shows up in two windows - **Same window:** th…
 
 **Open items**
 - Rebuild 5-Year integration in Prismatic (npm run import) if not done since 2ab766a
@@ -84,35 +81,25 @@
 - Once prefixes decided, update purchaseInventoryFlow.ts and courseFlow.ts; add Purchase flow skeleton
 - Design Payments reconciliation: single source, Order lookup, CardPaymentMethod and PaymentGroup links
 
-**Checked live on 2026-10-27:** Google Workspace
+**Checked live on 2026-10-27:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-10-27
 | | |
 |---|---|
-| Type | GENERAL |
+| Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Registration-Enhancements |
-| Session | `51a1a748-4e1f-426c-9437-2dafc7a5da2b` |
+| Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
+| Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-# Two order streams: yes, the data supports it
+The duplicate check only looks inside one window. It does not compare across windows. I read the code on `stanford-csp-orchestrate` at `d831965` and changed nothing.
 
-I read the live Purchase, Purchase Item and Payments tabs just now. I did not re-read the Registration and Enrollment tabs or the code this turn. I haven't tested anything in the org.
+## When the same Student_ID shows up in two windows
+- **Same window:** the extra rows go to the Skipped tab as "Duplicate Student_ID merged". The detail text reads "Another row **in this window** has the same Student_ID".
+- **Different windows:** neither row is skipped. Each window sends that student to Salesforce, and because Users are upserted on Federation Id, the second window updates the User the first one created. So the student appears **twice in Success** (once "Created", once "Updated"), or in Errors if that window failed. They never go to Skipped.
 
-## Is it true?
+**So cross-window duplicates aren't part of your 2,409.** They add extra Success rows rather than leaving rows out. If you compare by row count, that can actually hide missing rows, so compare unique Student_IDs.
 
-**Mostly yes.** The tabs show two separate sources that both end up as `Order` and `OrderItem`:
-
-| | Stream 1: course registration | Stream 2: Purchase |
-|---|---|---|
-| 4D tables | Registration and Enrollment | Purchase and Purchase Item |
-| What it is | Course checkout, and the tuition line per course | Non-course buys. The samples are a manuscript surcharge ("excess of 10,000 words") and a transcript fee ("Ref #15182"). |
-| Order | One per registration | One per purchase |
-| OrderItem | One tuition line per enrollment (new) | One line per purchase item. Product is chosen by `Item_Type`. |
-| Product | Course Product, created with the course | Purchase Inventory Product |
-
-**Evidence from the Payments tab:**
-- A payment row carries `Registration_ID` (sample 560585), `Transcript_Request_ID` (sample 0) and `Purchase_ID` (sample 0). Zero looks like "not this type".
-- That suggests each payment belongs to one of three kinds: registration, p
+**There is a separate risk here.** Within a window, a student counts as active if *any* of their rows is active. Across windows, the last window wins. If window 3 has the active row and window 7 has a stale `Inactive=TRUE` row, the User ends up **inactiv
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
