@@ -42,14 +42,12 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Config field removed & committed (1964cf8); PR & deploy still pending. Integration not live yet.
+**Status:** at risk — Config field removed & committed (1964cf8); PR pending review; deploy & full integration run still needed. Cross-window dedup confirmed wor…
 
 **Done this session**
-- Removed Account Login Results Spreadsheet ID field from src/configPages.ts
-- Updated src/accountLoginFlow.ts to use trigger payload sheet ID only
-- Updated ARCHITECTURE.md to document field removal and restart payload pattern
-- Committed changes to stanford-csp-orchestrate (1964cf8) and pushed to GitHub
-- Type check clean; all 32 Account Login tests pass
+- Confirmed Student_ID deduplication runs cross-window, unaffected by field removal
+- Verified results sheet ID now sourced from trigger payload only
+- Confirmed index persists on restart to maintain dedup across resume
 
 **Open items**
 - Open PR from stanford-csp-orchestrate to main; review & merge
@@ -86,7 +84,7 @@
 - Run full integration on ~160,000 rows with new config (no Account Login Results Spreadsheet ID field)
 - Verify row counts balance: Success + Errors + Not Processed + Skipped = source count
 
-**Checked live on 2026-10-27:** the repository
+**Checked live on 2026-10-27:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-10-27
 | | |
 |---|---|
@@ -96,20 +94,21 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch stanford-csp-orchestrate)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**Yes. The import still compares Student_IDs across all windows.** Removing the field only changed where the results go. It didn't touch the duplicate check, which runs on its own.
 
-I've removed the "Account Login Results Spreadsheet ID" field and pushed the change to `stanford-csp-orchestrate` as commit `1964cf8`. GitHub shows the branch pointing at that commit. Nothing is deployed yet, so the field will stay on the config screen until you redeploy.
+They're two separate things:
 
-**What changed (3 files):**
-- **`src/configPages.ts`:** the field is gone, so the config screen no longer asks for it.
-- **`src/accountLoginFlow.ts`:** the flow only gets the results sheet ID from the trigger payload. Within one run nothing changes: window 1 creates the results sheet and passes its ID to each following window, so all rows go into one sheet. You don't need to set anything.
-- **`ARCHITECTURE.md`:** updated to match, with a
+| | What it does | Affected by the removed field? |
+|---|---|---|
+| **Student index** | Reads the whole Account Login file once before window 1 and records each Student_ID's first row, the window that row is in, and whether any of the student's rows is active | No |
+| **Results sheet ID** | Says which spreadsheet the Success / Errors / Not Processed / Skipped rows are written to | This is the one the field used to set. It now comes only from the payload |
+
+**What happens in each window** (`src/accountLoginFlow.ts`, step 6, which calls `applyStudentIndex` in `src/accountLoginIndex.ts`):
+- Each of the window's 500 rows is looked up in the index.
+- If the row is the student's **first row in the file**, it's sent to Salesforce. IsActive is true if **any** of that student's rows is active.
+- Any other row for that student, in this window or another one, goes to **Skipped** with the reason "Merged into this student's first row: line N, window M".
+
+**Example:** student 12345 is on
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
