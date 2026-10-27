@@ -42,40 +42,40 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Product2 step built & committed (8e29ccc); prefix clash & org field validation still block production
+**Status:** at risk — Product2 step confirmed in all three flows (8e29ccc); prefix clash & org field validation still block production
 
 **Done this session**
-- Confirmed Product2 step integrated into all three course flows (All, 2-Year, 5-Year)
-- Verified commit 8e29ccc pushed to stanford-csp-orchestrate with no uncommitted changes
-- Validated Product2 mapping: External_ID_4D__c=Course.ID, Course_Offering__c lookup, IsActive=FALSE
+- Clarified Product2 upsert behavior across All, 2-Year, 5-Year flows—each creates one Product per Course Offering, updates on re-run
+- Confirmed Products linked to Course Offerings via Course_Offering__c lookup; External_ID_4D__c = Course.ID
+- Documented re-run behavior: Learning/Learning Course skipped in All & 5-Year flows; Products updated; IsActive reset to FALSE each run
 
 **Open items**
-- Architect decision: assign Product2 external ID prefix format (CRS-{CourseID} vs numeric)
+- Architect decision: assign Product2 external ID prefix format (CRS-{CourseID} vs numeric) to resolve clash
 - Update purchaseInventoryFlow.ts and courseFlow.ts with confirmed prefix logic
 - Run sf deploy validate on updated code to confirm no org conflicts
-- Open PR to main, review, merge once approved
 - Verify Product2.Course_Offering__c and External_ID_4D__c fields exist in org before first run
-- Schedule Deploy session to push Transcript Request and prefix-corrected flows to org
 - Resolve code–workbook sync on ATE, Order.Status, OrderItem, multi-term key (blocks Registration flow)
 - Address Salesforce org licence/storage limit (User creates rejected with LIMIT_EXCEEDED)
+- Open PR to main, review, merge once prefix decision made
+- Schedule Deploy session to push Transcript Request and prefix-corrected flows to org
 
 **Decisions**
 - Product2 step: IsActive=FALSE, no price book entries created yet
 - Product2 upsert keyed on External_ID_4D__c = Course.ID; Course_Offering__c lookup points to saved offering
 - MAX_ROWS=500, POLL_BUDGET_MS=10min, MAX_JOB_HANDOFFS=6
-- ENR- prefix for Enrollment ID (confirmed in workbook)
+- ENR- prefix for Enrollment ID
 - TEST_MODE=false for next full run
 
 **Blockers**
-- Product2.External_ID_4D__c clash: Purchase Inventory (numeric 1,2,3) and Course flows (numeric 1,2,3) both upsert same field—silent overwrites break downstream lookups; requires prefix assignment before production
+- Product2.External_ID_4D__c clash: Purchase Inventory and Course flows both upsert same field with numeric values—silent overwrites break downstream lookups; requires prefix assignment before production
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
 
 **Next**
 - Architect: decide Product2 external ID prefix format (e.g. CRS-{CourseID}, keep numeric for Purchase Inventory)
 - Update purchaseInventoryFlow.ts and courseFlow.ts with confirmed prefix logic
 - Run sf deploy validate on updated code
-- Open PR to main, review, merge
 - Verify Product2.Course_Offering__c and External_ID_4D__c exist in org
+- Open PR to main, review, merge
 - Schedule Deploy session to push both Transcript Request and prefix-corrected flows
 
 **Checked live on 2026-10-27:** nothing — the status above is as recorded, not re-checked
@@ -88,18 +88,21 @@
 | Name | Stanford-Data-Migration-CourseEnhancement-Products |
 | Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-Yes, in all three course flows (All, Tier 1 / 2-Year, Tier 2 / 5-Year). Each Course Offering the flow saves gets one Product, and that Product points back to it. I checked this in the code on `stanford-csp-orchestrate` at commit `8e29ccc`.
+You're mostly right, but the three flows don't all behave the same way on a re-run. I checked this in the code on `stanford-csp-orchestrate` at commit `8e29ccc`. Here's what each record type does:
 
-**How it works, for each course row:**
-1. The flow saves Learning, then Learning Course, then Course Offering, as it did before.
-2. If the Course Offering saved, the flow saves a Product straight after it:
-   - **Key:** `External_ID_4D__c` = Course.ID (for example `20081_WSP 138`), the same value the Course Offering uses.
-   - **Link:** `Course_Offering__c` is set to the Salesforce Id of the offering saved for that row, so the lookup always points to the correct record.
-   - **Fields:** `Name` comes from the Title, `Description` from the Description and `ProductCode` from the full Code. `IsActive` is FALSE.
+| Record | All flow | 2-Year (Tier 1) | 5-Year (Tier 2) |
+|---|---|---|---|
+| Learning + Learning Course | **Skipped** if the course already exists. It is not updated. | Updated | **Skipped** if the course already exists. It is not updated. |
+| Course Offering | Updated | Updated | Updated |
+| **Product2** | **Created** (updated on later runs) | **Created** | **Created** |
+| Course Department | n/a | Updated | Updated |
+| Location | n/a | Reuses the existing one, or creates it if missing | Reuses the existing one, or creates it if missing |
+| Schedule, Instructor, Associate | n/a | **Skipped** if they already exist. They are not updated. | **Skipped** if they already exist. They are not updated. |
 
-**Cases where you won't get a Product, or might expect something different:**
-- **The Course Offering fails:** no Product is created, and the row goes to the failed-records tab.
-- **The Product fails but the offering saved:** the Course Offering stays in place. The Product error goes to the `Product2` tab of the results sheet, so you can fin
+So:
+- **Nothing is duplicated.** Every save either matches on the 4D ID or checks whether the record exists before creating it.
+- **Products are the only new records.** You get one per Course Offering, linked to it. Running a flow again updates that Product instead of creating a second one.
+- 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
