@@ -378,17 +378,6 @@ export const configPages = {
           "(Label must be unique). Existing assignments are skipped. The flow throws " +
           "before creating Users if any entry is not found.",
       }),
-      "Account Login Results Spreadsheet ID": configVar({
-        stableKey: "887664fe-e431-4916-a8c8-396036826748",
-        dataType: "string",
-        default: "",
-        description:
-          "Optional. Google Sheets ID of an Account Login results spreadsheet to keep " +
-          "writing to. Leave empty for a new run: the first window creates the sheet " +
-          "and logs its ID. If the run stops and you restart it by hand, set this to " +
-          "that ID so every window's Success, Errors, Not Processed, Skipped and " +
-          "Window Log rows stay in one spreadsheet. Clear it before starting a fresh run.",
-      }),
       "Failed Records Folder ID": configVar({
         stableKey: "e5f6a7b8-5555-4e8f-3b4c-eeff00223344",
         dataType: "string",

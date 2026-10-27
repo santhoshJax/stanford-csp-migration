@@ -67,8 +67,8 @@
  * "Window Log" tab, and STOPS the run — naming the byte offset to restart
  * from — when the counts do not add up or a Skipped / results write still
  * fails after retries. Success, Errors and Not Processed rows carry a
- * "Window #" column. The optional "Account Login Results Spreadsheet ID"
- * config var keeps a restarted run writing to the same spreadsheet.
+ * "Window #" column. A run restarted by hand can keep writing to the same
+ * spreadsheet by passing its ID as "sheetId" in the trigger payload.
  *
  * NOTE — Active/Inactive (confirmed with architect): the source "Inactive"
  * flag IS the duplicate marker — 4D only ever sets it true when a row was
@@ -949,12 +949,6 @@ export const accountLoginImport = flow({
     const permissionSetNames = parsePermissionSetNames(
       configVars["Account Login Permission Sets"] as string | undefined,
     );
-    const configuredSheetId =
-      str(
-        configVars["Account Login Results Spreadsheet ID"] as
-          string | undefined,
-      ).trim() || undefined;
-
     if (!fileId) throw new Error("Account Login File ID config var is empty.");
     if (!enrollmentFileId) {
       throw new Error(
@@ -963,16 +957,10 @@ export const accountLoginImport = flow({
       );
     }
 
-    // The results spreadsheet for this run. The payload wins (later windows of
-    // the same run); otherwise the config var, so a run restarted by hand keeps
-    // writing to the same sheet; otherwise one is created on first write.
-    let currentSheetId = payloadSheetId ?? configuredSheetId;
-    if (!payloadSheetId && configuredSheetId) {
-      logger.info(
-        `[Account Login Import] Writing to the results spreadsheet set in ` +
-          `"Account Login Results Spreadsheet ID": ${configuredSheetId}`,
-      );
-    }
+    // The results spreadsheet for this run: passed in the payload by the
+    // previous window (or by hand on a restart); otherwise one is created on
+    // first write.
+    let currentSheetId = payloadSheetId?.trim() || undefined;
 
     const gdToken = getAccessToken(gdConn);
     const sfToken = getAccessToken(sfConn);
@@ -1005,7 +993,7 @@ export const accountLoginImport = flow({
         `[Account Login Import] ${problem} The run has stopped so that no rows go ` +
           `unrecorded. To continue, start the flow with byteOffset ${resumeByte}` +
           (currentSheetId
-            ? ` and set "Account Login Results Spreadsheet ID" to ${currentSheetId} ` +
+            ? ` and sheetId "${currentSheetId}" in the payload ` +
               `to keep writing to the same results sheet.`
             : "."),
       );

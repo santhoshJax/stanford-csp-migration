@@ -326,7 +326,7 @@ The index also records the header row and every window's start byte. It holds ID
 
 **One User per student.** A window sends a student only from that student's first row in the file, with `IsActive = true` if any of the student's rows is active. Every other row for that `Student_ID`, in the same window or a later one, goes to Skipped as *Duplicate Student_ID (merged)*, with the line and window it was merged into.
 
-**Restarts.** A run started by hand at a byte offset takes its headers and window number from the index. Before this, a restart without `headers` in the payload read its first data line as the header row and dropped every later row as *Invalid Student_ID*. To keep writing to the same results spreadsheet, set the optional **"Account Login Results Spreadsheet ID"** config var to the sheet ID from the first run's log. Leave it empty for a fresh run, because a sheet from before this change has no `Window #` column.
+**Restarts.** A run started by hand at a byte offset takes its headers and window number from the index. Before this, a restart without `headers` in the payload read its first data line as the header row and dropped every later row as *Invalid Student_ID*. To keep writing to the same results spreadsheet, pass the sheet ID from the first run's log as `sheetId` in the trigger payload, alongside `byteOffset`. (An "Account Login Results Spreadsheet ID" config var did this briefly; it was removed on 2026-10-28 because the config screen would not save it empty.) Do not reuse a sheet from before 2026-10-28, because it has no `Window #` column.
 
 **Row accounting.**
 - Success, Errors and Not Processed rows start with a `Window #` column.
