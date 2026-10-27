@@ -713,13 +713,19 @@ Upsert key: `External_ID_4D__c` = source ID
 
 #### Object Created
 
-**CSP_Transcript_Request__c** — Standalone; no parent lookups.  
-Upsert key: `External_ID_4D__c` = source ID
+**CSP_Transcript_Request__c** — Linked to the student's Person Account and Person Contact.  
+Upsert key: `External_ID_4D__c` = source ID  
+Student lookup: source `Student_ID` → SOQL on `Account.Student_ID_4D__c` (`IsPersonAccount = true`).
+Rows with no matching Person Account are **still sent**; the raw `Student_ID` goes into
+`Student__c`, so Salesforce rejects the record and it shows in the results-sheet error CSV
+(decision 2026-10-27). Unmatched IDs are also logged as a warning.
 
 | Field | Notes |
 |---|---|
+| `Student__c` | Account lookup = matched Person Account `Id` (raw Student_ID if unmatched → rejected) |
+| `Contact__c` | Contact lookup = matched Person Account's `PersonContactId` |
 | `Request_Date__c` | Date/time; midnight UTC |
-| `Student_ID__c`, `Last_Name__c`, `First_Name__c` | |
+| `Last_Name__c`, `First_Name__c` | From the matched Person Account |
 | `Email_Address__c` | Cleaned/validated |
 | `Student_ID_Longint__c`, `Transaction_ID__c` | |
 | `Transcript_Format__c` | |
@@ -728,6 +734,8 @@ Upsert key: `External_ID_4D__c` = source ID
 | `Unfullfilled_Quantity__c`, `Unfullfilled_Notes__c` | |
 | `Sent_Date__c`, `Transaction_ID_Date_Entered__c` | |
 | `Amount__c` | Currency (near 0% populated in 2-year window) |
+
+`Account__c` and `Student_ID__c` were deleted from the object (2026-10-27) and are no longer mapped.
 
 ---
 
