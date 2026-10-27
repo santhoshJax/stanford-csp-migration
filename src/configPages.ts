@@ -381,6 +381,7 @@ export const configPages = {
       "Account Login Results Spreadsheet ID": configVar({
         stableKey: "887664fe-e431-4916-a8c8-396036826748",
         dataType: "string",
+        default: "",
         description:
           "Optional. Google Sheets ID of an Account Login results spreadsheet to keep " +
           "writing to. Leave empty for a new run: the first window creates the sheet " +
