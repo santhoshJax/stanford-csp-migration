@@ -42,20 +42,23 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** blocked — The Product-per-course part of the mapping is already built in the repo, but the Registration flow doesn't use it yet.
+**Status:** at risk — Two order streams confirmed (Registration + Purchase); 14 architect questions block build decisions on pricing, keys, and activation
 
 **Done this session**
-- The Product-per-course part of the mapping is already built in the repo, but the Registration flow doesn't use it yet. It still creates no OrderItems, and the Products it would point at have no price list entry. I read the live Registratio…
+- Confirmed two separate order streams: Registration/Enrollment → Order+OrderItem (tuition) and Purchase/Purchase Item → Order+OrderItem (non-course)
+- Identified transcript fees as possible third stream (unconfirmed)
+- Read live Purchase, Purchase Item, Payments tabs; mapped data flow for both streams
+- Listed 19 pending items across both streams and shared dependencies
 
 **Open items**
 - Rebuild 5-Year integration in Prismatic (npm run import) if not done since 2ab766a
-- Re-run 5-Year flow to create 4 failed Products with fixed descriptions
-- Decide: fix HTML-as-codes edge case (decode before strip) and add test, or accept literal <br> in output
-- Architect decision: assign Product2 external ID prefix format (CRS-{CourseID} vs numeric) to resolve clash
-- Re-run All & 2-Year flows to create remaining failed Products
-- Update purchaseInventoryFlow.ts and courseFlow.ts with confirmed prefix logic
-- Run sf deploy validate on updated code to confirm no org conflicts
-- Resolve code–workbook sync on ATE, Order.Status, OrderItem, multi-term key (blocks Registration flow)
+- Architect: confirm two order types (Registration, Purchase) or add third for transcripts
+- Architect: decide Order/OrderItem/Product external ID prefixes (REG-, PUR-, ENR-, PIT-, CRS-) to prevent collisions
+- Architect: confirm price book entry value for course Products (Tuition Rule or 0)
+- Architect: confirm UnitPrice source (Tuition or Extension) and fee/discount handling
+- Architect: confirm OrderItem rows follow deduplicated COP or all enrollments; dropped course handling
+- Architect: confirm historical Orders end as Draft or Activated; who builds activation step
+- Add price book entries for course Products and set Order.Pricebook2Id, OrderItem.PricebookEntryId for both streams
 
 **Decisions**
 - Product2 step: IsActive=FALSE, no price book entries created yet
@@ -63,23 +66,25 @@
 - MAX_ROWS=500, POLL_BUDGET_MS=10min, MAX_JOB_HANDOFFS=6
 - ENR- prefix for Enrollment ID
 - TEST_MODE=false for next full run
-- Product descriptions: HTML stripped, plain text only, 4,000-char limit applied as Salesforce stores it (encoding: &, <, >, ", ' and line breaks count at stored size)
-- Course.Description: Learning Course keeps HTML (32k limit); Product2 gets plain text (4k limit); Course Offering not written
+- Product descriptions: HTML stripped, plain text only, 4,000-char limit
+- Two order streams exist: Registration (tuition) and Purchase (non-course items)
 
 **Blockers**
-- Product2.External_ID_4D__c clash: Purchase Inventory and Course flows both upsert same field with numeric values—silent overwrites break downstream lookups
+- Product2.External_ID_4D__c clash: Purchase Inventory and Course flows both upsert same field—silent overwrites break downstream lookups; prefix format not decided
+- Architect has not confirmed external ID prefix strategy (REG-, PUR-, ENR-, PIT-, CRS-) for both streams
+- Architect has not confirmed price book entry value for course Products or UnitPrice source (Tuition vs Extension)
+- Architect has not confirmed whether OrderItems follow deduplicated COP rows or all enrollment rows
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
 - 5-Year integration may not be rebuilt since fix was pushed—old build still running in Prismatic
 
 **Next**
-- Check: has 5-Year integration been rebuilt (npm run import) since commit 2ab766a?
-- Rebuild 5-Year in Prismatic if needed, then re-run 5-Year flow
-- Decide: fix HTML-as-codes edge case (decode before strip) or accept literal <br> in output
-- Architect: decide Product2 external ID prefix format (CRS-{CourseID} or numeric split)
-- Re-run All & 2-Year flows with confirmed prefix logic
-- Open PR to main once prefix decision made
+- Send 14 architect questions (structure, IDs/keys, pricing, rows/status, payments) with suggested load order to decision-maker
+- Await architect confirmation on: order types, external ID prefixes, price book entry value, UnitPrice source, OrderItem row logic, activation step owner
+- Check: has 5-Year integration been rebuilt (npm run import) since commit 2ab766a; rebuild if needed
+- Once prefixes decided, update purchaseInventoryFlow.ts and courseFlow.ts; add Purchase flow skeleton
+- Design Payments reconciliation: single source, Order lookup, CardPaymentMethod and PaymentGroup links
 
-**Checked live on 2026-10-27:** the Salesforce org, Google Workspace, the repository
+**Checked live on 2026-10-27:** Google Workspace
 ### Last session — 2026-10-27
 | | |
 |---|---|
@@ -89,20 +94,25 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements |
 | Session | `51a1a748-4e1f-426c-9437-2dafc7a5da2b` |
 **In its own words (excerpt):**
-The Product-per-course part of the mapping is already built in the repo, but the Registration flow doesn't use it yet. It still creates no OrderItems, and the Products it would point at have no price list entry. I read the live Registration and Course tabs (the workbook was modified today at 11:59 UTC) and the code on `stanford-csp-orchestrate`. I didn't run any flows or check the org, so org-behaviour points below are flagged as unverified.
+# Two order streams: yes, the data supports it
 
-## 1. What changed in the workbook
+I read the live Purchase, Purchase Item and Payments tabs just now. I did not re-read the Registration and Enrollment tabs or the code this turn. I haven't tested anything in the org.
 
-- **Product rows moved out of Registration.** The Registration tab no longer has Product rows. My earlier read of it had four, for Name, Description, ProductCode and IsActive. The tab now ends at the `Product.Course_Offering__c` row.
-- **Product rows now live on the Course tab.** They are rows 127–131:
+## Is it true?
 
-| Product field | Source | Rule |
+**Mostly yes.** The tabs show two separate sources that both end up as `Order` and `OrderItem`:
+
+| | Stream 1: course registration | Stream 2: Purchase |
 |---|---|---|
-| `Name` | `Course.Title` | Direct map |
-| `Course_Offering__c` | `Course.ID` | Lookup to the Course Offering |
-| `Description` | `Course.Description` | Direct map |
-| `ProductCode` | `Course.Code` | Full code with section suffix, e.g. `OWC 303 A`, same as `CourseOffering.Name`. Blank if Code is empty. |
-| `IsActive` | none | Default **FALSE** (the earlier Regis
+| 4D tables | Registration and Enrollment | Purchase and Purchase Item |
+| What it is | Course checkout, and the tuition line per course | Non-course buys. The samples are a manuscript surcharge ("excess of 10,000 words") and a transcript fee ("Ref #15182"). |
+| Order | One per registration | One per purchase |
+| OrderItem | One tuition line per enrollment (new) | One line per purchase item. Product is chosen by `Item_Type`. |
+| Product | Course Product, created with the course | Purchase Inventory Product |
+
+**Evidence from the Payments tab:**
+- A payment row carries `Registration_ID` (sample 560585), `Transcript_Request_ID` (sample 0) and `Purchase_ID` (sample 0). Zero looks like "not this type".
+- That suggests each payment belongs to one of three kinds: registration, p
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
