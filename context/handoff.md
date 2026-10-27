@@ -42,12 +42,12 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Product description fix verified in code (2ab766a); 4 failed Products await re-run. Prefix clash & org limits still block production.
+**Status:** at risk — Product description fix verified & tested (commit 2ab766a); 4 failed Products await re-run. Prefix clash & org limits still block productio…
 
 **Done this session**
-- Verified Product2 description mapping: HTML→plain text, 4,000-char limit in courseUtils.ts (commit 2ab766a)
-- Confirmed Course.Description routing across all three flows (Learning Course HTML 32k, Product2 plain text 4k, Course Offering not written)
-- Documented description persistence: Learning Course shared by sections, Product per section, 2-Year flow only refreshes on re-run
+- Verified Product2 description mapping in code: HTML→plain text, 4,000-char limit with Salesforce encoding rules
+- Confirmed description handling: Learning Course HTML (32k), Product2 plain text (4k), Course Offering not written
+- Re-ran 13 Product tests; all pass including row 75 (previously failed STRING_TOO_LONG)
 
 **Open items**
 - Architect decision: assign Product2 external ID prefix format (CRS-{CourseID} vs numeric) to resolve clash
@@ -65,7 +65,7 @@
 - MAX_ROWS=500, POLL_BUDGET_MS=10min, MAX_JOB_HANDOFFS=6
 - ENR- prefix for Enrollment ID
 - TEST_MODE=false for next full run
-- Product descriptions: HTML stripped, plain text only, 4,000-char limit applied as Salesforce stores it
+- Product descriptions: HTML stripped, plain text only, 4,000-char limit applied as Salesforce stores it (encoding: &, <, >, ", ' and line breaks count at stored size)
 - Course.Description: Learning Course keeps HTML (32k limit); Product2 gets plain text (4k limit); Course Offering not written
 
 **Blockers**
@@ -90,22 +90,14 @@
 | Name | Stanford-Data-Migration-CourseEnhancement-Products |
 | Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-The source `Course.Description` from 4D is saved in **two places**. I checked this in the code on `stanford-csp-orchestrate` at commit `2ab766a`.
+Yes, that's how the code works now. The description-length error from your log (`STRING_TOO_LONG` on rows 75, 80, 81 and 91) shouldn't happen again. I can't promise "no errors" yet, though, because the fix hasn't run against the org.
 
-| # | Salesforce record | Field | How it's written | Which flows |
-|---|---|---|---|---|
-| 1 | **Learning Course** | `Description` | The HTML stays as it is, because this is a rich text field. `_4DNL_` becomes a line break. The text is cut at 32,000 characters, and nothing is written if the 4D value is blank. | All, 2-Year, 5-Year |
-| 2 | **Product2** (added this session) | `Description` | The HTML is converted to plain text and cut at 4,000 characters. | All, 2-Year, 5-Year |
+**What happens to each description** (`courseUtils.ts`, commit `2ab766a`, used by the All, 2-Year and 5-Year flows):
+1. **HTML is removed.** Tags like `<span style=…>` are stripped. `<br/>`, `<li>` and paragraph breaks become line breaks. Codes like `&amp;`, `&#39;` and `&quot;` become the real characters.
+2. **The text is capped at 4,000 the way Salesforce counts it.** Your log shows Salesforce turns `&`, `<`, `>`, `"` and `'` into codes and stores line breaks as two characters. Text that looked shorter than 4,000 still went over, and that's why those 4 rows failed. The cap now counts each of those characters at its stored size, so the text it sends stays under the limit.
+3. **Long text is cut at a clean point** and trailing spaces are removed. If nothing is left after the HTML is removed, the description is left out instead of being sent empty.
 
-**Where it happens in the code**
-- **Learning Course:** `lc.Description = normaliseCatalogNotes(row.Description).slice(0, 32000)`
-  - `coursesImportAllTime.ts`, line 769
-  - `coursesImport2Year.ts`, line 1372
-  - `coursesImport5Year.ts`, line 930
-- **Product2:** each flow passes `description: row.Description` (All line 910, 2-Year line 1759, 5-Year line 1158) to `buildCourseProductPayload` in `courseUtils.ts`. That function converts the text and sets `payload.Description`.
-
-**Where the description is *not* saved**
-- **Course Offering:** no flow writes `Course.Desc
+**What I checked just now:** I re-ran the 13 Product tests and all pass. One of them uses the row 75 desc
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
