@@ -42,22 +42,22 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Product description fix committed (HTML→text, length handling); 4 failed Products await re-run. Prefix clash & org limits still block produ…
+**Status:** at risk — Product description fix committed & tested (2ab766a); 4 failed Products await re-run. Prefix clash & org limits still block production.
 
 **Done this session**
-- Fixed Product2 description: HTML stripped to plain text, length capped at Salesforce 4,000-char limit
-- 13 Product tests pass including row 75 (previously failed); type check clean
-- Committed fix to stanford-csp-orchestrate (commit 2ab766a), pushed to GitHub
+- Confirmed Product description mapping: HTML→plain text, 4,000-char limit applied per Salesforce storage rules
+- Verified fix in courseUtils.ts (commit 2ab766a) is live on stanford-csp-orchestrate branch
+- Clarified Course.Description routing: Learning Course (HTML, 32k), Product2 (plain text, 4k), Course Offering (not written)
 
 **Open items**
 - Architect decision: assign Product2 external ID prefix format (CRS-{CourseID} vs numeric) to resolve clash
-- Re-run flows to pick up 4 failed Products (Course Offerings saved; only Products failed on External_ID_4D__c length)
+- Re-run All, 2-Year, 5-Year flows to create 4 failed Products with fixed descriptions
 - Update purchaseInventoryFlow.ts and courseFlow.ts with confirmed prefix logic
 - Run sf deploy validate on updated code to confirm no org conflicts
-- Verify Product2.Course_Offering__c and External_ID_4D__c fields exist in org before first run
 - Resolve code–workbook sync on ATE, Order.Status, OrderItem, multi-term key (blocks Registration flow)
 - Address Salesforce org licence/storage limit (User creates rejected with LIMIT_EXCEEDED)
 - Open PR to main, review, merge once prefix decision made
+- Schedule Deploy session to push both Transcript Request and prefix-corrected flows to org
 
 **Decisions**
 - Product2 step: IsActive=FALSE, no price book entries created yet
@@ -66,9 +66,10 @@
 - ENR- prefix for Enrollment ID
 - TEST_MODE=false for next full run
 - Product descriptions: HTML stripped, plain text only, 4,000-char limit applied as Salesforce stores it
+- Course.Description: Learning Course keeps HTML (32k limit); Product2 gets plain text (4k limit); Course Offering not written
 
 **Blockers**
-- Product2.External_ID_4D__c clash: Purchase Inventory and Course flows both upsert same field with numeric values—silent overwrites break downstream lookups; requires prefix assignment before production
+- Product2.External_ID_4D__c clash: Purchase Inventory and Course flows both upsert same field with numeric values—silent overwrites break downstream lookups
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
 
 **Next**
@@ -79,7 +80,7 @@
 - Open PR to main, review, merge
 - Schedule Deploy session to push both Transcript Request and prefix-corrected flows to org
 
-**Checked live on 2026-10-27:** the repository
+**Checked live on 2026-10-27:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-10-27
 | | |
 |---|---|
@@ -89,19 +90,20 @@
 | Name | Stanford-Data-Migration-CourseEnhancement-Products |
 | Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch stanford-csp-orchestrate)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+We don't save the course description on the Course Offering. None of the three flows writes a description field to Course Offering. Course.Description goes to the **Learning Course** instead, and since this session it also goes to the new Product.
 
-The Product description fix is now on `stanford-csp-orchestrate` as commit `2ab766a`. I checked that the remote branch points at that commit.
+**Where Course.Description ends up**
 
-**What changed** (in `courseUtils.ts`, which the All, 2-Year and 5-Year flows all use):
-- **HTML is turned into plain text.** Tags such as `<span style=…>` are removed. `<br/>`, `<li>` and paragraph breaks become line breaks. Codes like `&amp;`, `&#39;` and `&quot;` become the real characters.
-- **The length cap allows for how Salesforce counts characters.** The 4,000 limit is applied to the text as Salesforce stores it, not the raw 4D text. That's why rows 75, 80, 81 and 91 failed before. With the tags gone, most descriptions now fit in full. Very long ones are cut
+| Record | Field | How it's written |
+|---|---|---|
+| **Learning Course** | `Description` | HTML kept as-is (it's a rich text field). `_4DNL_` becomes a line break. Capped at 32,000 characters. Not written if the 4D value is blank. |
+| **Product2** (new) | `Description` | HTML turned into plain text, capped at 4,000 characters (the fix in `2ab766a`). |
+| **Course Offering** | — | Not written. |
+
+All three flows do the Learning Course part the same way: `lc.Description = normaliseCatalogNotes(row.Description).slice(0, 32000)` in `coursesImportAllTime.ts`, `coursesImport2Year.ts` and `coursesImport5Year.ts`.
+
+**What this means in practice**
+- **The description belongs to the base course, not to each section.** Several Course Offerings (for example `POL 68 H` and `POL 68 Z`) share one Learning Course (`POL 68`), so they share one description. Wherever the 4D text differs by section, only one version is 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
