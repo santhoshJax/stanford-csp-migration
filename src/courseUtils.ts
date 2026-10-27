@@ -332,6 +332,90 @@ export function extractSectionSuffix(code: string): string | null {
 
 /** Standard Product2.Description is a 4,000-character Text Area. */
 export const PRODUCT_DESCRIPTION_MAX = 4000;
+
+/** Named HTML entities seen in 4D course descriptions. */
+const HTML_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+};
+
+/**
+ * Converts a 4D HTML course description into readable plain text for a
+ * plain Text Area field such as Product2.Description.
+ * - <br>, and the end of a paragraph, div, heading or list, become line breaks
+ * - <li> becomes a "• " bullet
+ * - every other tag is removed
+ * - entities (&amp; &#39; &#x2019; ...) are decoded once
+ * - runs of spaces and blank lines are collapsed
+ */
+export function htmlToPlainText(v: string | undefined | null): string {
+  if (!v) return "";
+  let text = v
+    .replace(/_4DNL_/g, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|h[1-6]|ul|ol|tr)\s*>/gi, "\n")
+    .replace(/<li[^>]*>/gi, "\n• ")
+    .replace(/<\/li\s*>/gi, "")
+    .replace(/<[^>]*>/g, "");
+  // Decode entities in a single pass so "&amp;lt;" becomes "&lt;", not "<".
+  text = text.replace(
+    /&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,
+    (match, entity: string) => {
+      const lower = entity.toLowerCase();
+      if (lower.startsWith("#x"))
+        return String.fromCodePoint(parseInt(lower.slice(2), 16));
+      if (lower.startsWith("#"))
+        return String.fromCodePoint(parseInt(lower.slice(1), 10));
+      return HTML_ENTITIES[lower] ?? match;
+    },
+  );
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t\u00a0]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * Length of a value as Salesforce counts it against a Text Area limit.
+ * Salesforce escapes & < > " ' into entities and stores line breaks as CRLF,
+ * so a value of 3,990 JavaScript characters can still be rejected with
+ * STRING_TOO_LONG (seen on the 2-Year run of 2026-10-27, rows 75, 80, 81, 91).
+ */
+export function salesforceTextLength(v: string): number {
+  let length = 0;
+  for (const ch of v) {
+    if (ch === "&")
+      length += 5; // &amp;
+    else if (ch === "<" || ch === ">")
+      length += 4; // &lt; &gt;
+    else if (ch === '"' || ch === "'")
+      length += 6; // &quot; &#39;
+    else if (ch === "\n")
+      length += 2; // CRLF
+    else length += ch.length; // surrogate pairs count as 2
+  }
+  return length;
+}
+
+/** Cuts a value so that salesforceTextLength() fits within maxLength. */
+export function capForSalesforceText(v: string, maxLength: number): string {
+  if (salesforceTextLength(v) <= maxLength) return v;
+  let used = 0;
+  let end = 0;
+  for (const ch of v) {
+    const size = salesforceTextLength(ch);
+    if (used + size > maxLength) break;
+    used += size;
+    end += ch.length;
+  }
+  return v.slice(0, end).trimEnd();
+}
 /** Standard Product2.Name is a 255-character Text field. */
 export const PRODUCT_NAME_MAX = 255;
 
@@ -354,7 +438,8 @@ export interface CourseProductInput {
  *   Course.Title       → Name (HTML stripped, max 255; falls back to Code / ID)
  *   Course.ID          → Course_Offering__c (lookup to the CourseOffering saved
  *                         for the same row — passed in as its Salesforce Id)
- *   Course.Description → Description (_4DNL_ → newline, max 4,000)
+ *   Course.Description → Description (HTML → plain text, _4DNL_ → newline,
+ *                         capped at 4,000 as Salesforce counts characters)
  *   Course.Code        → ProductCode (full code as-is, e.g. "OWC 303 A")
  *   (constant)         → IsActive = false
  *
@@ -376,8 +461,10 @@ export function buildCourseProductPayload(
     Course_Offering__c: input.courseOfferingId,
   };
   if (code) payload.ProductCode = code;
-  const description = normaliseCatalogNotes(input.description);
-  if (description)
-    payload.Description = description.slice(0, PRODUCT_DESCRIPTION_MAX);
+  const description = capForSalesforceText(
+    htmlToPlainText(input.description),
+    PRODUCT_DESCRIPTION_MAX,
+  );
+  if (description) payload.Description = description;
   return payload;
 }

@@ -6,6 +6,9 @@
  */
 import {
   buildCourseProductPayload,
+  capForSalesforceText,
+  htmlToPlainText,
+  salesforceTextLength,
   PRODUCT_DESCRIPTION_MAX,
   PRODUCT_NAME_MAX,
 } from "./courseUtils";
@@ -82,5 +85,55 @@ describe("buildCourseProductPayload", () => {
     );
     expect(new Set(payloads.map((p) => p.Course_Offering__c)).size).toBe(20);
     expect(payloads.every((p) => p.IsActive === false)).toBe(true);
+  });
+});
+
+// Product2.Description is plain text: 4D HTML must be converted, and the
+// 4,000 cap must use Salesforce's own character count (2-Year run 2026-10-27
+// rejected rows 75, 80, 81 and 91 with STRING_TOO_LONG).
+describe("Product2 Description plain text", () => {
+  it("strips tags, keeps line breaks and bullets, decodes entities once", () => {
+    const html =
+      "<span>Team&#39;s debut&nbsp;&amp; more</span><br/><br/>" +
+      '<span style="font-weight:bold">Dave</span>, <a href="https://x">Section Z</a>' +
+      "<ul><li>One</li><li>Two</li></ul>Q&amp;amp;A &#x2019;80s_4DNL_End";
+    expect(htmlToPlainText(html)).toBe(
+      "Team's debut & more\n\nDave, Section Z\n• One\n• Two\nQ&amp;A \u201980s\nEnd",
+    );
+  });
+
+  it("returns an empty string for blank or tag-only input", () => {
+    expect(htmlToPlainText(null)).toBe("");
+    expect(htmlToPlainText("<span> </span><br/>")).toBe("");
+  });
+
+  it("counts escaped characters and line breaks the way Salesforce does", () => {
+    expect(salesforceTextLength("ab")).toBe(2);
+    expect(salesforceTextLength("a&b")).toBe(7);
+    expect(salesforceTextLength("it's")).toBe(9);
+    expect(salesforceTextLength("a\nb")).toBe(4);
+  });
+
+  it("keeps a long apostrophe-heavy description within 4,000 as Salesforce counts it", () => {
+    const html = "<span>" + "the team&#39;s history, ".repeat(400) + "</span>";
+    const p = buildCourseProductPayload({ ...base, description: html });
+    const d = p.Description as string;
+    expect(d).not.toContain("<");
+    expect(d.length).toBeLessThan(PRODUCT_DESCRIPTION_MAX);
+    expect(salesforceTextLength(d)).toBeLessThanOrEqual(
+      PRODUCT_DESCRIPTION_MAX,
+    );
+  });
+
+  it("leaves a value that already fits unchanged", () => {
+    expect(capForSalesforceText("short & sweet", 4000)).toBe("short & sweet");
+  });
+
+  it("omits Description when the source is only markup", () => {
+    const p = buildCourseProductPayload({
+      ...base,
+      description: "<br/><span></span>",
+    });
+    expect(p).not.toHaveProperty("Description");
   });
 });
