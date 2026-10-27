@@ -79,6 +79,7 @@ Learning
     └── LearningCourse (Learning.External_ID_4D__c)
             └── CourseOffering (LearningCourse, AcademicSession, Dept Account, Tuition_Rule__c)
                     ├── CourseOfferingSchedule (CourseOfferingId)
+                    ├── Product2 — one per offering (Course_Offering__c; ext ID = Course.ID)
                     ├── Course_Department__c  (Course_Offering__r, Child_Dept, Parent_Dept)
                     ├── CourseOfferingParticipant — Instructor / Associate (CourseOffering + Contact)
                     ├── CourseOfferingParticipant — Student Enrollment (CourseOffering + Contact + Account)
@@ -115,6 +116,7 @@ CSP_Transcript_Request__c  (standalone)
 | CourseOffering | `Coordinator__c` | Contact | **SF Id** (resolved via SOQL) |
 | CourseOffering | `ProviderId` | Account (dept) | **SF Id** (resolved via SOQL) |
 | CourseOfferingSchedule | `CourseOfferingId` | CourseOffering | **SF Id** (resolved same batch) |
+| Product2 (course) | `Course_Offering__c` | CourseOffering | **SF Id** (from the CourseOffering upsert in the same row) |
 | Course_Department__c | `Course_Offering__r.External_ID_4D__c` | CourseOffering | External ID ref |
 | Course_Department__c | `Child_Department__r.External_ID_4D__c` | Account (dept) | External ID ref |
 | Course_Department__c | `Parent_Department__r.External_ID_4D__c` | Account (category) | External ID ref |
@@ -159,7 +161,8 @@ Group 1b — Depends on Student Flow (Group 1)
 
 Group 2 — Depends on Group 1
   └── Course Flow         → Learning, LearningCourse, Location, CourseOffering,
-                            CourseOfferingSchedule, Course_Department__c,
+                            Product2 (one per offering), CourseOfferingSchedule,
+                            Course_Department__c,
                             CourseOfferingParticipant (instructors + associates)
 
 Group 3 — Depends on Group 2 (CourseOffering must exist)
@@ -527,6 +530,31 @@ One record per instructor/associate junction row, deduplicated by (CourseOfferin
 | `ParticipantAffiliation` | `"Instructor"` or `"Associate"` |
 | `IsPrimary__c` | Boolean |
 | `External_ID_4D__c` | `CINST-{id}` or `CASSOC-{id}` (optional) |
+
+#### Product2 per CourseOffering (added 2026-10-27)
+
+All three course flows — **Tier 1** `coursesImport2Year.ts`, **Tier 2** `coursesImport5Year.ts`
+and **Tier 3** `coursesImportAllTime.ts` (Course Import - All) — create one `Product2` per
+CourseOffering, right after the CourseOffering is saved. Source: mapping workbook, Course tab
+rows 127–131. The payload is built by `buildCourseProductPayload()` in `src/courseUtils.ts`, so
+the three flows share one mapping.
+
+Upsert key: `External_ID_4D__c` = Course.ID (same value as the CourseOffering, e.g. `20081_WSP 138`).
+
+| Field | Source | Notes |
+|---|---|---|
+| `Name` | Course.Title | `_4DNL_` → space, HTML stripped, max 255; falls back to Code, then ID |
+| `Course_Offering__c` | Course.ID | **SF Id** of the CourseOffering saved for the same row |
+| `Description` | Course.Description | `_4DNL_` → newline, max 4,000 (standard Product2 limit) |
+| `ProductCode` | Course.Code | Full code as-is, e.g. `OWC 303 A` |
+| `IsActive` | — | Always `false` |
+
+- If the CourseOffering fails, no Product2 is created for that row (no orphan Products).
+- Results sheets get a `Product2` tab; run summaries get a Product2 line.
+- **No clash with Purchase Inventory Products.** The Purchase Inventory flow writes its own 4D
+  IDs to the same `Product2.External_ID_4D__c` field, but those are small numbers, while
+  Course IDs are `<quarter>_<code>` text values, so the two sets cannot overlap.
+- No PricebookEntry is created for course Products yet.
 
 ---
 

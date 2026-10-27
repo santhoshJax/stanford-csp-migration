@@ -327,3 +327,57 @@ export function extractSectionSuffix(code: string): string | null {
   if (h) return h[1].toUpperCase();
   return null;
 }
+
+// ── Product2 per CourseOffering ───────────────────────────────────────────────
+
+/** Standard Product2.Description is a 4,000-character Text Area. */
+export const PRODUCT_DESCRIPTION_MAX = 4000;
+/** Standard Product2.Name is a 255-character Text field. */
+export const PRODUCT_NAME_MAX = 255;
+
+export interface CourseProductInput {
+  /** Course.ID — also the CourseOffering's External_ID_4D__c. */
+  sourceId: string;
+  /** Course.Code, e.g. "OWC 303 A". */
+  code: string;
+  /** Course.Title with _4DNL_ tokens already replaced. */
+  title: string;
+  /** Raw Course.Description. */
+  description: string | undefined | null;
+  /** Salesforce Id of the CourseOffering saved for this row. */
+  courseOfferingId: string;
+}
+
+/**
+ * Builds the Product2 payload for one Course row (mapping workbook, Course tab
+ * rows 127-131, Oct 2026). One Product2 per CourseOffering.
+ *   Course.Title       → Name (HTML stripped, max 255; falls back to Code / ID)
+ *   Course.ID          → Course_Offering__c (lookup to the CourseOffering saved
+ *                         for the same row — passed in as its Salesforce Id)
+ *   Course.Description → Description (_4DNL_ → newline, max 4,000)
+ *   Course.Code        → ProductCode (full code as-is, e.g. "OWC 303 A")
+ *   (constant)         → IsActive = false
+ *
+ * The record itself is upserted on Product2.External_ID_4D__c = Course.ID
+ * (e.g. "20081_WSP 138"). Course IDs are "<quarter>_<code>" text values, so
+ * they cannot collide with the small numeric Purchase Inventory IDs that the
+ * Purchase Inventory flow writes to the same field.
+ */
+export function buildCourseProductPayload(
+  input: CourseProductInput,
+): Record<string, unknown> {
+  const code = input.code.trim();
+  const name =
+    stripHtmlForTextField(input.title, PRODUCT_NAME_MAX) ||
+    (code || input.sourceId).slice(0, PRODUCT_NAME_MAX);
+  const payload: Record<string, unknown> = {
+    Name: name,
+    IsActive: false,
+    Course_Offering__c: input.courseOfferingId,
+  };
+  if (code) payload.ProductCode = code;
+  const description = normaliseCatalogNotes(input.description);
+  if (description)
+    payload.Description = description.slice(0, PRODUCT_DESCRIPTION_MAX);
+  return payload;
+}

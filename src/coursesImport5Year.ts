@@ -13,6 +13,7 @@
  *
  * Each row triggers sequential Salesforce REST API calls in dependency order:
  *   Learning → LearningCourse → Instructor → CourseOffering
+ *   → Product2 (one per CourseOffering, workbook Course rows 127-131)
  *   → CourseOfferingSchedule → COP (Instructor / Associate)
  *
  * Not written by this flow (fields outside the 32): Location, department
@@ -50,6 +51,7 @@ import {
   extractSectionSuffix,
   formatFromSuffix,
   stripHtmlForTextField,
+  buildCourseProductPayload,
 } from "./courseUtils";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -823,6 +825,7 @@ export const coursesImport5Year = flow({
       learning: { ok: 0, skipped: 0, err: 0 },
       learningCourse: { ok: 0, skipped: 0, err: 0 },
       courseOffering: { ok: 0, err: 0 },
+      product: { ok: 0, err: 0 },
       schedule: { ok: 0, skipped: 0, err: 0 },
       copInstructor: { ok: 0, skipped: 0, err: 0 },
       copAssociate: { ok: 0, skipped: 0, err: 0 },
@@ -1146,6 +1149,41 @@ export const coursesImport5Year = flow({
         continue;
       }
 
+      // Product2 — one per CourseOffering (workbook Course tab rows 127-131).
+      // Only reached when the CourseOffering saved, so no orphan Products.
+      const productPayload = buildCourseProductPayload({
+        sourceId,
+        code,
+        title,
+        description: row.Description,
+        courseOfferingId,
+      });
+      try {
+        const r = await sfUpsert(
+          sfBase,
+          sfToken,
+          "Product2",
+          "External_ID_4D__c",
+          sourceId,
+          productPayload,
+        );
+        counts.product.ok++;
+        ok("Product2", r.id, r.created, {
+          External_ID_4D__c: sourceId,
+          ...productPayload,
+        });
+      } catch (err) {
+        counts.product.err++;
+        const msg = sfErrMsg(err);
+        logger.error(
+          `[Course32] Row ${startRow + i} (${sourceId}) Product2: ${msg}`,
+        );
+        fail("Product2", msg, {
+          External_ID_4D__c: sourceId,
+          ...productPayload,
+        });
+      }
+
       // 5-7. Post-offering operations — all independent once courseOfferingId is set.
       // Run Schedule, COP-Instructor, COP-Associate in parallel.
       const instructorRows =
@@ -1447,6 +1485,7 @@ export const coursesImport5Year = flow({
       "Learning",
       "LearningCourse",
       "CourseOffering",
+      "Product2",
       "CourseOfferingSchedule",
       "COP-Instructor",
       "COP-Associate",
@@ -1526,6 +1565,7 @@ export const coursesImport5Year = flow({
         `\n  Learning:       ${counts.learning.ok} ok, ${counts.learning.skipped} skip (exists), ${counts.learning.err} err` +
         `\n  LearningCourse: ${counts.learningCourse.ok} ok, ${counts.learningCourse.skipped} skip (exists), ${counts.learningCourse.err} err` +
         `\n  CourseOffering: ${counts.courseOffering.ok} ok, ${counts.courseOffering.err} err` +
+        `\n  Product2:       ${counts.product.ok} ok, ${counts.product.err} err` +
         `\n  Schedule:       ${counts.schedule.ok} ok, ${counts.schedule.skipped} skip, ${counts.schedule.err} err` +
         `\n  COP-Instructor: ${counts.copInstructor.ok} ok, ${counts.copInstructor.skipped} skip, ${counts.copInstructor.err} err` +
         `\n  COP-Associate:  ${counts.copAssociate.ok} ok, ${counts.copAssociate.skipped} skip, ${counts.copAssociate.err} err`,

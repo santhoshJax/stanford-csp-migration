@@ -40,7 +40,10 @@
  *     here for consistency, per explicit instruction (Oct 2026).
  *
  * Each row triggers sequential Salesforce REST API calls in dependency order:
- *   Learning → LearningCourse → CourseOffering
+ *   Learning → LearningCourse → CourseOffering → Product2
+ * Product2 (workbook Course tab rows 127-131, Oct 2026): one per
+ * CourseOffering, upserted on External_ID_4D__c = Course.ID and linked to the
+ * offering via Course_Offering__c. Skipped when the CourseOffering fails.
  * No CourseOfferingSchedule, CourseOfferingParticipant, Location, or
  * Department records — none of their source fields (Weekday, Course_Time,
  * Primary_Instructor, Primary_Associate, Building, Room, Coordinator_ID,
@@ -75,6 +78,7 @@ import {
   stripSectionSuffix,
   extractSectionSuffix,
   formatFromSuffix,
+  buildCourseProductPayload,
 } from "./courseUtils";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -537,7 +541,7 @@ export const coursesImportAllTime = flow({
   description:
     "Tier 3 course import: streams the course TSV, keeps academic year 2020-21 " +
     "and older, and maps the 22 Tier 3 fields to Learning, LearningCourse, " +
-    "and CourseOffering.",
+    "CourseOffering, and one Product2 per CourseOffering.",
 
   onTrigger: (_context, payload) => Promise.resolve({ payload }),
 
@@ -666,6 +670,7 @@ export const coursesImportAllTime = flow({
       learning: { ok: 0, skipped: 0, err: 0 },
       learningCourse: { ok: 0, skipped: 0, err: 0 },
       courseOffering: { ok: 0, err: 0, corrected: 0 },
+      product: { ok: 0, err: 0 },
     };
 
     const successRows: SuccessRow[] = [];
@@ -802,6 +807,7 @@ export const coursesImportAllTime = flow({
       // Results-sheet column (correction mode only) — which dates came from
       // the correction tab. Not sent to Salesforce.
       let correctionApplied = "";
+      let courseOfferingId = "";
       const resultCols = (): Record<string, unknown> =>
         correctionEnabled ? { Correction_Applied: correctionApplied } : {};
       try {
@@ -874,6 +880,7 @@ export const coursesImportAllTime = flow({
           sourceId,
           co,
         );
+        courseOfferingId = r.id;
         counts.courseOffering.ok++;
         ok("CourseOffering", r.id, r.created, {
           External_ID_4D__c: sourceId,
@@ -891,6 +898,42 @@ export const coursesImportAllTime = flow({
           ...co,
           ...resultCols(),
         });
+        continue;
+      }
+
+      // Product2 — one per CourseOffering (workbook Course tab rows 127-131).
+      // Only reached when the CourseOffering saved, so no orphan Products.
+      const productPayload = buildCourseProductPayload({
+        sourceId,
+        code,
+        title,
+        description: row.Description,
+        courseOfferingId,
+      });
+      try {
+        const r = await sfUpsert(
+          sfBase,
+          sfToken,
+          "Product2",
+          "External_ID_4D__c",
+          sourceId,
+          productPayload,
+        );
+        counts.product.ok++;
+        ok("Product2", r.id, r.created, {
+          External_ID_4D__c: sourceId,
+          ...productPayload,
+        });
+      } catch (err) {
+        counts.product.err++;
+        const msg = sfErrMsg(err);
+        logger.error(
+          `[Course22] Row ${startRow + i} (${sourceId}) Product2: ${msg}`,
+        );
+        fail("Product2", msg, {
+          External_ID_4D__c: sourceId,
+          ...productPayload,
+        });
       }
     }
 
@@ -899,6 +942,7 @@ export const coursesImportAllTime = flow({
       "Learning",
       "LearningCourse",
       "CourseOffering",
+      "Product2",
     ] as const;
 
     let nextSheetId = courseSheetId;
@@ -977,7 +1021,8 @@ export const coursesImportAllTime = flow({
         `\n  CourseOffering: ${counts.courseOffering.ok} ok, ${counts.courseOffering.err} err` +
         (correctionEnabled
           ? `, ${counts.courseOffering.corrected} date-corrected`
-          : ""),
+          : "") +
+        `\n  Product2:       ${counts.product.ok} ok, ${counts.product.err} err`,
     );
 
     // ── Correction mode: report IDs never found in the file ──────────────────
