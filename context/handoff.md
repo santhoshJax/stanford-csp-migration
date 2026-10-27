@@ -42,11 +42,13 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-27
-**Status:** at risk — Fix committed (4ff3d77); PR & deploy still pending. Config bug resolved; integration not live yet.
+**Status:** at risk — Config field removed & committed (1964cf8); PR & deploy still pending. Integration not live yet.
 
 **Done this session**
-- Added `default: ""` to Account Login Results Spreadsheet ID in src/configPages.ts
-- Committed fix to stanford-csp-orchestrate (4ff3d77) and pushed to GitHub
+- Removed Account Login Results Spreadsheet ID field from src/configPages.ts
+- Updated src/accountLoginFlow.ts to use trigger payload sheet ID only
+- Updated ARCHITECTURE.md to document field removal and restart payload pattern
+- Committed changes to stanford-csp-orchestrate (1964cf8) and pushed to GitHub
 - Type check clean; all 32 Account Login tests pass
 
 **Open items**
@@ -78,10 +80,10 @@
 - Code not deployed yet; integration still running old build
 
 **Next**
-- Open PR from stanford-csp-orchestrate to main
+- Open pull request from stanford-csp-orchestrate to main
 - Review and merge PR to main
 - Run Deploy session to ship code live to Salesforce org
-- Run full integration on ~160,000 rows with blank Account Login Results Spreadsheet ID setting
+- Run full integration on ~160,000 rows with new config (no Account Login Results Spreadsheet ID field)
 - Verify row counts balance: Success + Errors + Not Processed + Skipped = source count
 
 **Checked live on 2026-10-27:** the repository
@@ -102,12 +104,12 @@
 Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-I pushed the fix to `stanford-csp-orchestrate` as commit `4ff3d77`. GitHub confirms the branch now points to that commit. It isn't deployed yet.
+I've removed the "Account Login Results Spreadsheet ID" field and pushed the change to `stanford-csp-orchestrate` as commit `1964cf8`. GitHub shows the branch pointing at that commit. Nothing is deployed yet, so the field will stay on the config screen until you redeploy.
 
-**What changed:** I added one line, `default: ""`, to the "Account Login Results Spreadsheet ID" setting in `src/configPages.ts`. The other optional sheet IDs, such as "Course Correction Sheet ID", already have this line. Once it's deployed, the config screen will save with that setting left blank, which is what you want for a fresh run. The flow logic is unchanged, and it already treats a blank value as "create a new results sheet".
-
-**What happened along the way:**
-- The checkout from earlier in this session wasn't on this machine any more, so I cloned the bran
+**What changed (3 files):**
+- **`src/configPages.ts`:** the field is gone, so the config screen no longer asks for it.
+- **`src/accountLoginFlow.ts`:** the flow only gets the results sheet ID from the trigger payload. Within one run nothing changes: window 1 creates the results sheet and passes its ID to each following window, so all rows go into one sheet. You don't need to set anything.
+- **`ARCHITECTURE.md`:** updated to match, with a
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
