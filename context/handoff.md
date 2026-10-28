@@ -41,13 +41,11 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-10-27
-**Status:** at risk — Config field removed & committed (1964cf8); PR pending review; deploy & full integration run still needed. Cross-window dedup confirmed wor…
+### Engagement state — 2026-10-28
+**Status:** at risk — Config field removed & committed; PR pending review; deploy & full integration run still needed. Student index file explained—safe to delet…
 
 **Done this session**
-- Confirmed Student_ID deduplication runs cross-window, unaffected by field removal
-- Verified results sheet ID now sourced from trigger payload only
-- Confirmed index persists on restart to maintain dedup across resume
+- Explained Student index file: what it is, why it's saved to Drive, when it can be deleted
 
 **Open items**
 - Open PR from stanford-csp-orchestrate to main; review & merge
@@ -78,14 +76,13 @@
 - Code not deployed yet; integration still running old build
 
 **Next**
-- Open pull request from stanford-csp-orchestrate to main
-- Review and merge PR to main
+- Review and merge PR from stanford-csp-orchestrate to main
 - Run Deploy session to ship code live to Salesforce org
 - Run full integration on ~160,000 rows with new config (no Account Login Results Spreadsheet ID field)
 - Verify row counts balance: Success + Errors + Not Processed + Skipped = source count
 
-**Checked live on 2026-10-27:** nothing — the status above is as recorded, not re-checked
-### Last session — 2026-10-27
+**Checked live on 2026-10-28:** nothing — the status above is as recorded, not re-checked
+### Last session — 2026-10-28
 | | |
 |---|---|
 | Type | BUILD |
@@ -94,21 +91,20 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-**Yes. The import still compares Student_IDs across all windows.** Removing the field only changed where the results go. It didn't touch the duplicate check, which runs on its own.
+**The import creates this file itself. It's the Student index, the cross-window duplicate check we added in commit `96e3ddf`.** It isn't a results sheet, and you don't need to do anything with it.
 
-They're two separate things:
+## What it is
+Before window 1, the import reads the whole Account Login file once and writes one small entry per Student_ID to this JSON file. Each entry holds:
+- the student's first row (line number and window), which is the only row sent to Salesforce
+- whether any of the student's rows is active
+- how many rows the student has, and whether they're enrolled
 
-| | What it does | Affected by the removed field? |
-|---|---|---|
-| **Student index** | Reads the whole Account Login file once before window 1 and records each Student_ID's first row, the window that row is in, and whether any of the student's rows is active | No |
-| **Results sheet ID** | Says which spreadsheet the Success / Errors / Not Processed / Skipped rows are written to | This is the one the field used to set. It now comes only from the payload |
+The file also holds the overall counts: total lines, blank lines, valid rows, column mismatches, invalid IDs, unique students, and duplicate rows. It has IDs, flags and positions only. There are no names or emails in it.
 
-**What happens in each window** (`src/accountLoginFlow.ts`, step 6, which calls `applyStudentIndex` in `src/accountLoginIndex.ts`):
-- Each of the window's 500 rows is looked up in the index.
-- If the row is the student's **first row in the file**, it's sent to Salesforce. IsActive is true if **any** of that student's rows is active.
-- Any other row for that student, in this window or another one, goes to **Skipped** with the reason "Merged into this student's first row: line N, window M".
+**The name:** the import names it `Stanford CSP - Account Login Import - Student Index - <ID>.json`. The ID at the end (`169lMYyPTETvrVQtlieYdBo3VVplV9jkM`) is the Drive ID of your Account Login **source file**, which is how the import finds the right index again later. It's saved in the same folder as the results sheet (`src/accountLoginIndex.ts`, line 510).
 
-**Example:** student 12345 is on
+## Why it's saved to Drive
+Each window runs as a separ
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
