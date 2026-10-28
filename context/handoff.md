@@ -42,12 +42,12 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-28
-**Status:** at risk — Account Login duplicate & email issues analyzed; PR pending merge; Deploy & full integration run still needed
+**Status:** at risk — Code analysis complete; 110 extra Course Offerings likely from old file version or manual creates. PR still pending merge; Deploy & integra…
 
 **Done this session**
-- Analyzed Account Login skip reasons: 2,961 merged duplicates, 1,182 invalid IDs, 258 no-email, 3 no-account, 999 blank rows
-- Analyzed DUPLICATE_USERNAME errors (187 total): identified three causes and query method to diagnose
-- Documented username suffix fix option for email clashes
+- Ruled out re-runs, overlapping flows, and key changes as source of 110 extra Course Offering records
+- Identified three likely causes: source file version mismatch, manual/test records, or duplicate IDs in count
+- Provided three SQL queries to diagnose 110 extras in UAT org
 
 **Open items**
 - Review and merge PR from stanford-csp-orchestrate to main
@@ -76,10 +76,10 @@
 - Architect has not confirmed whether OrderItems follow deduplicated COP rows or all enrollment rows
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
 - Code not deployed yet; integration still running old build
-- Account Login: 187 DUPLICATE_USERNAME errors need diagnosis (existing User, shared email, or other org clash)
 
 **Next**
-- Decide: username suffix for Account Login Users or export 187 failed emails for audit
+- Run SQL queries in UAT org to diagnose 110 extra Course Offerings; compare External_ID_4D__c against source file
+- Confirm source file version and whether it matches the 15,539 distinct IDs counted
 - Review and merge PR from stanford-csp-orchestrate to main
 - Run Deploy session to ship code live to Salesforce org
 - Run full integration on ~160,000 rows with new config; verify row counts balance
@@ -91,24 +91,19 @@
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
-| Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
+| Name | Stanford-Data-Migration-CourseEnhancement-Products |
+| Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-Here's what each skip reason and the error mean, based on the code on `stanford-csp-orchestrate`. I haven't changed anything.
+I couldn't check the source data or the UAT org from this session. No Salesforce org is attached, and Google Workspace isn't connected, so I can't open the course file the flows read (the `Course File ID` set in Prismatic). What I could check is the code, and it narrows down where the 110 extra records came from. I changed no code.
 
-## Skipped reasons (other than Not enrolled)
+**What the code rules out**
+- **Re-runs and overlapping flows don't create duplicates.** All three course flows upsert Course Offering on `External_ID_4D__c` = the source `id`, with spaces trimmed. One distinct ID can only ever give one record.
+- **That key has never changed.** It has been the same in every version since the first commit, so older builds didn't leave records behind under a different key.
+- **No other flow creates Course Offerings.** The enrollment, certificate and other flows only point at existing offerings. If the offering is missing, those rows fail; they don't create one.
+- **Skipped rows lower the count, not raise it.** Rows with a blank or out-of-range Quarter are skipped.
 
-**Duplicate Student_ID (merged): 2,961.** No data was lost here. These are extra rows for a student who appears more than once in the Account Login file. Only the student's **first** row is sent to Salesforce, and the User is set active if **any** of the student's rows is active. The other rows go to this list. The Detail column gives the line and window each one was merged into.
-*Example:* student 12345 is on lines 1,200 and 3,600. Line 1,200 creates the User, and line 3,600 is listed here as "merged into line 1,200".
-
-**Invalid Student_ID: 1,182.** The Student_ID must be a whole number greater than 0. Rows are skipped when the ID is:
-- blank
-- `0` (or `00`)
-- not a plain whole number, for example `ABC`, `12-34`, or `12345.0`
-
-The Detail column shows the actual value, so you can see which of these it was. **Worth checking:** if many of them look like `12345.0`, those are real IDs that a spreadsheet export reformatted. The import rejects them as they stand.
-
-**No usable email: 258.** The student is enrolled and 
+So the 110 extras are almost certainly records whose 4D ID **isn't in the source file you counted**. The likely causes:
+1. **The file you counted isn't the one
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
