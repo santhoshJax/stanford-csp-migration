@@ -42,20 +42,22 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-28
-**Status:** at risk — Config field removed & committed; PR pending review; deploy & full integration run still needed. Student index file explained—safe to delet…
+**Status:** at risk — Account Login fixed & PR pending; Student & Enrollment flows audited—no index needed, but duplicate & reporting gaps found
 
 **Done this session**
-- Explained Student index file: what it is, why it's saved to Drive, when it can be deleted
+- Audited Student flow: no duplicate check; repeated IDs would fail in-window or overwrite cross-window
+- Audited Enrollment flows (2-year & all-time): whole-file duplicate check in memory, no index needed
+- Identified reporting gaps: merged/skipped rows not listed; results-sheet write failures only warn; no count reconciliation
 
 **Open items**
 - Open PR from stanford-csp-orchestrate to main; review & merge
 - Run Deploy session to ship code live to Salesforce org
 - Run full integration on ~160,000 rows; verify Success + Errors + Not Processed + Skipped = source count
+- Confirm whether Student source file contains repeated IDs (single count settles if duplicate logic needed)
 - Architect: confirm two order types (Registration, Purchase) or add third for transcripts
 - Architect: decide Order/OrderItem/Product external ID prefixes (REG-, PUR-, ENR-, PIT-, CRS-)
 - Architect: confirm price book entry value for course Products and UnitPrice source
 - Architect: confirm OrderItem rows follow deduplicated COP or all enrollments
-- Combine Skipped tabs from all Account Login sheets in Failed Records folder into one list
 
 **Decisions**
 - Product2 step: IsActive=FALSE, no price book entries created yet
@@ -74,14 +76,15 @@
 - Architect has not confirmed whether OrderItems follow deduplicated COP rows or all enrollment rows
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
 - Code not deployed yet; integration still running old build
+- Student flow: no duplicate check; repeated IDs would fail or overwrite—need to confirm if file has repeated IDs first
 
 **Next**
+- Check Student source file for repeated IDs (single count); if none found, Student only needs reporting fixes
 - Review and merge PR from stanford-csp-orchestrate to main
 - Run Deploy session to ship code live to Salesforce org
 - Run full integration on ~160,000 rows with new config (no Account Login Results Spreadsheet ID field)
-- Verify row counts balance: Success + Errors + Not Processed + Skipped = source count
 
-**Checked live on 2026-10-28:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-10-28:** the repository
 ### Last session — 2026-10-28
 | | |
 |---|---|
@@ -91,20 +94,19 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-**The import creates this file itself. It's the Student index, the cross-window duplicate check we added in commit `96e3ddf`.** It isn't a results sheet, and you don't need to do anything with it.
+I read both flows and changed nothing. **Student and Enrollment don't need the index file. They handle duplicates in two different ways, and neither matches Account Login.** Enrollment already has a whole-file duplicate check. Student has no duplicate check at all.
 
-## What it is
-Before window 1, the import reads the whole Account Login file once and writes one small entry per Student_ID to this JSON file. Each entry holds:
-- the student's first row (line number and window), which is the only row sent to Salesforce
-- whether any of the student's rows is active
-- how many rows the student has, and whether they're enrolled
+## Student Import (`src/studentFlow.ts`)
 
-The file also holds the overall counts: total lines, blank lines, valid rows, column mismatches, invalid IDs, unique students, and duplicate rows. It has IDs, flags and positions only. There are no names or emails in it.
+**How it runs:** it reads the file in windows of 2,000 rows (`MAX_ROWS = 2000`). Each window sends its rows to Salesforce as an upsert on `Account.Student_ID_4D__c`, then starts the next window from the byte offset where it stopped. This is the same windowed design Account Login had before the change.
 
-**The name:** the import names it `Stanford CSP - Account Login Import - Student Index - <ID>.json`. The ID at the end (`169lMYyPTETvrVQtlieYdBo3VVplV9jkM`) is the Drive ID of your Account Login **source file**, which is how the import finds the right index again later. It's saved in the same folder as the results sheet (`src/accountLoginIndex.ts`, line 510).
+**Duplicate handling:** there isn't any, either within a window or across windows. The only rows it skips are:
+- rows whose column count doesn't match the header
+- rows where ID is blank, not a number, or 0
+- in correction mode, rows that aren't in the correction sheet
 
-## Why it's saved to Drive
-Each window runs as a separ
+**What would happen if a Student ID appeared twice:**
+- **In the same window:** both rows go into one Bulk API job keyed on the same external ID. Salesforce normally rejects those rows with a duplicate external ID error, so they would show up on the Errors tab. This is the same error that led to the per-window chec
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
