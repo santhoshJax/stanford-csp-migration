@@ -42,18 +42,18 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-28
-**Status:** at risk — Account Login fixed & PR pending; Student & Enrollment flows audited—no index needed, but duplicate & reporting gaps found
+**Status:** at risk — Account Login duplicate & email issues analyzed; PR pending merge; Deploy & full integration run still needed
 
 **Done this session**
-- Audited Student flow: no duplicate check; repeated IDs would fail in-window or overwrite cross-window
-- Audited Enrollment flows (2-year & all-time): whole-file duplicate check in memory, no index needed
-- Identified reporting gaps: merged/skipped rows not listed; results-sheet write failures only warn; no count reconciliation
+- Analyzed Account Login skip reasons: 2,961 merged duplicates, 1,182 invalid IDs, 258 no-email, 3 no-account, 999 blank rows
+- Analyzed DUPLICATE_USERNAME errors (187 total): identified three causes and query method to diagnose
+- Documented username suffix fix option for email clashes
 
 **Open items**
-- Open PR from stanford-csp-orchestrate to main; review & merge
+- Review and merge PR from stanford-csp-orchestrate to main
 - Run Deploy session to ship code live to Salesforce org
 - Run full integration on ~160,000 rows; verify Success + Errors + Not Processed + Skipped = source count
-- Confirm whether Student source file contains repeated IDs (single count settles if duplicate logic needed)
+- Confirm whether Student source file contains repeated IDs
 - Architect: confirm two order types (Registration, Purchase) or add third for transcripts
 - Architect: decide Order/OrderItem/Product external ID prefixes (REG-, PUR-, ENR-, PIT-, CRS-)
 - Architect: confirm price book entry value for course Products and UnitPrice source
@@ -76,13 +76,13 @@
 - Architect has not confirmed whether OrderItems follow deduplicated COP rows or all enrollment rows
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
 - Code not deployed yet; integration still running old build
-- Student flow: no duplicate check; repeated IDs would fail or overwrite—need to confirm if file has repeated IDs first
+- Account Login: 187 DUPLICATE_USERNAME errors need diagnosis (existing User, shared email, or other org clash)
 
 **Next**
-- Check Student source file for repeated IDs (single count); if none found, Student only needs reporting fixes
+- Decide: username suffix for Account Login Users or export 187 failed emails for audit
 - Review and merge PR from stanford-csp-orchestrate to main
 - Run Deploy session to ship code live to Salesforce org
-- Run full integration on ~160,000 rows with new config (no Account Login Results Spreadsheet ID field)
+- Run full integration on ~160,000 rows with new config; verify row counts balance
 
 **Checked live on 2026-10-28:** the repository
 ### Last session — 2026-10-28
@@ -94,19 +94,21 @@
 | Name | Stanford-Data-Migration-AccountLogin-IssueFix-Build (again) |
 | Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-I read both flows and changed nothing. **Student and Enrollment don't need the index file. They handle duplicates in two different ways, and neither matches Account Login.** Enrollment already has a whole-file duplicate check. Student has no duplicate check at all.
+Here's what each skip reason and the error mean, based on the code on `stanford-csp-orchestrate`. I haven't changed anything.
 
-## Student Import (`src/studentFlow.ts`)
+## Skipped reasons (other than Not enrolled)
 
-**How it runs:** it reads the file in windows of 2,000 rows (`MAX_ROWS = 2000`). Each window sends its rows to Salesforce as an upsert on `Account.Student_ID_4D__c`, then starts the next window from the byte offset where it stopped. This is the same windowed design Account Login had before the change.
+**Duplicate Student_ID (merged): 2,961.** No data was lost here. These are extra rows for a student who appears more than once in the Account Login file. Only the student's **first** row is sent to Salesforce, and the User is set active if **any** of the student's rows is active. The other rows go to this list. The Detail column gives the line and window each one was merged into.
+*Example:* student 12345 is on lines 1,200 and 3,600. Line 1,200 creates the User, and line 3,600 is listed here as "merged into line 1,200".
 
-**Duplicate handling:** there isn't any, either within a window or across windows. The only rows it skips are:
-- rows whose column count doesn't match the header
-- rows where ID is blank, not a number, or 0
-- in correction mode, rows that aren't in the correction sheet
+**Invalid Student_ID: 1,182.** The Student_ID must be a whole number greater than 0. Rows are skipped when the ID is:
+- blank
+- `0` (or `00`)
+- not a plain whole number, for example `ABC`, `12-34`, or `12345.0`
 
-**What would happen if a Student ID appeared twice:**
-- **In the same window:** both rows go into one Bulk API job keyed on the same external ID. Salesforce normally rejects those rows with a duplicate external ID error, so they would show up on the Errors tab. This is the same error that led to the per-window chec
+The Detail column shows the actual value, so you can see which of these it was. **Worth checking:** if many of them look like `12345.0`, those are real IDs that a spreadsheet export reformatted. The import rejects them as they stand.
+
+**No usable email: 258.** The student is enrolled and 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
