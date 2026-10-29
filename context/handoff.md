@@ -41,13 +41,12 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-10-28
-**Status:** at risk — Code analysis complete; 110 extra Course Offerings likely from old file version or manual creates. PR still pending merge; Deploy & integra…
+### Engagement state — 2026-10-29
+**Status:** at risk — BUILD completed; enrollment rule drafted locally, awaiting team decision on blank Status handling before push
 
 **Done this session**
-- Ruled out re-runs, overlapping flows, and key changes as source of 110 extra Course Offering records
-- Identified three likely causes: source file version mismatch, manual/test records, or duplicate IDs in count
-- Provided three SQL queries to diagnose 110 extras in UAT org
+- Drafted enrollment rule changes across 6 files (accountLoginFlow, accountLoginIndex, tests, ARCHITECTURE.md)
+- Confirmed code changes not yet pushed; branch still at 6b3a81c
 
 **Open items**
 - Review and merge PR from stanford-csp-orchestrate to main
@@ -76,34 +75,40 @@
 - Architect has not confirmed whether OrderItems follow deduplicated COP rows or all enrollment rows
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
 - Code not deployed yet; integration still running old build
+- Team decision pending: blank Status field handling in enrollment rule before push
 
 **Next**
-- Run SQL queries in UAT org to diagnose 110 extra Course Offerings; compare External_ID_4D__c against source file
-- Confirm source file version and whether it matches the 15,539 distinct IDs counted
+- Team reviews enrollment rule changes (patch file or draft PR available)
+- Confirm blank Status field treatment (currently New) and any other enrollment rule feedback
+- Push enrollment rule to branch (either stanford-csp-orchestrate or separate feature branch per team decision)
+- Run SQL queries in UAT org to diagnose 110 extra Course Offerings
 - Review and merge PR from stanford-csp-orchestrate to main
 - Run Deploy session to ship code live to Salesforce org
-- Run full integration on ~160,000 rows with new config; verify row counts balance
 
-**Checked live on 2026-10-28:** the repository
-### Last session — 2026-10-28
+**Checked live on 2026-10-29:** nothing — the status above is as recorded, not re-checked
+### Last session — 2026-10-29
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-CourseEnhancement-Products |
-| Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
+| Name | Stanford-Data-Migration-AccountLogin-IssueFix(again) |
+| Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
 **In its own words (excerpt):**
-I couldn't check the source data or the UAT org from this session. No Salesforce org is attached, and Google Workspace isn't connected, so I can't open the course file the flows read (the `Course File ID` set in Prismatic). What I could check is the code, and it narrows down where the 110 extra records came from. I changed no code.
+Got it. I'll hold everything until you've confirmed what you need to. Go ahead with your questions.
 
-**What the code rules out**
-- **Re-runs and overlapping flows don't create duplicates.** All three course flows upsert Course Offering on `External_ID_4D__c` = the source `id`, with spaces trimmed. One distinct ID can only ever give one record.
-- **That key has never changed.** It has been the same in every version since the first commit, so older builds didn't leave records behind under a different key.
-- **No other flow creates Course Offerings.** The enrollment, certificate and other flows only point at existing offerings. If the offering is missing, those rows fail; they don't create one.
-- **Skipped rows lower the count, not raise it.** Rows with a blank or out-of-range Quarter are skipped.
+**Nothing was pushed.** The branch on GitHub is still at `6b3a81c`, the same commit as before. The new enrollment rule exists only as uncommitted edits in my working copy, in these 6 files:
+- `src/accountLoginFlow.ts`
+- `src/accountLoginIndex.ts`
+- `src/accountLoginFlow.test.ts`
+- `src/accountLoginIndex.test.ts`
+- `src/accountLoginSkipped.test.ts`
+- `ARCHITECTURE.md`
 
-So the 110 extras are almost certainly records whose 4D ID **isn't in the source file you counted**. The likely causes:
-1. **The file you counted isn't the one
+**Ways to continue without pushing to the shared branch:**
+1. **Push to a separate branch** (for example `stanford-csp-orchestrate-enrollment-rule`) and open a draft pull request into `stanford-csp-orchestrate`. You and the team can review the diff without the shared branch changing. Pushing to another branch does go against the fixed branch for this session, so I'd only do it if you say so.
+2. **Get the diff as a file.** I can attach a patch file, or a short document listing each change, so you can review it offline or share it with the team.
+3. **Wait for the team.** I keep the edits local and push nothing until the team has replied to the Slack message. That includes how a blank Status should count, which I've treat
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
