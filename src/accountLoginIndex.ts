@@ -14,7 +14,7 @@
  *   - the student's FIRST valid row (the "owner" row): its start byte, line
  *     number and the window it falls in. Only that row is sent to Salesforce.
  *   - whether ANY of the student's rows is active (rule confirmed 2026-10-13).
- *   - how many rows the student has, and whether they are enrolled (the
+ *   - how many rows the student has, and its Enrollment state (the
  *     Enrollment file is read once here instead of once per window).
  * The index also records the file's header row and the start byte of every
  * window, so a run restarted by hand at a byte offset gets the right headers
@@ -33,7 +33,7 @@ import { str, toBool } from "./utils";
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 /** Bump when the index layout or the rules that build it change. */
-export const STUDENT_INDEX_VERSION = 1;
+export const STUDENT_INDEX_VERSION = 2;
 
 const DRIVE_FILES = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
@@ -44,7 +44,8 @@ export const SKIP_REASON = {
   COLUMN_MISMATCH: "Column count does not match header",
   INVALID_STUDENT_ID: "Invalid Student_ID",
   DUPLICATE_STUDENT_ID: "Duplicate Student_ID (merged)",
-  NOT_ENROLLED: "Not enrolled",
+  ONLY_NEW_ENROLLMENTS: "Only New enrollments",
+  NO_ENROLLMENT_ROWS: "No enrollment rows",
   NO_MATCHING_ACCOUNT: "No matching Account",
   NO_USABLE_EMAIL: "No usable email",
 } as const;
@@ -87,9 +88,28 @@ export interface StudentIndexEntry {
   anyActive: boolean;
   /** Valid rows for this Student_ID in the whole file. */
   rowCount: number;
-  /** True when the Enrollment file has a Status = "Enrolled" row. */
-  enrolled: boolean;
+  /** What the Enrollment file says about this student (see EnrollmentState). */
+  enrollment: EnrollmentState;
 }
+
+/**
+ * The student's Enrollment rows, all of them (rule confirmed 2026-10-29):
+ *   - "qualified": at least one row has a Status other than New → gets a User
+ *   - "onlyNew":   every row is New (a blank Status counts as New) → skipped
+ *   - "none":      no rows at all in the Enrollment file → skipped
+ */
+export type EnrollmentState = "qualified" | "onlyNew" | "none";
+
+const ENROLLMENT_CODE: Record<EnrollmentState, 0 | 1 | 2> = {
+  none: 0,
+  qualified: 1,
+  onlyNew: 2,
+};
+const ENROLLMENT_FROM_CODE: EnrollmentState[] = [
+  "none",
+  "qualified",
+  "onlyNew",
+];
 
 /** Identifies one version of a Drive file. */
 export interface FileFingerprint {
@@ -108,7 +128,12 @@ export interface StudentIndexTotals {
   columnMismatchRows: number;
   invalidStudentIdRows: number;
   uniqueStudents: number;
+  /** Students with at least one Enrollment row whose Status is not New. */
   enrolledStudents: number;
+  /** Students whose Enrollment rows are all New (or blank). */
+  onlyNewStudents: number;
+  /** Students with no row at all in the Enrollment file. */
+  noEnrollmentStudents: number;
   windows: number;
 }
 
@@ -125,9 +150,12 @@ export interface StudentIndex {
   students: Map<string, StudentIndexEntry>;
 }
 
-/** On-disk shape: students as id → [ownerByte, ownerLine, ownerWindow, anyActive, rowCount, enrolled]. */
+/**
+ * On-disk shape: students as id → [ownerByte, ownerLine, ownerWindow, anyActive, rowCount, enrollment],
+ * where enrollment is 0 = none, 1 = qualified, 2 = onlyNew.
+ */
 interface SerializedStudentIndex extends Omit<StudentIndex, "students"> {
-  students: Record<string, [number, number, number, 0 | 1, number, 0 | 1]>;
+  students: Record<string, [number, number, number, 0 | 1, number, 0 | 1 | 2]>;
 }
 
 // ── Line classification (shared by the pre-pass and every window) ─────────────
@@ -295,7 +323,10 @@ export function scanTsvLines(
 export interface ScannedAccountLoginFile {
   headers: string[];
   windowStartBytes: number[];
-  totals: Omit<StudentIndexTotals, "enrolledStudents">;
+  totals: Omit<
+    StudentIndexTotals,
+    "enrolledStudents" | "onlyNewStudents" | "noEnrollmentStudents"
+  >;
   students: Map<string, StudentIndexEntry>;
 }
 
@@ -366,7 +397,7 @@ export async function scanAccountLoginFile(
         ownerWindow: windowStartBytes.length,
         anyActive: line.isActive,
         rowCount: 1,
-        enrolled: false,
+        enrollment: "none",
       });
     }
     return "continue";
@@ -411,11 +442,18 @@ export function applyStudentIndex(
   rows: PendingLoginRow[],
   index: Pick<StudentIndex, "students">,
 ): {
-  owners: { studentId: string; isActive: boolean; enrolled: boolean }[];
+  owners: {
+    studentId: string;
+    isActive: boolean;
+    enrollment: EnrollmentState;
+  }[];
   duplicates: SkippedLoginRow[];
 } {
-  const owners: { studentId: string; isActive: boolean; enrolled: boolean }[] =
-    [];
+  const owners: {
+    studentId: string;
+    isActive: boolean;
+    enrollment: EnrollmentState;
+  }[] = [];
   const duplicates: SkippedLoginRow[] = [];
 
   for (const row of rows) {
@@ -431,7 +469,7 @@ export function applyStudentIndex(
       owners.push({
         studentId: row.studentId,
         isActive: entry.anyActive,
-        enrolled: entry.enrolled,
+        enrollment: entry.enrollment,
       });
       continue;
     }
@@ -460,7 +498,7 @@ export function serializeStudentIndex(index: StudentIndex): string {
       e.ownerWindow,
       e.anyActive ? 1 : 0,
       e.rowCount,
-      e.enrolled ? 1 : 0,
+      ENROLLMENT_CODE[e.enrollment],
     ];
   }
   const serialized: SerializedStudentIndex = { ...index, students };
@@ -477,7 +515,7 @@ export function deserializeStudentIndex(json: string): StudentIndex {
       ownerWindow: v[2],
       anyActive: v[3] === 1,
       rowCount: v[4],
-      enrolled: v[5] === 1,
+      enrollment: ENROLLMENT_FROM_CODE[v[5]] ?? "none",
     });
   }
   return { ...parsed, students };
@@ -641,8 +679,13 @@ export interface LoadStudentIndexParams {
   indexFileId?: string;
   maxRows: number;
   accessToken: string;
-  /** Returns the subset of studentIds that are enrolled. */
-  resolveEnrolled: (studentIds: Set<string>) => Promise<Set<string>>;
+  /**
+   * Reads the Enrollment file for these studentIds. `qualified` = has a row
+   * whose Status is not New; `seen` = has any row at all.
+   */
+  resolveEnrolled: (
+    studentIds: Set<string>,
+  ) => Promise<{ qualified: Set<string>; seen: Set<string> }>;
   logger: { info: (m: string) => void; warn: (m: string) => void };
 }
 
@@ -699,11 +742,21 @@ export async function loadOrBuildStudentIndex(
       `Reading the Enrollment file once…`,
   );
 
-  const enrolled = await params.resolveEnrolled(
+  const { qualified, seen } = await params.resolveEnrolled(
     new Set(scanned.students.keys()),
   );
+  let onlyNewStudents = 0;
+  let noEnrollmentStudents = 0;
   for (const [id, entry] of scanned.students) {
-    entry.enrolled = enrolled.has(id);
+    if (qualified.has(id)) {
+      entry.enrollment = "qualified";
+    } else if (seen.has(id)) {
+      entry.enrollment = "onlyNew";
+      onlyNewStudents++;
+    } else {
+      entry.enrollment = "none";
+      noEnrollmentStudents++;
+    }
   }
 
   const index: StudentIndex = {
@@ -714,7 +767,13 @@ export async function loadOrBuildStudentIndex(
     enrollmentFile,
     headers: scanned.headers,
     windowStartBytes: scanned.windowStartBytes,
-    totals: { ...scanned.totals, enrolledStudents: enrolled.size },
+    totals: {
+      ...scanned.totals,
+      enrolledStudents:
+        scanned.students.size - onlyNewStudents - noEnrollmentStudents,
+      onlyNewStudents,
+      noEnrollmentStudents,
+    },
     students: scanned.students,
   };
   const indexFileId = await saveIndex(
@@ -731,7 +790,9 @@ export async function loadOrBuildStudentIndex(
       `${t.blankLines} blank, 1 header, ${t.dataLines} data row(s) ` +
       `(${t.validRows} valid, ${t.columnMismatchRows} column mismatch, ` +
       `${t.invalidStudentIdRows} invalid Student_ID); ${t.uniqueStudents} unique student(s), ` +
-      `${t.enrolledStudents} enrolled; ${t.validRows - t.uniqueStudents} duplicate row(s).`,
+      `${t.enrolledStudents} with a non-New enrollment, ${t.onlyNewStudents} with only New ` +
+      `enrollments, ${t.noEnrollmentStudents} with no enrollment rows; ` +
+      `${t.validRows - t.uniqueStudents} duplicate row(s).`,
   );
   return { index, indexFileId, built: true };
 }

@@ -5,7 +5,7 @@
 import { Readable } from "stream";
 import {
   collectEnrolledStudentIds,
-  isEnrolledStatus,
+  isQualifyingEnrollmentStatus,
   DEFAULT_PERMISSION_SETS,
   matchPermissionSets,
   parsePermissionSetNames,
@@ -81,15 +81,23 @@ describe("matchPermissionSets", () => {
 
 const tsv = (lines: string[]) => Readable.from([lines.join("\n") + "\n"]);
 
-describe("isEnrolledStatus", () => {
-  it("accepts Enrolled regardless of case and spacing", () => {
-    expect(isEnrolledStatus("Enrolled")).toBe(true);
-    expect(isEnrolledStatus(" enrolled ")).toBe(true);
+describe("isQualifyingEnrollmentStatus", () => {
+  it("accepts every status other than New", () => {
+    for (const s of [
+      "Enrolled",
+      " enrolled ",
+      "Drop",
+      "Cancel",
+      "Wait List",
+      "UnEnrolled",
+    ]) {
+      expect(isQualifyingEnrollmentStatus(s)).toBe(true);
+    }
   });
 
-  it("rejects every other status", () => {
-    for (const s of ["Wait List", "Drop", "UnEnrolled", "New", "", undefined]) {
-      expect(isEnrolledStatus(s)).toBe(false);
+  it("rejects New, regardless of case and spacing, and a blank Status", () => {
+    for (const s of ["New", " new ", "NEW", "", "   ", undefined]) {
+      expect(isQualifyingEnrollmentStatus(s)).toBe(false);
     }
   });
 });
@@ -97,26 +105,39 @@ describe("isEnrolledStatus", () => {
 describe("collectEnrolledStudentIds", () => {
   const header = "\uFEFFID\tStudent_ID\tCourse_ID\tStatus";
 
-  it("keeps only wanted students that have an Enrolled row", async () => {
-    const { enrolled } = await collectEnrolledStudentIds(
+  it("keeps wanted students with any status other than New", async () => {
+    const { enrolled, seen } = await collectEnrolledStudentIds(
       tsv([
         header,
         "1\t100.0\tC1\tEnrolled",
         "2\t200\tC1\tDrop",
         "3\t300\tC2\tWait List",
-        "4\t999\tC2\tEnrolled",
+        "4\t400\tC2\tNew",
+        "5\t999\tC2\tEnrolled",
       ]),
-      new Set(["100", "200", "300"]),
+      new Set(["100", "200", "300", "400", "500"]),
     );
-    expect([...enrolled]).toEqual(["100"]);
+    expect([...enrolled].sort()).toEqual(["100", "200", "300"]);
+    // 400 has only New rows; 500 has no rows at all.
+    expect(seen.has("400")).toBe(true);
+    expect(seen.has("500")).toBe(false);
   });
 
-  it("counts a student enrolled if any one of their rows is Enrolled", async () => {
-    const { enrolled } = await collectEnrolledStudentIds(
-      tsv([header, "1\t200\tC1\tDrop", "2\t200\tC2\tEnrolled\r"]),
-      new Set(["200"]),
+  it("applies the rule across all of a student's rows", async () => {
+    const { enrolled, seen } = await collectEnrolledStudentIds(
+      tsv([
+        header,
+        "1\t200\tC1\tNew",
+        "2\t200\tC2\tDrop\r",
+        "3\t300\tC1\tNew",
+        "4\t300\tC2\tnew",
+        "5\t300\tC3\t",
+      ]),
+      new Set(["200", "300"]),
     );
-    expect(enrolled.has("200")).toBe(true);
+    expect(enrolled.has("200")).toBe(true); // New + Drop → login
+    expect(enrolled.has("300")).toBe(false); // New, New, blank → skip
+    expect(seen.has("300")).toBe(true);
   });
 
   it("stops reading once every wanted student is found", async () => {

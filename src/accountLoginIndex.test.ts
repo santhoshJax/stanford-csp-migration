@@ -213,7 +213,8 @@ describe("index file", () => {
 
   async function fullIndex(): Promise<StudentIndex> {
     const scanned = await buildIndex(FILE, MAX_ROWS);
-    scanned.students.get("100")!.enrolled = true;
+    scanned.students.get("100")!.enrollment = "qualified";
+    scanned.students.get("200")!.enrollment = "onlyNew";
     return {
       version: STUDENT_INDEX_VERSION,
       maxRows: MAX_ROWS,
@@ -222,7 +223,12 @@ describe("index file", () => {
       enrollmentFile: enrollment,
       headers: scanned.headers,
       windowStartBytes: scanned.windowStartBytes,
-      totals: { ...scanned.totals, enrolledStudents: 1 },
+      totals: {
+        ...scanned.totals,
+        enrolledStudents: 1,
+        onlyNewStudents: 1,
+        noEnrollmentStudents: scanned.students.size - 2,
+      },
       students: scanned.students,
     };
   }
@@ -231,6 +237,9 @@ describe("index file", () => {
     const index = await fullIndex();
     const loaded = deserializeStudentIndex(serializeStudentIndex(index));
     expect(loaded.students).toEqual(index.students);
+    expect(loaded.students.get("100")!.enrollment).toBe("qualified");
+    expect(loaded.students.get("200")!.enrollment).toBe("onlyNew");
+    expect(loaded.students.get("300")!.enrollment).toBe("none");
     expect(loaded.windowStartBytes).toEqual(index.windowStartBytes);
     expect(loaded.headers).toEqual(index.headers);
   });

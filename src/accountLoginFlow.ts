@@ -46,9 +46,13 @@
  *      but every other target field on this object depends on the match).
  *   3. Matched Contact has no email → skip (Username/Email are required,
  *      unique-format fields on User; can't create the record without one).
- *   4. Student is not enrolled → skip (decision 2026-10-21). Only students
- *      who have at least one row in the Enrollment source file (the
- *      "Enrollment File ID" config var) with Status = "Enrolled" get a User.
+ *   4. Student has no qualifying enrollment → skip. Only students who have
+ *      at least one row in the Enrollment source file (the "Enrollment File
+ *      ID" config var) with a Status OTHER than "New" get a User (rule
+ *      changed 2026-10-29; before that only Status = "Enrolled" counted).
+ *      Students whose rows are all New (a blank Status counts as New) are
+ *      skipped as "Only New enrollments"; students with no rows at all are
+ *      skipped as "No enrollment rows".
  *      The check reads the source file, not Salesforce, so it does not
  *      depend on the Enrollment Import having run. The Enrollment file is
  *      read once per run, when the Student index is built.
@@ -180,9 +184,10 @@ export const DEFAULT_PERMISSION_SETS = [
   "CSP Stap API Access",
   "CSP Student Education Cloud PS",
 ];
-// Enrollment Status value that qualifies a student for a User (decision
-// 2026-10-21). Compared case-insensitively after trimming.
-const ENROLLED_STATUS = "enrolled";
+// Enrollment Status that does NOT qualify a student for a User (rule confirmed
+// 2026-10-29): a student gets a User if any of their rows has another status.
+// Compared case-insensitively after trimming; a blank Status counts as New.
+const NEW_STATUS = "new";
 const DEFAULT_LOCALE_SID_KEY = "en_US";
 const DEFAULT_LANGUAGE_LOCALE_KEY = "en_US";
 const DEFAULT_TIME_ZONE_SID_KEY = "America/Los_Angeles";
@@ -371,7 +376,7 @@ export function toSkippedSheetRows(
   ]);
 }
 
-/** "Not enrolled: 74, No usable email: 2" — for the log line. */
+/** "Only New enrollments: 74, No usable email: 2" — for the log line. */
 export function summariseSkipReasons(rows: SkippedLoginRow[]): string {
   const counts = new Map<string, number>();
   for (const r of rows) counts.set(r.reason, (counts.get(r.reason) ?? 0) + 1);
@@ -659,9 +664,15 @@ async function resolveContactsByStudentId(
 
 // ── Enrollment check (Enrollment source file) ──────────────────────────────────
 
-/** True when an Enrollment Status value counts as enrolled. */
-export function isEnrolledStatus(status: string | undefined): boolean {
-  return str(status).trim().toLowerCase() === ENROLLED_STATUS;
+/**
+ * True when an Enrollment Status qualifies the student for a User: any status
+ * except New. A blank Status counts as New (rule confirmed 2026-10-29).
+ */
+export function isQualifyingEnrollmentStatus(
+  status: string | undefined,
+): boolean {
+  const value = str(status).trim().toLowerCase();
+  return value !== "" && value !== NEW_STATUS;
 }
 
 /** Enrollment TSV stores some IDs as "12345.0" — normalise to "12345". */
@@ -670,22 +681,25 @@ function normaliseStudentId(value: string | undefined): string {
 }
 
 /**
- * Reads an Enrollment TSV stream and returns the subset of `wantedStudentIds`
- * that have at least one row with Status = "Enrolled". Stops reading as soon
- * as every wanted ID has been found, so a window whose students all enrolled
- * early in the file does not read the whole file.
+ * Reads an Enrollment TSV stream and returns, for `wantedStudentIds`:
+ *   - enrolled: students with at least one row whose Status is not New
+ *   - seen: students with any row at all (so "only New" can be told apart
+ *     from "no rows")
+ * Stops reading as soon as every wanted ID is in `enrolled`, so it does not
+ * read the whole file when every student qualifies early on.
  */
 export function collectEnrolledStudentIds(
   stream: Readable | NodeJS.ReadableStream,
   wantedStudentIds: Set<string>,
-): Promise<{ enrolled: Set<string>; rowsRead: number }> {
+): Promise<{ enrolled: Set<string>; seen: Set<string>; rowsRead: number }> {
   const enrolled = new Set<string>();
+  const seen = new Set<string>();
   let rowsRead = 0;
 
   return new Promise((resolve, reject) => {
     if (wantedStudentIds.size === 0) {
       (stream as Readable).destroy?.();
-      resolve({ enrolled, rowsRead });
+      resolve({ enrolled, seen, rowsRead });
       return;
     }
 
@@ -697,7 +711,7 @@ export function collectEnrolledStudentIds(
       if (settled) return;
       settled = true;
       (stream as Readable).destroy?.();
-      resolve({ enrolled, rowsRead });
+      resolve({ enrolled, seen, rowsRead });
     };
 
     parse(stream as unknown as NodeJS.ReadableStream, {
@@ -735,12 +749,16 @@ export function collectEnrolledStudentIds(
         }
 
         rowsRead++;
-        if (!isEnrolledStatus(row[statusIndex]?.replace(/\r/g, ""))) return;
-
         const studentId = normaliseStudentId(
           row[studentIdIndex]?.replace(/\r/g, ""),
         );
         if (!wantedStudentIds.has(studentId)) return;
+        seen.add(studentId);
+        if (
+          !isQualifyingEnrollmentStatus(row[statusIndex]?.replace(/\r/g, ""))
+        ) {
+          return;
+        }
 
         enrolled.add(studentId);
         if (enrolled.size === wantedStudentIds.size) {
@@ -764,8 +782,10 @@ async function resolveEnrolledStudentIds(
   enrollmentFileId: string,
   accessToken: string,
   wantedStudentIds: Set<string>,
-): Promise<{ enrolled: Set<string>; rowsRead: number }> {
-  if (wantedStudentIds.size === 0) return { enrolled: new Set(), rowsRead: 0 };
+): Promise<{ enrolled: Set<string>; seen: Set<string>; rowsRead: number }> {
+  if (wantedStudentIds.size === 0) {
+    return { enrolled: new Set(), seen: new Set(), rowsRead: 0 };
+  }
   const response = await axios.get(
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(enrollmentFileId)}`,
     {
@@ -880,7 +900,7 @@ export const accountLoginImport = flow({
   description:
     "Builds a Student index from the whole Account Login TSV once, then streams the " +
     "file in windows. Sends one User per Student_ID (its first row, active if any " +
-    "row is active), only for students with an Enrolled row in the Enrollment TSV, " +
+    "row is active), only for students with an Enrollment row whose Status is not New, " +
     "resolves each Student_ID against the Account created by Student Import, and " +
     "upserts Salesforce User records (Federation_Identifier__c as the upsert key) " +
     "via Bulk API 2.0. Every row is written to Success, Errors, Not Processed or " +
@@ -953,7 +973,7 @@ export const accountLoginImport = flow({
     if (!enrollmentFileId) {
       throw new Error(
         "[Account Login Import] Enrollment File ID config var is empty. It is needed to " +
-          "check which students are enrolled (only enrolled students get a User).",
+          "check which students have an enrollment other than New (only they get a User).",
       );
     }
 
@@ -1284,9 +1304,14 @@ export const accountLoginImport = flow({
       indexFileId: payloadIndexFileId,
       maxRows: MAX_ROWS,
       accessToken: gdToken,
-      resolveEnrolled: async (ids) =>
-        (await resolveEnrolledStudentIds(enrollmentFileId, gdToken, ids))
-          .enrolled,
+      resolveEnrolled: async (ids) => {
+        const { enrolled, seen } = await resolveEnrolledStudentIds(
+          enrollmentFileId,
+          gdToken,
+          ids,
+        );
+        return { qualified: enrolled, seen };
+      },
       logger,
     });
     if (built && byteOffset > 0) {
@@ -1410,24 +1435,31 @@ export const accountLoginImport = flow({
         );
       }
 
-      // ── 6b. Keep only students enrolled in at least one course ─────────────
-      // Decision 2026-10-21. Taken from the index, which read the Enrollment
-      // file once (rows with Status = "Enrolled").
+      // ── 6b. Keep only students with an enrollment other than New ───────────
+      // Rule confirmed 2026-10-29 (before that only Status = "Enrolled"
+      // counted). Taken from the index, which read the Enrollment file once.
       const enrolledOwners: { studentId: string; isActive: boolean }[] = [];
       for (const owner of owners) {
-        if (owner.enrolled) {
+        if (owner.enrollment === "qualified") {
           enrolledOwners.push(owner);
+        } else if (owner.enrollment === "onlyNew") {
+          skippedRows.push({
+            studentId: owner.studentId,
+            reason: SKIP_REASON.ONLY_NEW_ENROLLMENTS,
+            detail:
+              "Every Enrollment row for this student has Status = New (or a blank Status).",
+          });
         } else {
           skippedRows.push({
             studentId: owner.studentId,
-            reason: SKIP_REASON.NOT_ENROLLED,
-            detail: 'No row in the Enrollment file with Status = "Enrolled".',
+            reason: SKIP_REASON.NO_ENROLLMENT_ROWS,
+            detail: "This Student_ID has no rows in the Enrollment file.",
           });
         }
       }
       logger.info(
         `[Account Login Import] Enrollment check — ${enrolledOwners.length} of ${owners.length} ` +
-          `student(s) sent from this window are Enrolled.`,
+          `student(s) sent from this window have an enrollment other than New.`,
       );
 
       // ── 7. Resolve Student_ID → Contact/Email/Name via the migrated Account ─

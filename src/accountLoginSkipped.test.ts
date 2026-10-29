@@ -40,15 +40,15 @@ describe("toSkippedSheetRows", () => {
       [
         {
           studentId: "5",
-          reason: SKIP_REASON.NOT_ENROLLED,
-          detail: "no Enrolled row",
+          reason: SKIP_REASON.ONLY_NEW_ENROLLMENTS,
+          detail: "only New rows",
         },
       ],
       3,
       18468950,
     );
     expect(rows).toEqual([
-      ["5", SKIP_REASON.NOT_ENROLLED, "no Enrolled row", "3", "18468950"],
+      ["5", SKIP_REASON.ONLY_NEW_ENROLLMENTS, "only New rows", "3", "18468950"],
     ]);
     expect(rows[0]).toHaveLength(SKIPPED_TAB_HEADERS.length);
   });
@@ -57,10 +57,13 @@ describe("toSkippedSheetRows", () => {
 describe("summariseSkipReasons", () => {
   it("counts entries per reason", () => {
     const summary = summariseSkipReasons([
-      { studentId: "1", reason: SKIP_REASON.NOT_ENROLLED, detail: "" },
-      { studentId: "2", reason: SKIP_REASON.NOT_ENROLLED, detail: "" },
+      { studentId: "1", reason: SKIP_REASON.ONLY_NEW_ENROLLMENTS, detail: "" },
+      { studentId: "2", reason: SKIP_REASON.ONLY_NEW_ENROLLMENTS, detail: "" },
+      { studentId: "4", reason: SKIP_REASON.NO_ENROLLMENT_ROWS, detail: "" },
       { studentId: "3", reason: SKIP_REASON.NO_USABLE_EMAIL, detail: "" },
     ]);
-    expect(summary).toBe("Not enrolled: 2, No usable email: 1");
+    expect(summary).toBe(
+      "Only New enrollments: 2, No enrollment rows: 1, No usable email: 1",
+    );
   });
 });
