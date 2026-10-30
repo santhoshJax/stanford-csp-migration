@@ -42,20 +42,22 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-30
-**Status:** blocked — I wrote the combined purchase flow and type-checked it, but I couldn't commit or push it.
+**Status:** at risk — Combined purchase flow written & type-checked; 8 mapping departures need architect decisions before merge
 
 **Done this session**
-- I wrote the combined purchase flow and type-checked it, but I couldn't commit or push it. This is a General session, which can't change code in the repo. I attached the changes as `purchase-combined-flow.patch` (601 lines) plus `purchaseCo…
+- Compared combined flow code against Purchase Inventory, Purchase, Purchase Item tabs
+- Identified 8 places where code departs from workbook mappings
+- Documented field-by-field reconciliation with reasons for each departure
 
 **Open items**
 - Team confirms blank Status field handling (currently New) and reviews enrollment rule changes
+- Architect decides: Order.Status—start Draft + custom field for source status, or leave lost?
+- Architect provides real Product2.QuantityUnitOfMeasure picklist values for unit mapping
+- Architect confirms Balance_Due__c vs BalanceDue__c field name
 - Open pull request from stanford-csp-orchestrate into main
-- Review and merge PR to main
 - Fix 5 failing Student Import tests before merge
 - Run Deploy session to ship code live to Salesforce org
 - Run full integration on ~160,000 rows; verify Success + Errors + Not Processed + Skipped = source count
-- Architect: confirm two order types (Registration, Purchase) or add third for transcripts
-- Architect: decide Order/OrderItem/Product external ID prefixes (REG-, PUR-, ENR-, PIT-, CRS-)
 
 **Decisions**
 - Blank Status counts as New in enrollment rule (awaiting team confirmation)
@@ -74,15 +76,17 @@
 - Architect has not confirmed whether OrderItems follow deduplicated COP rows or all enrollment rows
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
 - 5 Student Import tests failing (pre-existing, not caused by this commit)
+- Three mapping decisions blocking merge: Order.Status handling, QuantityUnitOfMeasure values, Balance_Due field name
 
 **Next**
-- Team reviews enrollment rule changes and confirms blank Status treatment
-- Open pull request from stanford-csp-orchestrate into main
+- Architect reviews 8 mapping departures and answers 3 decisions (Status, UOM picklist, field name)
+- Start Build session to apply purchase-combined-flow.patch to stanford-csp-orchestrate branch
 - Fix 5 failing Student Import tests
-- Merge PR to main
+- Open and review pull request from stanford-csp-orchestrate into main
+- Merge PR to main once tests pass and architect confirms mappings
 - Run Deploy session to ship code live to Salesforce org
 
-**Checked live on 2026-10-30:** the Salesforce org, the repository, Google Workspace
+**Checked live on 2026-10-30:** the repository
 ### Last session — 2026-10-30
 | | |
 |---|---|
@@ -92,13 +96,20 @@
 | Name | Stanford-Data-Migration-Purchase-Orders |
 | Session | `6f09d647-de77-4c02-89d2-2ebcb15e2452` |
 **In its own words (excerpt):**
-I wrote the combined purchase flow and type-checked it, but I couldn't commit or push it. This is a General session, which can't change code in the repo. I attached the changes as `purchase-combined-flow.patch` (601 lines) plus `purchaseCombinedFlow.ts`. I haven't run the flow against a Salesforce org. To get it onto `stanford-csp-orchestrate`, start a Build session on this repo and have it apply the patch, or run `git apply purchase-combined-flow.patch` yourself.
+Mostly yes, but not exactly. The combined flow reuses the existing mappers, so each field follows its tab. Eight places depart from the workbook, listed below. I compared the Purchase Inventory, Purchase and Purchase Item tabs with the mapper code on `stanford-csp-orchestrate`. I haven't run any of it against an org.
 
-**What I found:** the repo already had four separate flows for this (Purchase Inventory, Purchase, Purchase Item and Payments). All of them were hardwired to the Standard Price Book.
+**Where the code matches the tabs**
+- **Product2:** `Item_Type` → `ProductCode` and `Name`, `Description`, and `Active` → `IsActive`.
+- **PricebookEntry:** `Unit_Price` → `UnitPrice`, `Active` → `IsActive`, and the lookup to the new Product2.
+- **Order:** `Purchase_Date` → `EffectiveDate`, `Student_ID` → account lookup, and `CC_Transaction_ID` → `Payment_Transaction_Id__c`. `Notes` and `Message` both map to `Description`, so I join them with a blank line between.
+- **OrderItem:** `Unit_Price`, `Quantity`, `Unit_Description` → `Unit_Description__c`, and `Ref_Record_ID` → `Ref_Record_ID__c`. `Ref_Table_Number` is Do Not Map, as the tab says.
+- **Do Not Map columns:** the Created_* and Last_Modified_* columns are not loaded.
 
-**What I added:** a new flow, "Purchase Combined Import" (`src/purchaseCombinedFlow.ts`). It runs these steps in order:
-1. **Products:** it creates a Product2 from each Purchase Inventory row.
-2. **Price book entries:** it looks up the price book whose name is in the new config value `Purchase Price Book Name`, and creates the book if it doesn't exist. It adds a Standard Price Book entry first, which Salesforce requires before a custom book can have one. It then adds one entry per product in the named book. Existing entries are not repriced
+**Where it departs from the tabs**
+
+| Source → Target | Tab says | Code does | Why |
+|---|---|---|---|
+| `Purchase.Status` → `Order.Status` | Direc
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
