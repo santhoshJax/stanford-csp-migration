@@ -42,19 +42,19 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-31
-**Status:** at risk — Purchase flow mappings documented; 5 architect decisions + 5 failing tests block commit
+**Status:** at risk — Purchase flow code complete & tested; architect answers applied. Registration orders & org validation still open.
 
 **Done this session**
-- Documented complete field-by-field mapping for all 6 purchase flows (Product2, PricebookEntry, Order, CardPaymentMethod, PaymentGroup/Payment, OrderItem)
-- Identified 5 mapping decisions still requiring architect confirmation
-- Confirmed code compiles and 19 purchase flow tests pass
+- Applied all 5 architect answers to purchase flow code
+- Added Activate Purchase Orders on/off setting with two-round workflow
+- Updated unit picklist to handle all 5 values (Each, per 1,000 words, per application cycle, first-one-free, per course)
+- Switched purchase orders to BalanceDue__c field
+- All 28 purchase-flow tests pass; 9 new tests added
 
 **Open items**
-- Architect confirms Order price book: Standard or StanfordContinuingStudies
-- Architect confirms Order.Status handling: add custom field or accept loss
-- Architect provides real Product2.QuantityUnitOfMeasure picklist values
-- Architect confirms Balance_Due__c vs BalanceDue__c field name
-- Architect confirms product ID prefix strategy for inventory products (recommend PIT-)
+- Architect confirms whether registration orders should also switch to BalanceDue__c
+- Validate BalanceDue__c, 5 unit picklist values, Activated status, StanfordContinuingStudies price book exist in org
+- Update D01 mapping workbook to reflect Balance Due field, unit-of-measure rule, and Activated status changes
 - Fix 5 failing Student Import tests before merge
 - Commit and push 6 changed files to stanford-csp-orchestrate branch
 - Run Deploy session to ship code live to Salesforce org
@@ -70,18 +70,16 @@
 - Two order streams: Registration (tuition) and Purchase (non-course items)
 
 **Blockers**
-- Architect has not confirmed which price book Orders should use
-- Architect has not confirmed Order.Status, QuantityUnitOfMeasure, Balance_Due field decisions
-- Architect has not confirmed product ID prefix strategy (PIT- recommended for inventory)
-- Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
+- Registration orders field decision still open (Balance_Due__c vs BalanceDue__c)
+- Salesforce org not attached to this session; BalanceDue__c, picklist values, Activated status, price book names not validated live
 - 5 Student Import tests failing (pre-existing, not caused by this commit)
 
 **Next**
-- Architect reviews and confirms 5 mapping decisions from D01 workbook
+- Architect confirms registration order field: switch to BalanceDue__c or keep Balance_Due__c
+- Attach Salesforce org and validate BalanceDue__c, unit picklist, Activated status, price book in live org
+- Update D01 workbook with current field names, unit values, and activation workflow
 - Fix 5 failing Student Import tests
-- Commit 6 changed files to stanford-csp-orchestrate once architect approves
-- Open and review pull request from stanford-csp-orchestrate into main
-- Run Deploy session to ship code live to Salesforce org
+- Commit 6 changed files once architect approves registration field decision and org validation complete
 
 **Checked live on 2026-10-31:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-10-31
@@ -93,28 +91,19 @@
 | Name | Stanford-Data-Migration-Purchase-Orders |
 | Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
 **In its own words (excerpt):**
-Below is the field-by-field mapping the purchase flows write, as of the current (uncommitted) code. The same content is in the **D01 — Purchase Source-to-Target Mapping** workbook already attached to this session.
+I've applied all five of your answers. Three needed code changes and two confirmed what was already built. Everything is still on disk only, on `stanford-csp-orchestrate`. Nothing is committed, pushed or deployed.
 
-## 1. Purchase_Inventory → Product2 (Purchase Inventory Import, runs 1st)
-
-| Source field | Target field | How it's handled |
+| # | Your answer | What changed |
 |---|---|---|
-| ID | External_ID_4D__c | Upsert key, raw ID with no prefix |
-| Item_Type | Name | Copied. The row is skipped if blank because Name is required |
-| Item_Type | ProductCode | Copied |
-| Description | Description | Cut to 4,000 characters |
-| Unit_Description | QuantityUnitOfMeasure | Only written if it's a valid picklist value (today only "Each"). Otherwise left blank |
-| Active | IsActive | TRUE/FALSE → checkbox |
-| Created_\* / Last_Modified_\* | — | Not loaded (Do Not Map) |
+| 1 | Course and inventory IDs never overlap | No code change. Inventory products keep the raw ID (1–9) as their key, with no prefix. |
+| 2 | Run the import a second time to move Draft orders to active | New on/off setting, **Activate Purchase Orders**, which starts off (details below). |
+| 3 | Unit picklist values added in the org | The flow now writes all 5 values: Each, per 1,000 words, per application cycle, "First one is free, $10 charged for each additional", per course. Any other value is still left blank, with a warning. |
+| 4 | The Order field is `BalanceDue__c` | Purchase Orders now write `BalanceDue__c`. |
+| 5 | Orders use StanfordContinuingStudies Price Book | No code change. That's already the rule. Standard gets an entry only so the custom one is accepted. |
 
-## 2. Purchase_Inventory → PricebookEntry (same flow)
-
-| Source | Target field | How it's handled |
-|---|---|---|
-| Unit_Price | UnitPrice | Same price in every configured book. No entry if blank |
-| Active | IsActive | Same as Product2.IsActive |
-| Product2 created in this run | Product2Id | Lookup |
-| **Price Books** setting | Pricebook2Id | One entry per b
+**How the two rounds run**
+1. Run **Purchase Import** with the setting off. Orders are created as Draft.
+2. Run **Purchase Item Import**. Line items are
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
