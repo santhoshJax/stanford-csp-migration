@@ -42,19 +42,23 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-31
-**Status:** at risk — Purchase flow complete with BalanceDue__c confirmed; registration field decision still open; 6 files ready to commit pending architect appr…
+**Status:** at risk — Price book code committed & pushed (8 files, 34 tests pass); registration field decision & org validation still open; mapping sheet & UAT s…
 
 **Done this session**
-- Confirmed Purchase Orders use BalanceDue__c (no code change needed)
-- Updated purchaseFlow.ts note to record field confirmation
+- Committed 8 files (1,203 lines added, 2 removed) to stanford-csp-orchestrate
+- Pushed to GitHub (commit e17c1bb); remote branch verified
+- Rebased onto handoff note (32fd881) cleanly
+- Type check passed; 34 price book and Product tests passed
 
 **Open items**
-- Architect decides: should Registration Orders also switch to BalanceDue__c or keep Balance_Due__c
+- Architect decides: should Registration Orders switch to BalanceDue__c or keep Balance_Due__c
 - Validate BalanceDue__c, 5 unit picklist values, Activated status, StanfordContinuingStudies price book exist in org
-- Update D01 mapping workbook to reflect Balance Due field, unit-of-measure rule, and Activated status changes
-- Fix 5 failing Student Import tests before merge
-- Commit and push 6 changed files to stanford-csp-orchestrate branch
-- Run Deploy session to ship code live to Salesforce org
+- Create PricebookEntry.External_ID_4D__c field (Text, External ID, Unique) in UAT with integration user edit access
+- Create active StanfordContinuingStudies Price Book in UAT
+- Set Price Books config var on Course Configuration page if book names differ from default
+- Update D01 mapping workbook: add Pricebook2 and PricebookEntry rows, reflect Balance Due field and Activated status changes
+- Fix 5 pre-existing failing Student Import tests
+- Create PR to main and merge after architect approval
 
 **Decisions**
 - Blank Status counts as New in enrollment rule
@@ -68,39 +72,46 @@
 
 **Blockers**
 - Registration orders field decision still open (Balance_Due__c vs BalanceDue__c)
-- Salesforce org not attached to this session; BalanceDue__c, picklist values, Activated status, price book names not validated live
-- 5 Student Import tests failing (pre-existing, not caused by this commit)
+- Salesforce org not attached; BalanceDue__c, picklist values, Activated status, price book names not validated live
+- PricebookEntry.External_ID_4D__c field and StanfordContinuingStudies Price Book must exist in UAT before first run
 
 **Next**
 - Architect confirms whether Registration Orders should switch to BalanceDue__c or keep Balance_Due__c
 - Attach Salesforce org and validate BalanceDue__c, unit picklist, Activated status, price book in live org
-- Update D01 workbook with current field names, unit values, and activation workflow
-- Fix 5 failing Student Import tests
-- Commit 6 changed files once architect approves registration field decision and org validation complete
+- Create PricebookEntry.External_ID_4D__c field and StanfordContinuingStudies Price Book in UAT
+- Update D01 mapping workbook with Pricebook2 and PricebookEntry rows
+- Rebuild three course integrations and import into Prismatic
+- Run first integration against org to validate price book step
+- Create PR to main once architect approves registration field decision and org validation complete
 
-**Checked live on 2026-10-31:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-10-31:** the repository
 ### Last session — 2026-10-31
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Purchase-Orders |
-| Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
+| Name | Stanford-Data-Migration-CourseEnhancement-Products |
+| Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-Thanks for checking. That closes the purchase side: Purchase Orders already write `BalanceDue__c`, so the code didn't need to change. I only updated the note in `purchaseFlow.ts` to record that you confirmed the field in the org. I left the mapping workbook alone, as you asked.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch no)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**Registration orders may not need to switch.** The registration flow's notes say `Balance_Due__c` was checked on Stanford_UAT on 2026-09-29 and exists there. So Order seems to have two balance fields:
-- `BalanceDue__c` is used by Purchase Orders, which you confirmed today.
-- `Balance_Due__c` is used by Registration Orders, checked in September.
+The price book step is committed and pushed. Commit `e17c1bb` is on `stanford-csp-orchestrate` on GitHub, and I checked that the remote branch now points at that commit and that `src/coursePricebook.ts` reads back from GitHub.
 
-If both fields are real, registration loads won't fail, so I've left registration on `Balance_Due__c`. The question is whether the two order types should use the same field. If the architect wants just one, tell me which and I'll switch the other.
+**What was pushed:** the same 8 files from the diff you reviewed (1,203 lines added, 2 removed). There's no PR to `main`.
 
-**Where things stand:** the 6 changed files are still only on disk on `stanford-csp-orchestrate`. Nothing is committed, pushed or deployed. The last test run had all 28 purchase-flow tests passing. Today's change was only a comment, so I didn't run the tests again.
+**Before committing:**
+- Someone pushed a handoff note (`32fd881`) to the branch after I built. It only changed `context/handoff.md`, so I rebased onto it without conflicts.
+- After the rebase, the type check was clean and all 34 price book and Product tests passed.
 
-When you're ready, tell me to commit and push.
-
-Sources
+**Not done yet:**
+1. **Your team creates in UAT:** the `PricebookEntry.External_ID_4D__c` field (Text, External ID, Un
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
