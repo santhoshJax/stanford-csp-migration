@@ -238,6 +238,21 @@
  *     built yet) will be needed to transition these Orders from Draft to
  *     Activated after this initial load — out of scope for this flow today.
  *
+ * ══════════════════════════════════════════════════════════════════════════
+ * UPDATED WORKBOOK REVIEW — 2026-10-14 (comment-only; no logic changed)
+ * ══════════════════════════════════════════════════════════════════════════
+ * The Registration tab now carries OrderItem rows (OrderId = the created
+ * Order, UnitPrice = CC_Amt, Quantity default 1), so the 2026-10-01 note above
+ * that "the workbook has no Order line item mapping anywhere" is OUT OF DATE.
+ * This flow still creates no OrderItems — blocked on questions the tab does not
+ * answer (OrderItem needs a PricebookEntryId and the Order needs a Pricebook2Id;
+ * which product do Registration lines use?). See
+ * reports/registration-mapping-review-2026-10-14.md for the full list. Once
+ * OrderItems exist, Order.TotalAmount becomes platform-calculated, which also
+ * reconciles the tab's still-listed CC_Amt → TotalAmount "Direct Map".
+ * Also: Payments/Purchase flows use prefixed External IDs (PAY-/PUR-/PI-);
+ * this flow's raw Registration.ID keys are unchanged and must stay that way.
+ *
  * ⚠️  STILL OPEN:
  *   - Check_No → Order.Check_Number__c is typed "Number"; non-numeric
  *     values are skipped with a warning. DEFERRED (2026-10-01) — architect

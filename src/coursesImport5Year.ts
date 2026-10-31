@@ -13,12 +13,18 @@
  *
  * Each row triggers sequential Salesforce REST API calls in dependency order:
  *   Learning → LearningCourse → Instructor → CourseOffering
+ *   → Product2 (one per CourseOffering, workbook Course rows 127-131)
+ *   → PricebookEntry (Standard + the custom book in "Price Books"; batched
+ *     after the row loop — see coursePricebook.ts)
  *   → CourseOfferingSchedule → COP (Instructor / Associate)
  *
  * Not written by this flow (fields outside the 32): Location, department
  * (Learning.ProviderId, CourseOffering.Department__r, Course_Department__c),
- * Course_Submission fields, Textbooks, Enrollment_Status (derived from
- * Cancelled only).
+ * Textbooks, Enrollment_Status (derived from Cancelled only).
+ *
+ * Course_Submission fields written here (workbook 5-year column, Oct 2026):
+ * Total_Hours__c, Tuition_Adjustment__c, Tuition_Adjustment_Note__c — joined on
+ * Course_Code|Course_Quarter, same as the 2-year flow.
  *
  * Learning / LearningCourse are shared with Tier 1 by base course code. If one
  * already exists in Salesforce it is left untouched, so an older Tier 2 title
@@ -46,7 +52,17 @@ import {
   stripSectionSuffix,
   extractSectionSuffix,
   formatFromSuffix,
+  stripHtmlForTextField,
+  buildCourseProductPayload,
+  parseListPrice,
 } from "./courseUtils";
+import {
+  loadPriceBooks,
+  saveCoursePricebookEntries,
+  summarisePricebookEntries,
+  pricebookEntryResultFields,
+  type CourseProductForPricing,
+} from "./coursePricebook";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const MAX_ROWS = 100;
@@ -228,6 +244,17 @@ async function resolvePersonByName(
         ? ` AND Associate_ID_4D__c != null`
         : "";
 
+  // Also tries MiddleName+LastName (forward OR swapped) as a fallback within
+  // the same query — covers people credited by their middle name instead of
+  // their legal first name (e.g. source "Rufi Thorpe" for an Account stored
+  // as FirstName="Amanda", MiddleName="Rufi", LastName="Thorpe"). Purely
+  // additive: every match that already succeeds continues to match exactly
+  // the same way; this only rescues cases that previously failed.
+  //
+  // Deliberately NOT also trying FirstName+MiddleName with LastName
+  // unconstrained — both FirstName and MiddleName are optional fields in
+  // Salesforce, so matching on that pair alone (no LastName anchor) would be
+  // too loose a match to trust.
   const parsed = splitName(n);
   let id: string | null = null;
   if (parsed) {
@@ -237,7 +264,8 @@ async function resolvePersonByName(
       base,
       token,
       `SELECT PersonContactId FROM Account WHERE IsPersonAccount = true AND ` +
-        `((FirstName = '${f}' AND LastName = '${l}') OR (FirstName = '${l}' AND LastName = '${f}'))` +
+        `((FirstName = '${f}' AND LastName = '${l}') OR (FirstName = '${l}' AND LastName = '${f}') ` +
+        `OR (MiddleName = '${f}' AND LastName = '${l}') OR (MiddleName = '${l}' AND LastName = '${f}'))` +
         `${roleClause} LIMIT 1`,
     );
     id = rows[0]?.PersonContactId ?? null;
@@ -329,6 +357,48 @@ async function loadCourseInstructors(
     if (!cid) continue;
     if (!map.has(cid)) map.set(cid, []);
     map.get(cid)!.push(row);
+  }
+  return map;
+}
+
+// ── Course-Submission data ────────────────────────────────────────────────────
+// Only the three fields in the workbook's 5-year column are read from this file.
+
+interface CourseSubmissionRow {
+  Course_Code?: string;
+  Course_Quarter?: string;
+  Course_Total_Hours?: string;
+  Tuition_Adjustment?: string;
+  Tuition_Adjustment_Note?: string;
+}
+
+/**
+ * Loads the Course_Submission TSV and keys each row by "Course_Code|quarter"
+ * (quarter lower-cased). First row wins when a key repeats, as in the 2-year flow.
+ */
+async function loadCourseSubmissions(
+  fileId: string,
+  token: string,
+): Promise<Map<string, CourseSubmissionRow>> {
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`;
+  const { data } = await axios.get<string>(url, {
+    params: { alt: "media", supportsAllDrives: "true" },
+    headers: { Authorization: `Bearer ${token}` },
+    responseType: "text",
+  });
+  const content = data.replace(/^\uFEFF/, "");
+  const { data: rows } = papaParse<CourseSubmissionRow>(content, {
+    header: true,
+    skipEmptyLines: true,
+    delimiter: "\t",
+  });
+  const map = new Map<string, CourseSubmissionRow>();
+  for (const row of rows) {
+    const code = row.Course_Code?.trim();
+    const quarter = row.Course_Quarter?.trim().toLowerCase();
+    if (!code || !quarter) continue;
+    const key = `${code}|${quarter}`;
+    if (!map.has(key)) map.set(key, row);
   }
   return map;
 }
@@ -605,6 +675,9 @@ export const coursesImport5Year = flow({
     const associateFileId = configVars[
       "Course Associate File ID"
     ] as unknown as string | undefined;
+    const submissionFileId = configVars[
+      "Course Submission File ID"
+    ] as unknown as string | undefined;
     const failedFolderId = configVars["Failed Records Folder ID"] as
       string | undefined;
 
@@ -613,6 +686,24 @@ export const coursesImport5Year = flow({
     const gdToken = getAccessToken(gdConn);
     const sfToken = getAccessToken(sfConn);
     const sfBase = getSfInstanceUrl(sfConn);
+
+    // ── Price books (shared "Price Books" config var) ─────────────────────────
+    // Checked before any row is written: the run stops here if a listed book
+    // is missing or inactive, or more than one custom book is listed. The
+    // Standard Price Book is always added (custom entries need it).
+    const priceBooks = await loadPriceBooks(
+      sfBase,
+      sfToken,
+      configVars["Price Books"] as unknown as string | undefined,
+      logger,
+      "[Course32]",
+    );
+    // Products saved in this window, priced after the row loop.
+    const pricingQueue: (CourseProductForPricing & {
+      code: string;
+      title: string;
+      quarter: string;
+    })[] = [];
 
     // ── Existing catalog records (owned by Tier 1 / newer rows) ───────────────
     logger.info("[Course32] Building lookup caches…");
@@ -658,6 +749,24 @@ export const coursesImport5Year = flow({
       } catch (err) {
         logger.warn(
           `[Course32] Could not load Course-Associate file: ${String(err)} — falling back to Primary_Associate field`,
+        );
+      }
+    }
+
+    // ── Course-Submission data ────────────────────────────────────────────────
+    let courseSubmissionMap = new Map<string, CourseSubmissionRow>();
+    if (submissionFileId) {
+      try {
+        courseSubmissionMap = await loadCourseSubmissions(
+          submissionFileId,
+          gdToken,
+        );
+        logger.info(
+          `[Course32] Course-Submission data loaded — ${courseSubmissionMap.size} entries`,
+        );
+      } catch (err) {
+        logger.warn(
+          `[Course32] Could not load Course-Submission file: ${String(err)} — submission fields will not be set`,
         );
       }
     }
@@ -744,6 +853,7 @@ export const coursesImport5Year = flow({
       learning: { ok: 0, skipped: 0, err: 0 },
       learningCourse: { ok: 0, skipped: 0, err: 0 },
       courseOffering: { ok: 0, err: 0 },
+      product: { ok: 0, err: 0 },
       schedule: { ok: 0, skipped: 0, err: 0 },
       copInstructor: { ok: 0, skipped: 0, err: 0 },
       copAssociate: { ok: 0, skipped: 0, err: 0 },
@@ -1022,6 +1132,19 @@ export const coursesImport5Year = flow({
         const instrPrefs = normaliseInstructorPrefs(row.Instructor_Preferences);
         if (instrPrefs) co.Textbook_Instructor_Preferences__c = instrPrefs;
 
+        // Course_Submission fields — joined on Course_Code|Course_Quarter
+        const submission = courseSubmissionMap.get(
+          `${code}|${quarter.toLowerCase()}`,
+        );
+        if (submission) {
+          setFloat("Total_Hours__c", submission.Course_Total_Hours);
+          setFloat("Tuition_Adjustment__c", submission.Tuition_Adjustment);
+          setStr(
+            "Tuition_Adjustment_Note__c",
+            str(submission.Tuition_Adjustment_Note).trim(),
+          );
+        }
+
         logger.info(
           `[Course32] Row ${startRow + i} (${sourceId}) CourseOffering required fields:` +
             `\n  LearningCourse     = ${baseCode} (External_ID_4D__c)` +
@@ -1052,6 +1175,50 @@ export const coursesImport5Year = flow({
         );
         fail("CourseOffering", msg, { External_ID_4D__c: sourceId, ...co });
         continue;
+      }
+
+      // Product2 — one per CourseOffering (workbook Course tab rows 127-131).
+      // Only reached when the CourseOffering saved, so no orphan Products.
+      const productPayload = buildCourseProductPayload({
+        sourceId,
+        code,
+        title,
+        description: row.Description,
+        courseOfferingId,
+      });
+      try {
+        const r = await sfUpsert(
+          sfBase,
+          sfToken,
+          "Product2",
+          "External_ID_4D__c",
+          sourceId,
+          productPayload,
+        );
+        counts.product.ok++;
+        // List Price = Course.Tuition (blank or 0 → 0), refreshed every run.
+        pricingQueue.push({
+          sourceId,
+          productId: r.id,
+          unitPrice: parseListPrice(row.Tuition),
+          code,
+          title,
+          quarter,
+        });
+        ok("Product2", r.id, r.created, {
+          External_ID_4D__c: sourceId,
+          ...productPayload,
+        });
+      } catch (err) {
+        counts.product.err++;
+        const msg = sfErrMsg(err);
+        logger.error(
+          `[Course32] Row ${startRow + i} (${sourceId}) Product2: ${msg}`,
+        );
+        fail("Product2", msg, {
+          External_ID_4D__c: sourceId,
+          ...productPayload,
+        });
       }
 
       // 5-7. Post-offering operations — all independent once courseOfferingId is set.
@@ -1086,7 +1253,13 @@ export const coursesImport5Year = flow({
                   );
                   const sched: Record<string, unknown> = {
                     CourseOfferingId: courseOfferingId,
-                    Description: title || code || sourceId,
+                    // Strip HTML (some titles contain inline formatting tags,
+                    // e.g. <span style="font-style:italic">) and cap at 255
+                    // chars — this is a plain Text field, not Rich Text, and
+                    // tag-bloated titles were exceeding the length limit.
+                    Description: stripHtmlForTextField(
+                      title || code || sourceId,
+                    ),
                     ...dayFlags,
                   };
                   if (startTime) sched.StartTime = startTime;
@@ -1344,11 +1517,48 @@ export const coursesImport5Year = flow({
       await Promise.all(postOfferingTasks.map((t) => t()));
     }
 
+    // ── PricebookEntry — Standard first, then the custom book ────────────────
+    const pricingMeta = new Map(pricingQueue.map((p) => [p.sourceId, p]));
+    const pbeResults = await saveCoursePricebookEntries(
+      sfBase,
+      sfToken,
+      priceBooks,
+      pricingQueue,
+    );
+    for (const r of pbeResults) {
+      const meta = pricingMeta.get(r.sourceId);
+      const base = {
+        Source_ID: r.sourceId,
+        Code: meta?.code ?? "",
+        Title: meta?.title ?? "",
+        Quarter: meta?.quarter ?? "",
+        Object: "PricebookEntry",
+        fields: pricebookEntryResultFields(r),
+      };
+      if (r.outcome === "created" || r.outcome === "updated") {
+        successRows.push({
+          ...base,
+          sf__Id: r.sfId ?? "",
+          sf__Created: String(r.outcome === "created"),
+        });
+      } else {
+        if (r.outcome === "failed") {
+          logger.error(
+            `[Course32] ${r.sourceId} PricebookEntry (${r.bookName}): ${r.error}`,
+          );
+        }
+        errorRows.push({ ...base, sf__Error: r.error ?? r.outcome });
+      }
+    }
+    const pbeSummary = summarisePricebookEntries(pbeResults);
+
     // ── Results sheet ─────────────────────────────────────────────────────────
     const RESULT_OBJECTS = [
       "Learning",
       "LearningCourse",
       "CourseOffering",
+      "Product2",
+      "PricebookEntry",
       "CourseOfferingSchedule",
       "COP-Instructor",
       "COP-Associate",
@@ -1428,6 +1638,8 @@ export const coursesImport5Year = flow({
         `\n  Learning:       ${counts.learning.ok} ok, ${counts.learning.skipped} skip (exists), ${counts.learning.err} err` +
         `\n  LearningCourse: ${counts.learningCourse.ok} ok, ${counts.learningCourse.skipped} skip (exists), ${counts.learningCourse.err} err` +
         `\n  CourseOffering: ${counts.courseOffering.ok} ok, ${counts.courseOffering.err} err` +
+        `\n  Product2:       ${counts.product.ok} ok, ${counts.product.err} err` +
+        `\n  PricebookEntry: ${pbeSummary.text}` +
         `\n  Schedule:       ${counts.schedule.ok} ok, ${counts.schedule.skipped} skip, ${counts.schedule.err} err` +
         `\n  COP-Instructor: ${counts.copInstructor.ok} ok, ${counts.copInstructor.skipped} skip, ${counts.copInstructor.err} err` +
         `\n  COP-Associate:  ${counts.copAssociate.ok} ok, ${counts.copAssociate.skipped} skip, ${counts.copAssociate.err} err`,

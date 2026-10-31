@@ -14,6 +14,7 @@ import instructorFlows from "./instructorFlow";
 import associateFlows from "./associateFlow";
 import departmentFlows from "./departmentFlow";
 import quarterFlows from "./quarterFlow";
+import quarterBefore2013Flows from "./quarterBefore2013Flow";
 import coursesImport2YearFlows from "./coursesImport2Year";
 import coursesImport5YearFlows from "./coursesImport5Year";
 import coursesImportAllTimeFlows from "./coursesImportAllTime";
@@ -24,6 +25,10 @@ import courseOtherCostFlows from "./courseOtherCostFlow";
 import courseTimecardFlows from "./courseTimecardFlow";
 import courseworkFlows from "./courseworkFlow";
 import registrationFlows from "./registrationFlow";
+import purchaseInventoryFlows from "./purchaseInventoryFlow";
+import purchaseFlows from "./purchaseFlow";
+import purchaseItemFlows from "./purchaseItemFlow";
+import paymentsFlows from "./paymentsFlow";
 import enrollmentFlows from "./enrollmentFlow";
 import enrollmentsImportAllTimeFlows from "./enrollmentsImportAllTime";
 import enrollmentWaiverFlows from "./enrollmentWaiverFlow";
@@ -51,6 +56,7 @@ export default integration({
     ...instructorFlows, // 2. Instructor
     ...associateFlows, // 3. Associate
     ...quarterFlows, // 4. Quarter
+    ...quarterBefore2013Flows, // 4b. Quarter Import Before 2013
     ...departmentFlows, // 5. Department
     ...unitRuleFlows, // 6. Unit Rule
     ...tuitionRuleFlows, // 7. Tuition Rule
@@ -72,6 +78,10 @@ export default integration({
     ...coursesImport5YearFlows, // 23. Course Import - 5 Year
     ...coursesImportAllTimeFlows, // 24. Course Import - All
     ...enrollmentsImportAllTimeFlows, // 25. Enrollment Import All Time
+    ...purchaseInventoryFlows, // 26. Purchase Inventory
+    ...purchaseFlows, // 27. Purchase
+    ...purchaseItemFlows, // 28. Purchase Item
+    ...paymentsFlows, // 29. Payments
   ],
   configPages,
   componentRegistry,

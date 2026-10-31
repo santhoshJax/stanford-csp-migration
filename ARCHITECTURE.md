@@ -28,6 +28,7 @@
    - [Tuition Rule Flow](#414-tuition-rule-flow)
    - [Unit Rule Flow](#415-unit-rule-flow)
    - [Textbook Flow](#416-textbook-flow)
+   - [Commerce Flows — Purchase Inventory / Purchase / Purchase Item / Payments](#417-commerce-flows)
 5. [Cross-Cutting Patterns](#5-cross-cutting-patterns)
 6. [External ID Strategy](#6-external-id-strategy)
 7. [Known Open Items & Decisions](#7-known-open-items--decisions)
@@ -78,6 +79,7 @@ Learning
     └── LearningCourse (Learning.External_ID_4D__c)
             └── CourseOffering (LearningCourse, AcademicSession, Dept Account, Tuition_Rule__c)
                     ├── CourseOfferingSchedule (CourseOfferingId)
+                    ├── Product2 — one per offering (Course_Offering__c; ext ID = Course.ID)
                     ├── Course_Department__c  (Course_Offering__r, Child_Dept, Parent_Dept)
                     ├── CourseOfferingParticipant — Instructor / Associate (CourseOffering + Contact)
                     ├── CourseOfferingParticipant — Student Enrollment (CourseOffering + Contact + Account)
@@ -114,6 +116,7 @@ CSP_Transcript_Request__c  (standalone)
 | CourseOffering | `Coordinator__c` | Contact | **SF Id** (resolved via SOQL) |
 | CourseOffering | `ProviderId` | Account (dept) | **SF Id** (resolved via SOQL) |
 | CourseOfferingSchedule | `CourseOfferingId` | CourseOffering | **SF Id** (resolved same batch) |
+| Product2 (course) | `Course_Offering__c` | CourseOffering | **SF Id** (from the CourseOffering upsert in the same row) |
 | Course_Department__c | `Course_Offering__r.External_ID_4D__c` | CourseOffering | External ID ref |
 | Course_Department__c | `Child_Department__r.External_ID_4D__c` | Account (dept) | External ID ref |
 | Course_Department__c | `Parent_Department__r.External_ID_4D__c` | Account (category) | External ID ref |
@@ -158,7 +161,8 @@ Group 1b — Depends on Student Flow (Group 1)
 
 Group 2 — Depends on Group 1
   └── Course Flow         → Learning, LearningCourse, Location, CourseOffering,
-                            CourseOfferingSchedule, Course_Department__c,
+                            Product2 (one per offering), CourseOfferingSchedule,
+                            Course_Department__c,
                             CourseOfferingParticipant (instructors + associates)
 
 Group 3 — Depends on Group 2 (CourseOffering must exist)
@@ -176,6 +180,13 @@ Group 5 — Depends on Group 4
 
 Group 6 — Standalone (can run any time after Group 1)
   └── Transcript Request Flow → CSP_Transcript_Request__c
+
+Group 7 — Commerce (Student flow first; see 4.17 for the internal order)
+  ├── Purchase Inventory Flow → Product2, PricebookEntry
+  ├── Registration Flow       → CardPaymentMethod, Order, PaymentGroup, Payment
+  ├── Purchase Flow           → CardPaymentMethod, Order, PaymentGroup, Payment   (PUR- ids)
+  ├── Purchase Item Flow      → OrderItem        (needs Purchase Inventory + Purchase)
+  └── Payments Flow           → Payment, Refund  (needs Registration; PAY- ids)
 ```
 
 ---
@@ -291,9 +302,51 @@ Upsert key: `Student_ID_4D__c`
 ### 4.3a Account Login Flow
 
 **File:** `src/accountLoginFlow.ts`
-**Source:** Account Login TSV (4D) — streamed in 2,000-row windows
+**Source:** Account Login TSV (4D) — streamed in 500-row windows (was 2,000 until 2026-10-22; see "Long-running User jobs" below)
 **Purpose:** Creates one Salesforce `User` per portal login credential, for the Student community/portal profile. **Must run after Student Flow** — every row is resolved against the Account created there.
 **Reference:** "CSP Data Migration Mapping Workbook - Account Login.pdf"
+
+#### Enrollment filter (added 2026-10-21)
+
+Only students with an enrollment other than New get a User (rule changed 2026-10-29; before that only `Status = "Enrolled"` counted). The flow reads the Enrollment TSV (the "Enrollment File ID" config var on the Enrollment Configuration page) and looks at **all** of a `Student_ID`'s Enrollment rows (`12345.0` is read as `12345`):
+- at least one row has a Status other than New (Enrolled, Drop, Cancel, Wait List, UnEnrolled, …) → the User is created
+- every row is New → skipped as *Only New enrollments*. A blank Status counts as New. New is compared case-insensitively after trimming.
+- no rows at all → skipped as *No enrollment rows*
+
+| Student's Enrollment rows | Result |
+|---|---|
+| Enrolled | User created |
+| New / New, New / New, blank | Skipped — Only New enrollments |
+| New, Enrolled / New, Drop / Cancel / Wait List, New | User created |
+| (none) | Skipped — No enrollment rows |
+
+The check reads the source file, not Salesforce, so it does not depend on the Enrollment Import having run. Since 2026-10-28 the Enrollment file is read once per run, when the Student index is built (below), instead of once per window. The run stops with an error if "Enrollment File ID" is empty or the file has no `Student_ID` or `Status` column. Skipped students are counted in the log.
+
+**Skipped tab (2026-10-26).** Every row the flow drops before the User upload is written to a "Skipped" tab in the results spreadsheet, with columns `Student_ID`, `Reason`, `Detail`, `Window #` and `Window Start Byte`. Reasons: *Column count does not match header*, *Invalid Student_ID*, *Duplicate Student_ID (merged)* (one row per extra row), *Only New enrollments*, *No enrollment rows*, *No matching Account*, *No usable email*. The tab is written before the upload, so its rows are kept even if the execution later hands off or ends early. If the run has no spreadsheet yet, one is created to hold it, and the Success/Errors tabs are added when the first results arrive. Since 2026-10-28 a write that still fails after retries stops the run (see below).
+
+#### Student index and row accounting (added 2026-10-28)
+
+**Problem.** Duplicates were merged only inside one 500-row window. A student in two windows was sent twice, and the later window decided `IsActive`, so an old `Inactive=TRUE` row could switch off a User an earlier window had made active. About 2,409 source rows were also in no tab, and nothing in the run flagged it.
+
+**Student index.** Before window 1, the flow reads the whole Account Login file once (`src/accountLoginIndex.ts`) and saves a JSON index to Drive, in the Failed Records folder, named `Stanford CSP - Account Login Import - Student Index - <file id>.json`. For each `Student_ID` the index records:
+- its first valid row (start byte, line number and window)
+- whether any of its rows is active
+- how many rows it has
+- its Enrollment state: a non-New row, only New rows, or no rows (index version 2, 2026-10-29; a version-1 index is rebuilt automatically)
+
+The index also records the header row and every window's start byte. It holds IDs, flags and positions only, no names or email addresses. It is reused while the Account Login file, the Enrollment file and the window size are unchanged (same size and modified time), and rebuilt otherwise. Its ID is passed from one window to the next.
+
+**One User per student.** A window sends a student only from that student's first row in the file, with `IsActive = true` if any of the student's rows is active. Every other row for that `Student_ID`, in the same window or a later one, goes to Skipped as *Duplicate Student_ID (merged)*, with the line and window it was merged into.
+
+**Restarts.** A run started by hand at a byte offset takes its headers and window number from the index. Before this, a restart without `headers` in the payload read its first data line as the header row and dropped every later row as *Invalid Student_ID*. To keep writing to the same results spreadsheet, pass the sheet ID from the first run's log as `sheetId` in the trigger payload, alongside `byteOffset`. (An "Account Login Results Spreadsheet ID" config var did this briefly; it was removed on 2026-10-28 because the config screen would not save it empty.) Do not reuse a sheet from before 2026-10-28, because it has no `Window #` column.
+
+**Row accounting.**
+- Success, Errors and Not Processed rows start with a `Window #` column.
+- A sent `Student_ID` that Salesforce returns in neither result file is written to Not Processed, including after a job hand-off.
+- Each window checks that rows read = Skipped + sent before uploading, and that sent = Success + Errors + Not Processed after the results are written.
+- Each window writes one row to a **Window Log** tab: Window #, start and end byte, rows read, blank lines, Skipped, sent, Success, Errors, Not Processed, Check (`OK` / `MISMATCH`) and finish time.
+- Google Sheets writes are retried on dropped connections, 429 and 5xx. If a Skipped or results write still fails, or a count check fails, the run stops with an error naming the byte offset to restart from. A failed Window Log write is only logged, because the window's rows are already on their tabs by then.
+- At the end, the log gives the file's total data rows. Success + Errors + Not Processed + Skipped across all windows should equal that number.
 
 #### Objects Created
 
@@ -314,13 +367,23 @@ Upsert key: `Federation_Identifier__c` (custom field — not the standard `Feder
 | `TimeZoneSidKey` | — | Direct map, default `"America/Los_Angeles"` |
 | `EmailEncodingKey` | — | Direct map, default `"UTF-8"` |
 
+**PermissionSetAssignment** (added 2026-10-15)
+Every User the upsert accepts, whether created or updated, is assigned these permission sets: **Buyer**, **CSP Stap API Access**, **CSP Student Education Cloud PS**. The list comes from the "Account Login Permission Sets" config var (comma-separated; each entry can be an API Name or a unique Label). The permission sets are looked up before the upsert, and the run stops if any is missing or its Label is ambiguous. Assignments that already exist are skipped, so re-running the flow also adds the permission sets to Users imported before this step existed. Inserted through the sObject Collections API with allOrNone=false. Per-row failures are logged and do not undo the User upsert.
+
 **Do Not Map:** `Instructor_ID`, `Associate_ID`, `ID`, `Last_Login_Date`, `Password_Hash_Char`, `Created_Date/Time/By`, `Last_Modified_Date/Time/By`, `Student_ID_Previous`, `Override_Hash_Storage/Start_Date/Start_Time/History`, `Previous_Hash_Chars`.
 
 **Row-skip rules:** no `Student_ID` or `Student_ID = 0`; no matching Account found for `Student_ID`; matched Contact has no usable email.
 
 **Open item — Active/Inactive semantics:** the mapping doc calls this "Direct Map" from source `Inactive` to target `Active`, noting "records are only marked as inactive if they are duplicate." A literal same-value copy would leave every normal (non-duplicate) record `IsActive = false`, so this flow inverts the value (`IsActive = !Inactive`) to match the note's evident intent. **Needs architect confirmation before go-live.**
 
-**Prerequisites:** a Profile named `Student_Profile` must exist in the org (configurable via the "Account Login Profile Name" config var); a custom field `User.Federation_Identifier__c` must exist and be marked as an External ID in Salesforce Setup, so Bulk API 2.0 can upsert on it (same convention as `Student_ID_4D__c` / `Instructor_ID_4D__c` / `Associate_ID_4D__c` elsewhere in this project).
+#### Long-running User jobs (added 2026-10-22)
+
+Creating Experience Cloud Users through Bulk API 2.0 is slow. In the first full run, window 2 (2,000 rows, 1,664 Users) was still waiting on its job when the platform's 15-minute execution limit ended it (E100), so its permission sets, results sheet and the next window never ran. Two changes:
+
+- Windows are now 500 rows.
+- An execution waits at most 10 minutes for its User job. If the job is still running, the flow re-invokes itself with `pendingJobId`, `pendingHasMore` and `byteOffset` set to the start of the next window. The next execution waits for the same job (the records are not uploaded again), then assigns permission sets, writes the results sheet from the job's result CSVs and moves on. After 6 hand-offs for one job the run stops with an error naming the job and the byte offset to restart from.
+
+**Prerequisites:** a Profile named `Student_Profile` must exist in the org (configurable via the "Account Login Profile Name" config var); a custom field `User.Federation_Identifier__c` must exist and be marked as an External ID in Salesforce Setup, so Bulk API 2.0 can upsert on it (same convention as `Student_ID_4D__c` / `Instructor_ID_4D__c` / `Associate_ID_4D__c` elsewhere in this project). Each permission set in "Account Login Permission Sets" must exist and be assignable to the Experience Cloud license on that Profile; otherwise the assignment fails with a license mismatch.
 
 ---
 
@@ -503,6 +566,55 @@ One record per instructor/associate junction row, deduplicated by (CourseOfferin
 | `ParticipantAffiliation` | `"Instructor"` or `"Associate"` |
 | `IsPrimary__c` | Boolean |
 | `External_ID_4D__c` | `CINST-{id}` or `CASSOC-{id}` (optional) |
+
+#### Product2 per CourseOffering (added 2026-10-27)
+
+All three course flows — **Tier 1** `coursesImport2Year.ts`, **Tier 2** `coursesImport5Year.ts`
+and **Tier 3** `coursesImportAllTime.ts` (Course Import - All) — create one `Product2` per
+CourseOffering, right after the CourseOffering is saved. Source: mapping workbook, Course tab
+rows 127–131. The payload is built by `buildCourseProductPayload()` in `src/courseUtils.ts`, so
+the three flows share one mapping.
+
+Upsert key: `External_ID_4D__c` = Course.ID (same value as the CourseOffering, e.g. `20081_WSP 138`).
+
+| Field | Source | Notes |
+|---|---|---|
+| `Name` | Course.Title | `_4DNL_` → space, HTML stripped, max 255; falls back to Code, then ID |
+| `Course_Offering__c` | Course.ID | **SF Id** of the CourseOffering saved for the same row |
+| `Description` | Course.Description | `_4DNL_` → newline, max 4,000 (standard Product2 limit) |
+| `ProductCode` | Course.Code | Full code as-is, e.g. `OWC 303 A` |
+| `IsActive` | — | Always `false` |
+
+- If the CourseOffering fails, no Product2 is created for that row (no orphan Products).
+- Results sheets get a `Product2` tab; run summaries get a Product2 line.
+- **No clash with Purchase Inventory Products.** The Purchase Inventory flow writes its own 4D
+  IDs to the same `Product2.External_ID_4D__c` field, but those are small numbers, while
+  Course IDs are `<quarter>_<code>` text values, so the two sets cannot overlap.
+- Each saved Product also gets PricebookEntry rows — see below.
+
+#### PricebookEntry per course Product2 (added 2026-10-31)
+
+Shared code: `src/coursePricebook.ts` (Salesforce calls) and the price book helpers in
+`src/courseUtils.ts`. Used by all three course flows, after the row loop of each window.
+
+- **Config var `Price Books`** (Course Configuration page, shared by all three flows): a comma
+  list of Pricebook2 names, default `Standard Price Book,StanfordContinuingStudies Price Book`.
+- **Checked before any row is written** (one Pricebook2 query per window). The run stops if a
+  listed book is missing or inactive, or if more than one custom book is listed. The Standard
+  Price Book is always included, even when not listed, because Salesforce rejects a custom
+  entry until the Product has a Standard entry.
+- **Fields:** `UnitPrice` = Course.Tuition (blank or 0 → 0), `IsActive` = true,
+  `UseStandardPrice` = false on the custom entry.
+- **Keys** on `PricebookEntry.External_ID_4D__c` (Text, External ID, Unique — created by the
+  client team): `STD-<Course.ID>` in Standard, `<Course.ID>` in the custom book.
+- **Save:** one query finds existing entries for the window's Products (Product2Id +
+  Pricebook2Id). Missing entries are inserted; existing ones are updated by Id (price, active,
+  key), because Product2Id and Pricebook2Id cannot be changed after creation. Standard first,
+  then the custom book only for Products that have a Standard entry (the rest are logged as
+  "Skipped – Standard entry failed"). sObject Collections, 200 per call, allOrNone = false.
+- **Re-runs** refresh the price from 4D every time and never duplicate entries.
+- **No enrollment filter:** every saved course Product is priced.
+- Results sheets get a `PricebookEntry` tab; run summaries get a PricebookEntry line.
 
 ---
 
@@ -689,13 +801,19 @@ Upsert key: `External_ID_4D__c` = source ID
 
 #### Object Created
 
-**CSP_Transcript_Request__c** — Standalone; no parent lookups.  
-Upsert key: `External_ID_4D__c` = source ID
+**CSP_Transcript_Request__c** — Linked to the student's Person Account and Person Contact.  
+Upsert key: `External_ID_4D__c` = source ID  
+Student lookup: source `Student_ID` → SOQL on `Account.Student_ID_4D__c` (`IsPersonAccount = true`).
+Rows with no matching Person Account are **still sent**; the raw `Student_ID` goes into
+`Student__c`, so Salesforce rejects the record and it shows in the results-sheet error CSV
+(decision 2026-10-27). Unmatched IDs are also logged as a warning.
 
 | Field | Notes |
 |---|---|
+| `Student__c` | Account lookup = matched Person Account `Id` (raw Student_ID if unmatched → rejected) |
+| `Contact__c` | Contact lookup = matched Person Account's `PersonContactId` |
 | `Request_Date__c` | Date/time; midnight UTC |
-| `Student_ID__c`, `Last_Name__c`, `First_Name__c` | |
+| `Last_Name__c`, `First_Name__c` | From the matched Person Account |
 | `Email_Address__c` | Cleaned/validated |
 | `Student_ID_Longint__c`, `Transaction_ID__c` | |
 | `Transcript_Format__c` | |
@@ -704,6 +822,8 @@ Upsert key: `External_ID_4D__c` = source ID
 | `Unfullfilled_Quantity__c`, `Unfullfilled_Notes__c` | |
 | `Sent_Date__c`, `Transaction_ID_Date_Entered__c` | |
 | `Amount__c` | Currency (near 0% populated in 2-year window) |
+
+`Account__c` and `Student_ID__c` were deleted from the object (2026-10-27) and are no longer mapped.
 
 ---
 
@@ -790,6 +910,23 @@ Upsert key: `External_ID_4D__c` = source row ID
 
 ---
 
+### 4.17 Commerce Flows
+
+**Files:** `src/purchaseInventoryFlow.ts`, `src/purchaseFlow.ts`, `src/purchaseItemFlow.ts`, `src/paymentsFlow.ts`, shared helpers in `src/commerceShared.ts`
+**Sources:** the Purchase Inventory, Purchase, Purchase Item and Payments tabs of the mapping workbook (Registration is documented in its own file header).
+**Status:** added 2026-10-14, `TEST_MODE = true` (one window, 50 records) — not yet run against an org. Open questions and unverified fields: `reports/registration-mapping-review-2026-10-14.md`.
+
+| Flow | Writes | External ID | Depends on |
+|---|---|---|---|
+| Purchase Inventory | Product2, PricebookEntry (Standard Price Book, insert-only) | `{id}` on Product2 | — |
+| Purchase | CardPaymentMethod, Order (Draft, Standard Price Book), PaymentGroup, Payment | `PUR-{id}` | Student |
+| Purchase Item | OrderItem | `PI-{id}` (Order via `Order.External_ID_4D__c = PUR-{Purchase_ID}`; product via `Product2.Name` → PricebookEntry) | Purchase Inventory, Purchase |
+| Payments | Payment, Refund (Referenced) | `PAY-{id}` (PaymentGroup via `External_ID_4D__c = Registration_ID`) | Student, Registration |
+
+External IDs are **prefixed** because Registration writes the raw `Registration.ID` into the same objects and the id ranges overlap. Purchase / Purchase Item / Payments reuse Registration's windowed-stream + 4-phase (CardPaymentMethod → Order → PaymentGroup → Payment) pattern.
+
+---
+
 ## 5. Cross-Cutting Patterns
 
 ### 5.1 Streaming (HTTP Range Windows)
@@ -841,6 +978,10 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | `ENR-{id}` | CourseOfferingParticipant (student enrollment) | `ENR-80001` |
 | `NOISBN_{slug}` | Textbook__c (no ISBN) | `NOISBN_intro-to-python_smith` |
 | (raw 4D `Student_ID`) | User (`Federation_Identifier__c` — not `External_ID_4D__c`) | Account Login |
+| `PUR-{id}` | Order, CardPaymentMethod, PaymentGroup, Payment (Purchase) | `PUR-2` |
+| `PI-{id}` | OrderItem (Purchase Item) | `PI-101` |
+| `PAY-{id}` | Payment, Refund (Payments) | `PAY-1` |
+| (raw Registration ID) | Order, CardPaymentMethod, PaymentGroup, Payment (Registration) | `560585` |
 | (raw 4D ID) | All other objects | `"6001"` |
 
 ---
@@ -868,3 +1009,9 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | 17 | **Account Login — welcome/password-reset email on User insert** | **Resolved (2026-10-14):** architect confirmed suppression is required until go-live. Bulk API 2.0 has no job-level option for this — confirmed via Salesforce docs that `EmailHeader.triggerUserEmail` is a SOAP API header, not available on Bulk API 2.0's `jobs/ingest` endpoint. Resolution: set Setup → Email → Deliverability → Access Level = "System email only" for the duration of the migration load, then restore before go-live. This is an org-wide Setup toggle, not a code change — **must be flipped back before go-live** or all org email stays blocked |
 | 18 | **Account Login — `Federation_Identifier__c` not marked as External ID** | **Resolved (2026-10-14):** marked as External ID in Stanford_UAT |
 | 19 | **Account Login — Bulk API support for Community/portal Users** | **New risk (2026-10-13):** since `Student_Profile` is confirmed to be a portal/Experience Cloud license (#15), worth a small sandbox test before the full run — Salesforce has had org-specific restrictions around creating licensed Community/Partner users via Bulk API that don't show up with internal-profile Users. If it fails, the fallback is the standard REST/Composite API instead of Bulk API 2.0 for this one object |
+| 20 | **Account Login — permission sets for imported Users** | **Decision (2026-10-15):** every imported User also gets Buyer, CSP Stap API Access and CSP Student Education Cloud PS. Implemented in the flow (configurable via "Account Login Permission Sets"); re-running the flow back-fills Users already imported |
+| 21 | **Account Login — only enrolled students get a User** | **Decision (2026-10-21):** import an Account Login row only when its `Student_ID` has a `Status = "Enrolled"` row in the Enrollment source file. Implemented in the flow; reuses the "Enrollment File ID" config var |
+| 21a | **Account Login — any enrollment other than New gets a User** | **Decision (2026-10-29), replaces #21:** a `Student_ID` gets a User when at least one of its Enrollment rows has a Status other than New. Skipped when every row is New (a blank Status counts as New) or when there are no Enrollment rows; the two are separate skip reasons. Student index bumped to version 2 so old indexes are rebuilt |
+| 22 | **Account Login — User Bulk job can outlast one execution** | **Fixed (2026-10-22):** window 2 of the full run timed out (E100) waiting on a 1,664-User job. Windows cut to 500 rows; the flow hands a still-running job to the next execution instead of waiting past the limit |
+| 23 | **Account Login — skipped rows missing from the results sheet** | **Fixed (2026-10-26):** about 15,000 rows were in neither Success nor Errors because rows dropped before the upload were only counted in the log. They are now written to a "Skipped" tab with their reason |
+| 24 | **Account Login — duplicates across windows; rows in no tab** | **Fixed (2026-10-28):** a Student index built from the whole file once sends one User per `Student_ID` (first row, active if any row is active); the rest go to Skipped. Each window's counts are checked and logged on a Window Log tab, and the run stops when a row cannot be placed or a sheet write fails |
