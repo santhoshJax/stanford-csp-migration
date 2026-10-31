@@ -176,7 +176,7 @@ export const configPages = {
         dataType: "string",
         default: "Standard Price Book,StanfordContinuingStudies Price Book",
         description:
-          "Comma-separated Pricebook2 names that Course Import - All, 2 Year and 5 Year add every course Product to, with List Price = Course Tuition (blank or 0 becomes 0). The Standard Price Book is always included, even if it is not listed, because Salesforce needs a Standard entry before a custom one. List at most one custom price book. Every listed book must exist and be active, or the run stops before writing anything. Requires PricebookEntry.External_ID_4D__c (Text, External ID, Unique).",
+          "Comma-separated Pricebook2 names, shared by the course and purchase flows. Course Import - All, 2 Year and 5 Year add every course Product to these books with List Price = Course Tuition (blank or 0 becomes 0). Purchase Inventory Import adds every inventory Product to them with List Price = Unit_Price, and Purchase Orders and their line items use the custom book (Standard only when no custom book is listed). The Standard Price Book is always included, even if it is not listed, because Salesforce needs a Standard entry before a custom one. List at most one custom price book. Every listed book must exist and be active, or the run stops before writing anything. Requires PricebookEntry.External_ID_4D__c (Text, External ID, Unique).",
       }),
       "Course Instructor File ID": configVar({
         stableKey: "c8d9e0f1-8888-4c1d-5e6f-11223344ccdd",
@@ -315,7 +315,8 @@ export const configPages = {
         dataType: "string",
         description:
           "Google Drive file ID of the TSV that contains Purchase Inventory records. " +
-          "Migrates Product2 and Standard Price Book PricebookEntry records. " +
+          "Migrates Product2 and PricebookEntry records (one entry per product in " +
+          "each price book listed in Price Books on the Course Configuration page). " +
           "Must run before Purchase Item Import.",
       }),
       "Purchase File ID": configVar({
@@ -325,6 +326,16 @@ export const configPages = {
           "Google Drive file ID of the TSV that contains Purchase records. " +
           "Migrates CardPaymentMethod, Order, PaymentGroup, and Payment records " +
           "(External IDs prefixed PUR-). Must run after Student flow.",
+      }),
+      "Activate Purchase Orders": configVar({
+        stableKey: "pact2026-1031-4b06-8c20-1b2c3d4e5f06",
+        dataType: "boolean",
+        default: "false",
+        description:
+          "Round 2 of Purchase Import. Leave false for the first run (Orders are " +
+          "created Draft), run Purchase Item Import, then set true and run Purchase " +
+          "Import again: every Draft purchase Order with at least one line item is " +
+          "changed to Activated. Orders without line items stay Draft.",
       }),
       "Purchase Item File ID": configVar({
         stableKey: "pitm2026-1014-4b03-8c20-1b2c3d4e5f03",

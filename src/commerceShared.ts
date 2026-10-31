@@ -13,6 +13,12 @@ import axios from "axios";
 import { parse as papaParse, type ParseResult, type Parser } from "papaparse";
 import { Transform } from "stream";
 import { str, runBulkJob, SF_API_VERSION } from "./utils";
+import {
+  parsePriceBookNames,
+  resolvePriceBooks,
+  type PricebookRecord,
+  type ResolvedPriceBooks,
+} from "./courseUtils";
 
 export type SfRecord = Record<string, unknown>;
 
@@ -149,10 +155,8 @@ export async function buildStudentEmailCache(
 }
 
 /**
- * Id of the Standard Price Book. The workbook tabs never name a Pricebook2,
- * but PricebookEntry, Order (for line items) and OrderItem all require one —
- * the Standard Price Book is the only one guaranteed to exist. ASSUMPTION to
- * confirm with the architect.
+ * Id of the Standard Price Book. Every product must have a Standard Price
+ * Book entry before Salesforce allows an entry in any custom price book.
  */
 export async function getStandardPricebookId(
   base: string,
@@ -169,6 +173,87 @@ export async function getStandardPricebookId(
     );
   }
   return rows[0].Id;
+}
+
+// ── Configurable price books (shared "Price Books" config var) ──────────────
+//
+// The "Price Books" config var lives on the Course Configuration page and is
+// shared by the course flows and Purchase Inventory / Purchase / Purchase Item
+// Import, so course and inventory Products land in the same books. Parsing and
+// validation are the course flows' own (courseUtils.parsePriceBookNames /
+// resolvePriceBooks), so both streams fail the same way on a bad name: a name
+// that matches no Pricebook2, an inactive book, or more than one custom book
+// stops the run before any row is written. Standard is always added first.
+
+/** Name of the shared config var holding the comma-separated price book names. */
+export const PRICE_BOOKS_CONFIG_VAR = "Price Books";
+
+export interface ResolvedPricebook {
+  id: string;
+  name: string;
+  isStandard: boolean;
+}
+
+/**
+ * Turns a resolvePriceBooks result into load order: the Standard Price Book
+ * first (Salesforce rejects a custom-book entry for a product with no
+ * Standard entry), then the custom book, when one is configured.
+ */
+export function pricebooksInLoadOrder(
+  resolved: ResolvedPriceBooks,
+): ResolvedPricebook[] {
+  const books: ResolvedPricebook[] = [
+    { id: resolved.standard.Id, name: resolved.standard.Name, isStandard: true },
+  ];
+  if (resolved.custom) {
+    books.push({
+      id: resolved.custom.Id,
+      name: resolved.custom.Name,
+      isStandard: false,
+    });
+  }
+  return books;
+}
+
+/**
+ * Reads the shared "Price Books" config value and resolves each name to a
+ * Pricebook2 Id, in load order (see pricebooksInLoadOrder). Non-fatal notes
+ * (e.g. Standard added because it was left out) are logged as warnings.
+ */
+export async function resolveConfiguredPricebooks(
+  base: string,
+  token: string,
+  rawConfig: string | undefined,
+  log?: { warn: (msg: string) => void },
+): Promise<ResolvedPricebook[]> {
+  const names = parsePriceBookNames(rawConfig);
+  const conditions = ["IsStandard = true"];
+  if (names.length > 0) {
+    const quoted = names.map((n) => `'${n.replace(/'/g, "\\'")}'`).join(", ");
+    conditions.push(`Name IN (${quoted})`);
+  }
+  const found = await sfQueryAll<PricebookRecord>(
+    base,
+    token,
+    `SELECT Id, Name, IsStandard, IsActive FROM Pricebook2 WHERE ${conditions.join(" OR ")}`,
+  );
+  const resolved = resolvePriceBooks(names, found);
+  for (const w of resolved.warnings) log?.warn(`[Price Books] ${w}`);
+  return pricebooksInLoadOrder(resolved);
+}
+
+/**
+ * The single price book Purchase Orders are created in. An Order can only
+ * have one Pricebook2, and every OrderItem on it must use an entry from that
+ * same book, so Purchase Import and Purchase Item Import must agree on it.
+ * Rule: the first CUSTOM price book in the "Price Books" list; the Standard
+ * Price Book only when no custom book is configured.
+ */
+export function orderPricebook(
+  books: ResolvedPricebook[],
+): ResolvedPricebook {
+  const custom = books.find((b) => !b.isStandard);
+  return custom ?? books[0];
 }
 
 // ── Bulk helpers ──────────────────────────────────────────────────────────────
