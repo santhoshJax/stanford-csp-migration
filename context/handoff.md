@@ -42,21 +42,21 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-31
-**Status:** blocked — Purchase flows exist as 3 separate flows, not combined; 3 architect decisions + price book strategy block merge
+**Status:** at risk — Price book strategy clarified & code ready; awaiting architect decision on Order price book + 4 other mappings before commit
 
 **Done this session**
-- Confirmed three separate Purchase flows (Inventory, Purchase, Purchase Item) exist on branch since 2026-10-14
-- Mapped all 11 code departures from workbook against live repo
-- Identified gaps: no combined flow, hard-coded Standard Price Book, course/inventory product name collision risk, no registration line items
+- Confirmed price book setting works as specified: creates entries in both Standard + custom books, validates names exist
+- Verified 6 changed files compile and all 19 purchase flow tests pass
+- Clarified that Orders use StanfordContinuingStudies Price Book by default; awaiting confirmation if should use Standard instead
 
 **Open items**
+- Architect confirms which price book Orders should use (Standard vs StanfordContinuingStudies)
 - Architect confirms Order.Status handling: Draft + custom field for source, or accept loss
 - Architect provides real Product2.QuantityUnitOfMeasure picklist values for unit mapping
 - Architect confirms Balance_Due__c vs BalanceDue__c field name
-- Architect decides: price book name, whether to retire 3 flows or keep alongside combined flow
 - Architect confirms which product and price book registration OrderItems should use
 - Fix 5 failing Student Import tests before merge
-- Build combined purchase flow (if architect approves strategy) or update three existing flows
+- Commit and push 6 changed files to stanford-csp-orchestrate branch
 - Run Deploy session to ship code live to Salesforce org
 
 **Decisions**
@@ -70,23 +70,20 @@
 - Two order streams: Registration (tuition) and Purchase (non-course items)
 
 **Blockers**
-- No combined purchase flow committed; three separate flows exist but don't match requested architecture
-- Price book name not configurable; all flows hard-code Standard Price Book
-- Product name collision risk: Purchase Item matches by name across all 4D products, including course products
-- Architect has not confirmed external ID prefix strategy (REG-, PUR-, ENR-, PIT-, CRS-) for both streams
+- Architect has not confirmed which price book Orders should use (Standard vs StanfordContinuingStudies)
 - Three mapping decisions unconfirmed: Order.Status, QuantityUnitOfMeasure picklist values, Balance_Due field name
+- Architect has not confirmed external ID prefix strategy (REG-, PUR-, ENR-, PIT-, CRS-) for both streams
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
 - 5 Student Import tests failing (pre-existing, not caused by this commit)
 
 **Next**
-- Send architect decision document: price book name/strategy, retire vs keep 3 flows, 3 mapping decisions, registration line item product/price book
-- Architect confirms all decisions before build work starts
+- Architect confirms Order price book choice (Standard or StanfordContinuingStudies) and 3 other mapping decisions
+- Commit 6 changed files to stanford-csp-orchestrate once architect approves
 - Fix 5 failing Student Import tests
-- Build combined purchase flow or update three existing flows per architect decision
 - Open and review pull request from stanford-csp-orchestrate into main
 - Run Deploy session to ship code live to Salesforce org
 
-**Checked live on 2026-10-31:** the repository, the Salesforce org, Google Workspace
+**Checked live on 2026-10-31:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-10-31
 | | |
 |---|---|
@@ -96,24 +93,15 @@
 | Name | Stanford-Data-Migration-Purchase-Orders |
 | Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
 **In its own words (excerpt):**
-I haven't built or changed anything. Short version: the purchase work exists as three separate flows, not one, and it doesn't do what you described yet.
+Thanks for clarifying. The change I've already made does what you described, so nothing in the code needed to change.
 
-## What's in the repo now (`stanford-csp-orchestrate`)
+**How the "Price Books" setting works:**
+- **Default value:** `Standard Price Book,StanfordContinuingStudies Price Book`
+- **Products:** Purchase Inventory Import gives every product a price entry in both books. The Standard Price Book entry is always created first, because Salesforce won't accept a custom price book entry until the standard one exists. If someone leaves Standard out of the setting, the flow adds it anyway.
+- **Bad names:** if a name doesn't match an active price book in Salesforce, the run stops before any products are written, so nothing is half-loaded.
+- **Orders:** Purchase Orders and their line items use StanfordContinuingStudies Price Book. An Order can only use one price book, and the rule picks the first custom one. Your answer didn't say which book orders should use, so I've kept it this way. Tell me if they should use the Standard Price Book instead.
 
-All three were added in one commit on 2026-10-14 and are registered as flows 26–28:
-
-| Flow | Creates | Price book |
-|---|---|---|
-| Purchase Inventory Import | Product2 and PricebookEntry | Standard Price Book only |
-| Purchase Import | CardPaymentMethod, Order, PaymentGroup, Payment | Order set to Standard Price Book |
-| Purchase Item Import | OrderItem (line items) | Looks up the entry in Standard Price Book |
-
-Each flow has its own file ID setting and they must run in order: Inventory, then Purchase, then Purchase Item. Purchase and Purchase Item are still in test mode, so each run loads only 50 records and stops after one window.
-
-## Gaps against what you asked for
-
-1. **There is no single flow.** Products, price book entries, orders and line items are created by three flows. The last session's notes mention a combined purchase flow patch, but it was never committed. Nothing like it is on the branch.
-2. **The price book name isn't configurable.** All three flows hard-cod
+**Where the change stands:** as you asked, the 6 changed files are only on disk in this session, on `stanford-csp-orchestrate`. They aren't committed, pushed, or deployed to Salesforce. The 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
