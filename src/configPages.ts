@@ -171,6 +171,13 @@ export const configPages = {
         description:
           "Google Sheets spreadsheet ID of the course correction sheet. Used only when Course Correction Enabled is true; leave blank otherwise. The first tab is read. It needs an 'ID' column matching the course TSV ID, plus 'Start_Date'/'End_Date' (or 'StartDate'/'EndDate') columns in M/D/YYYY or YYYY-MM-DD format. Other columns are ignored.",
       }),
+      "Price Books": configVar({
+        stableKey: "6c25b598-4261-443e-afba-13daae458287",
+        dataType: "string",
+        default: "Standard Price Book,StanfordContinuingStudies Price Book",
+        description:
+          "Comma-separated Pricebook2 names that Course Import - All, 2 Year and 5 Year add every course Product to, with List Price = Course Tuition (blank or 0 becomes 0). The Standard Price Book is always included, even if it is not listed, because Salesforce needs a Standard entry before a custom one. List at most one custom price book. Every listed book must exist and be active, or the run stops before writing anything. Requires PricebookEntry.External_ID_4D__c (Text, External ID, Unique).",
+      }),
       "Course Instructor File ID": configVar({
         stableKey: "c8d9e0f1-8888-4c1d-5e6f-11223344ccdd",
         dataType: "string",
