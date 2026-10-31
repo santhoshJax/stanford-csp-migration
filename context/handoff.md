@@ -42,23 +42,20 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-31
-**Status:** at risk — Price book code committed & pushed (8 files, 34 tests pass); registration field decision & org validation still open; mapping sheet & UAT s…
+**Status:** at risk — 6 uncommitted files need rebase onto latest remote; price book settings must be consolidated before commit
 
 **Done this session**
-- Committed 8 files (1,203 lines added, 2 removed) to stanford-csp-orchestrate
-- Pushed to GitHub (commit e17c1bb); remote branch verified
-- Rebased onto handoff note (32fd881) cleanly
-- Type check passed; 34 price book and Product tests passed
+- None
 
 **Open items**
-- Architect decides: should Registration Orders switch to BalanceDue__c or keep Balance_Due__c
-- Validate BalanceDue__c, 5 unit picklist values, Activated status, StanfordContinuingStudies price book exist in org
-- Create PricebookEntry.External_ID_4D__c field (Text, External ID, Unique) in UAT with integration user edit access
-- Create active StanfordContinuingStudies Price Book in UAT
-- Set Price Books config var on Course Configuration page if book names differ from default
-- Update D01 mapping workbook: add Pricebook2 and PricebookEntry rows, reflect Balance Due field and Activated status changes
-- Fix 5 pre-existing failing Student Import tests
-- Create PR to main and merge after architect approval
+- Rebase our 6 files onto latest remote (e17c1bb and 5 newer commits)
+- Combine duplicate 'Price Books' settings into one shared setting for course and purchase
+- Standardize new settings to use 'default' instead of 'defaultValue'
+- Compile and re-run purchase + course price book test suites
+- Commit and push consolidated changes to stanford-csp-orchestrate
+- Verify both price books active and PricebookEntry.External_ID_4D__c exists in UAT org
+- Run purchase load: Inventory → Purchase (off) → Item → Purchase (Activate on)
+- Architect decides: Registration Orders field (Balance_Due__c vs BalanceDue__c)
 
 **Decisions**
 - Blank Status counts as New in enrollment rule
@@ -71,47 +68,39 @@
 - Two order streams: Registration (tuition) and Purchase (non-course items)
 
 **Blockers**
+- 6 uncommitted files conflict with 6 newer remote commits (including e17c1bb price book entries)
+- Duplicate 'Price Books' settings must be consolidated before push
 - Registration orders field decision still open (Balance_Due__c vs BalanceDue__c)
-- Salesforce org not attached; BalanceDue__c, picklist values, Activated status, price book names not validated live
 - PricebookEntry.External_ID_4D__c field and StanfordContinuingStudies Price Book must exist in UAT before first run
 
 **Next**
-- Architect confirms whether Registration Orders should switch to BalanceDue__c or keep Balance_Due__c
-- Attach Salesforce org and validate BalanceDue__c, unit picklist, Activated status, price book in live org
-- Create PricebookEntry.External_ID_4D__c field and StanfordContinuingStudies Price Book in UAT
-- Update D01 mapping workbook with Pricebook2 and PricebookEntry rows
-- Rebuild three course integrations and import into Prismatic
-- Run first integration against org to validate price book step
-- Create PR to main once architect approves registration field decision and org validation complete
+- Proceed: rebase, consolidate settings, standardize to 'default', retest, commit and push
+- Verify both price books active and PricebookEntry.External_ID_4D__c in UAT org
+- Run purchase load sequence (Inventory → Purchase off → Item → Purchase on)
+- Architect confirms Registration Orders field choice
+- Open PR to main once architect approves and org validation complete
 
-**Checked live on 2026-10-31:** the repository
+**Checked live on 2026-10-31:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-10-31
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-CourseEnhancement-Products |
-| Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
+| Name | Stanford-Data-Migration-Purchase-Orders |
+| Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch no)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Quick update: I checked the branch before answering, and something has changed since we last spoke that affects the next step.
 
-The price book step is committed and pushed. Commit `e17c1bb` is on `stanford-csp-orchestrate` on GitHub, and I checked that the remote branch now points at that commit and that `src/coursePricebook.ts` reads back from GitHub.
+**What I found**
+- Your 6 changed files are still on disk in this session, on `stanford-csp-orchestrate`. They aren't committed yet.
+- The remote branch now has 6 newer commits. One of them came from a separate session: `e17c1bb`, which adds price book entries for course Products.
+- That commit adds its own **"Price Books"** setting with the same default as ours (`Standard Price Book,StanfordContinuingStudies Price Book`) and its own price-book helper. Every settings page belongs to one integration, so pushing our change as it is would give that integration two settings with the same name.
+- Our two new settings are written with `defaultValue`. The rest of the settings file, including the course commit, uses `default` with a string value such as `"false"`. That should be made consistent.
 
-**What was pushed:** the same 8 files from the diff you reviewed (1,203 lines added, 2 removed). There's no PR to `main`.
-
-**Before committing:**
-- Someone pushed a handoff note (`32fd881`) to the branch after I built. It only changed `context/handoff.md`, so I rebased onto it without conflicts.
-- After the rebase, the type check was clean and all 34 price book and Product tests passed.
-
-**Not done yet:**
-1. **Your team creates in UAT:** the `PricebookEntry.External_ID_4D__c` field (Text, External ID, Un
+**Next steps, in order**
+1. **Rebase our change onto the latest remote branch.** Then combine the two "Price Books" settings into one shared setting that drives both course and purchase products, and use one price-book helper instead of two.
+2. **Make the two new settings
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
