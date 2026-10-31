@@ -42,44 +42,44 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-10-31
-**Status:** at risk — Price book strategy clarified & code ready; awaiting architect decision on Order price book + 4 other mappings before commit
+**Status:** at risk — Purchase flow mappings documented; 5 architect decisions + 5 failing tests block commit
 
 **Done this session**
-- Confirmed price book setting works as specified: creates entries in both Standard + custom books, validates names exist
-- Verified 6 changed files compile and all 19 purchase flow tests pass
-- Clarified that Orders use StanfordContinuingStudies Price Book by default; awaiting confirmation if should use Standard instead
+- Documented complete field-by-field mapping for all 6 purchase flows (Product2, PricebookEntry, Order, CardPaymentMethod, PaymentGroup/Payment, OrderItem)
+- Identified 5 mapping decisions still requiring architect confirmation
+- Confirmed code compiles and 19 purchase flow tests pass
 
 **Open items**
-- Architect confirms which price book Orders should use (Standard vs StanfordContinuingStudies)
-- Architect confirms Order.Status handling: Draft + custom field for source, or accept loss
-- Architect provides real Product2.QuantityUnitOfMeasure picklist values for unit mapping
+- Architect confirms Order price book: Standard or StanfordContinuingStudies
+- Architect confirms Order.Status handling: add custom field or accept loss
+- Architect provides real Product2.QuantityUnitOfMeasure picklist values
 - Architect confirms Balance_Due__c vs BalanceDue__c field name
-- Architect confirms which product and price book registration OrderItems should use
+- Architect confirms product ID prefix strategy for inventory products (recommend PIT-)
 - Fix 5 failing Student Import tests before merge
 - Commit and push 6 changed files to stanford-csp-orchestrate branch
 - Run Deploy session to ship code live to Salesforce org
 
 **Decisions**
-- Blank Status counts as New in enrollment rule (awaiting team confirmation)
-- Index version incremented to 2; old saved index will not be reused
+- Blank Status counts as New in enrollment rule
+- Index version incremented to 2
 - Product2 step: IsActive=FALSE, no price book entries created yet
-- Product2 upsert keyed on External_ID_4D__c = Course.ID; Course_Offering__c lookup points to saved offering
+- Product2 upsert keyed on External_ID_4D__c = Course.ID
 - MAX_ROWS=500, POLL_BUDGET_MS=10min, MAX_JOB_HANDOFFS=6
 - ENR- prefix for Enrollment ID
 - TEST_MODE=false for next full run
 - Two order streams: Registration (tuition) and Purchase (non-course items)
 
 **Blockers**
-- Architect has not confirmed which price book Orders should use (Standard vs StanfordContinuingStudies)
-- Three mapping decisions unconfirmed: Order.Status, QuantityUnitOfMeasure picklist values, Balance_Due field name
-- Architect has not confirmed external ID prefix strategy (REG-, PUR-, ENR-, PIT-, CRS-) for both streams
+- Architect has not confirmed which price book Orders should use
+- Architect has not confirmed Order.Status, QuantityUnitOfMeasure, Balance_Due field decisions
+- Architect has not confirmed product ID prefix strategy (PIT- recommended for inventory)
 - Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
 - 5 Student Import tests failing (pre-existing, not caused by this commit)
 
 **Next**
-- Architect confirms Order price book choice (Standard or StanfordContinuingStudies) and 3 other mapping decisions
-- Commit 6 changed files to stanford-csp-orchestrate once architect approves
+- Architect reviews and confirms 5 mapping decisions from D01 workbook
 - Fix 5 failing Student Import tests
+- Commit 6 changed files to stanford-csp-orchestrate once architect approves
 - Open and review pull request from stanford-csp-orchestrate into main
 - Run Deploy session to ship code live to Salesforce org
 
@@ -93,15 +93,28 @@
 | Name | Stanford-Data-Migration-Purchase-Orders |
 | Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
 **In its own words (excerpt):**
-Thanks for clarifying. The change I've already made does what you described, so nothing in the code needed to change.
+Below is the field-by-field mapping the purchase flows write, as of the current (uncommitted) code. The same content is in the **D01 — Purchase Source-to-Target Mapping** workbook already attached to this session.
 
-**How the "Price Books" setting works:**
-- **Default value:** `Standard Price Book,StanfordContinuingStudies Price Book`
-- **Products:** Purchase Inventory Import gives every product a price entry in both books. The Standard Price Book entry is always created first, because Salesforce won't accept a custom price book entry until the standard one exists. If someone leaves Standard out of the setting, the flow adds it anyway.
-- **Bad names:** if a name doesn't match an active price book in Salesforce, the run stops before any products are written, so nothing is half-loaded.
-- **Orders:** Purchase Orders and their line items use StanfordContinuingStudies Price Book. An Order can only use one price book, and the rule picks the first custom one. Your answer didn't say which book orders should use, so I've kept it this way. Tell me if they should use the Standard Price Book instead.
+## 1. Purchase_Inventory → Product2 (Purchase Inventory Import, runs 1st)
 
-**Where the change stands:** as you asked, the 6 changed files are only on disk in this session, on `stanford-csp-orchestrate`. They aren't committed, pushed, or deployed to Salesforce. The 
+| Source field | Target field | How it's handled |
+|---|---|---|
+| ID | External_ID_4D__c | Upsert key, raw ID with no prefix |
+| Item_Type | Name | Copied. The row is skipped if blank because Name is required |
+| Item_Type | ProductCode | Copied |
+| Description | Description | Cut to 4,000 characters |
+| Unit_Description | QuantityUnitOfMeasure | Only written if it's a valid picklist value (today only "Each"). Otherwise left blank |
+| Active | IsActive | TRUE/FALSE → checkbox |
+| Created_\* / Last_Modified_\* | — | Not loaded (Do Not Map) |
+
+## 2. Purchase_Inventory → PricebookEntry (same flow)
+
+| Source | Target field | How it's handled |
+|---|---|---|
+| Unit_Price | UnitPrice | Same price in every configured book. No entry if blank |
+| Active | IsActive | Same as Product2.IsActive |
+| Product2 created in this run | Product2Id | Lookup |
+| **Price Books** setting | Pricebook2Id | One entry per b
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
