@@ -41,13 +41,11 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-10-30
-**Status:** at risk — Combined purchase flow written & type-checked; 8 mapping departures need architect decisions before merge
+### Engagement state — 2026-10-31
+**Status:** blocked — I can't read the full text of the session "Stanford-Data-Migration-Purchase-Orders-General".
 
 **Done this session**
-- Compared combined flow code against Purchase Inventory, Purchase, Purchase Item tabs
-- Identified 8 places where code departs from workbook mappings
-- Documented field-by-field reconciliation with reasons for each departure
+- I can't read the full text of the session "Stanford-Data-Migration-Purchase-Orders-General". I have no tool that opens another session's record. The only copy I can reach is the excerpt in `context/handoff.md`, and it cuts off partway thro…
 
 **Open items**
 - Team confirms blank Status field handling (currently New) and reviews enrollment rule changes
@@ -86,30 +84,33 @@
 - Merge PR to main once tests pass and architect confirms mappings
 - Run Deploy session to ship code live to Salesforce org
 
-**Checked live on 2026-10-30:** the repository
-### Last session — 2026-10-30
+**Checked live on 2026-10-31:** the repository
+### Last session — 2026-10-31
 | | |
 |---|---|
-| Type | GENERAL |
+| Type | DESIGN |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
 | Name | Stanford-Data-Migration-Purchase-Orders |
-| Session | `6f09d647-de77-4c02-89d2-2ebcb15e2452` |
+| Session | `bb2f49fc-4938-4adb-a07f-165cdb10f25f` |
 **In its own words (excerpt):**
-Mostly yes, but not exactly. The combined flow reuses the existing mappers, so each field follows its tab. Eight places depart from the workbook, listed below. I compared the Purchase Inventory, Purchase and Purchase Item tabs with the mapper code on `stanford-csp-orchestrate`. I haven't run any of it against an org.
+I can't read the full text of the session "Stanford-Data-Migration-Purchase-Orders-General". I have no tool that opens another session's record. The only copy I can reach is the excerpt in `context/handoff.md`, and it cuts off partway through the departures table. I haven't changed anything.
 
-**Where the code matches the tabs**
-- **Product2:** `Item_Type` → `ProductCode` and `Name`, `Description`, and `Active` → `IsActive`.
-- **PricebookEntry:** `Unit_Price` → `UnitPrice`, `Active` → `IsActive`, and the lookup to the new Product2.
-- **Order:** `Purchase_Date` → `EffectiveDate`, `Student_ID` → account lookup, and `CC_Transaction_ID` → `Payment_Transaction_Id__c`. `Notes` and `Message` both map to `Description`, so I join them with a blank line between.
-- **OrderItem:** `Unit_Price`, `Quantity`, `Unit_Description` → `Unit_Description__c`, and `Ref_Record_ID` → `Ref_Record_ID__c`. `Ref_Table_Number` is Do Not Map, as the tab says.
-- **Do Not Map columns:** the Created_* and Last_Modified_* columns are not loaded.
+## What the excerpt says (session of 2026-10-30)
 
-**Where it departs from the tabs**
+The combined purchase flow is written and type-checked, but I haven't seen it run against an org. It reuses the existing mappers, so most fields follow the Purchase Inventory, Purchase and Purchase Item tabs. The session found 8 places where the code departs from the workbook.
 
-| Source → Target | Tab says | Code does | Why |
-|---|---|---|---|
-| `Purchase.Status` → `Order.Status` | Direc
+Of the 8 departures, I can only see the first row, `Purchase.Status` → `Order.Status`, and its text is cut off. The other 7 are lost, apart from the open items below.
+
+## Decisions needed
+
+**Architect decisions that block the merge:**
+1. **`Order.Status`:** start every order as Draft and keep the source status in a new custom field, or accept that the source status is lost.
+2. **`Product2.QuantityUnitOfMeasure`:** the real picklist values, so the unit mapping can be written.
+3. **Balance due field name:** `Balance_Due__c` or `BalanceDue__c`.
+
+**Other open decisions:**
+4.
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
