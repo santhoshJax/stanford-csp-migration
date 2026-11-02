@@ -398,7 +398,7 @@ export function salesforceTextLength(v: string): number {
       length += 6; // &quot; &#39;
     else if (ch === "\n")
       length += 2; // CRLF
-    else length += ch.length; // surrogate pairs count as 2
+    else length += Buffer.byteLength(ch, "utf8"); // Salesforce counts non-ASCII by UTF-8 byte size, e.g. curly quotes/em-dash = 3
   }
   return length;
 }
