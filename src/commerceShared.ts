@@ -29,6 +29,21 @@ export interface Logger {
 }
 
 export const EXT_ID_FIELD = "External_ID_4D__c";
+
+/**
+ * External-ID namespace for Registration Import (Order, CardPaymentMethod,
+ * PaymentGroup, Payment). Decided 2026-11-02: Registration keys are
+ * "REG-{Registration.ID}" and Purchase keys "PUR-{Purchase.ID}", so the two
+ * order streams can be told apart by key alone. Registration Item Import
+ * (Order lookup) and Payments Import (PaymentGroup lookup) build the same key
+ * with registrationExtId().
+ */
+export const REGISTRATION_EXT_PREFIX = "REG-";
+
+/** "560585" → "REG-560585". The one rule every flow uses for Registration keys. */
+export function registrationExtId(id: string): string {
+  return `${REGISTRATION_EXT_PREFIX}${id}`;
+}
 export const BULK_BATCH_SIZE = 50_000;
 
 /**

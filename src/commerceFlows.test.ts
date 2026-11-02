@@ -8,7 +8,13 @@ import {
   COMMERCE_TWO_YEAR_CUTOFF,
   pricebooksInLoadOrder,
   orderPricebook,
+  registrationExtId,
 } from "./commerceShared";
+import {
+  mapToCardPaymentMethod as mapRegistrationCpm,
+  mapToOrder as mapRegistrationOrder,
+  mapToPayment as mapRegistrationPayment,
+} from "./registrationFlow";
 import { parsePriceBookNames, resolvePriceBooks } from "./courseUtils";
 import { mapToProduct2 } from "./purchaseInventoryFlow";
 import {
@@ -263,8 +269,31 @@ describe("Purchase Item → OrderItem", () => {
   });
 });
 
+describe("Registration Import — REG- external ids", () => {
+  const row = {
+    ID: "560585",
+    CC_Card_Type: "Visa",
+    CC_Last_Four: "1111",
+    CC_Exp_Date: "12/27",
+    CC_Amt: "510",
+  };
+  it("builds REG-{id}", () => {
+    expect(registrationExtId("560585")).toBe("REG-560585");
+  });
+  it("writes REG-{Registration.ID} on CardPaymentMethod, Order and Payment", () => {
+    expect(mapRegistrationCpm(row)?.External_ID_4D__c).toBe("REG-560585");
+    expect(
+      mapRegistrationOrder(row, logger, "01s000000000001")?.External_ID_4D__c,
+    ).toBe("REG-560585");
+    expect(mapRegistrationPayment(row, logger)?.External_ID_4D__c).toBe(
+      "REG-560585",
+    );
+  });
+});
+
 describe("Payments → Payment / Refund", () => {
-  const groups = new Set(["560585"]);
+  // PaymentGroups in the org carry the REG- key; the Payments row has the raw id.
+  const groups = new Set(["REG-560585"]);
   const row = {
     ID: "1",
     Student_ID: "90471855",
@@ -282,7 +311,7 @@ describe("Payments → Payment / Refund", () => {
     const m = mapToPayment(row, groups, skips, logger, "load");
     expect(m?.payment).toMatchObject({
       External_ID_4D__c: "PAY-1",
-      "PaymentGroup.External_ID_4D__c": "560585",
+      "PaymentGroup.External_ID_4D__c": "REG-560585",
       STAP_Amount__c: 510,
       Payment_Source__c: "HOP",
       Amount: 510,
@@ -292,8 +321,15 @@ describe("Payments → Payment / Refund", () => {
     );
     expect(m?.refundAmount).toBe(25);
     expect(mapToRefund(m!.payment, 25)).toMatchObject({
-      "PaymentGroup.External_ID_4D__c": "560585",
+      "PaymentGroup.External_ID_4D__c": "REG-560585",
     });
+  });
+  it("does not match a PaymentGroup keyed with the raw (unprefixed) Registration id", () => {
+    const s = newPaymentSkips();
+    expect(
+      mapToPayment(row, new Set(["560585"]), s, logger, "load"),
+    ).toBeNull();
+    expect(s.registrationPaymentGroupMissing).toBe(1);
   });
   it("applies scope, missing-group, and skip-mode rules", () => {
     const s1 = newPaymentSkips();

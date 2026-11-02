@@ -14,11 +14,12 @@
  * Purchase Item (OrderItem) rows are loaded by the separate Purchase Item
  * Import flow, which must run AFTER this one.
  *
- * EXTERNAL IDs ARE PREFIXED "PUR-". Registration writes the raw Registration.ID
- * into External_ID_4D__c on these same four objects, and Purchase.ID values
- * overlap (both start at 1). Without a prefix, a Purchase upsert would silently
- * OVERWRITE the Registration record with the same number. Registration keeps
- * its raw ids (already loaded in UAT); everything new gets a prefix.
+ * EXTERNAL IDs ARE PREFIXED "PUR-"; Registration uses "REG-" on the same four
+ * objects (decided 2026-11-02, see REGISTRATION_EXT_PREFIX in commerceShared).
+ * The raw id ranges do not actually overlap (Registration 20044–592436118,
+ * Purchase 1–~500), so the prefixes are not there to avoid a clash: they mark
+ * which order stream a record belongs to (queries such as LIKE 'PUR-%' rely
+ * on it) and keep the keys safe if either range changes.
  *
  * PREREQUISITES: Student flow (AccountId resolved via the external-ID
  * relationship `Account.Student_ID_4D__c`, as in Registration).

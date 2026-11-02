@@ -33,7 +33,7 @@
  *      address, amounts, dates, discount/TA info, notes).
  *   3. PaymentGroup       — one per Order, created after Order so it can
  *      point SourceObjectId at the real Order Id. Upserted on
- *      External_ID_4D__c = Registration.ID like everything else, which
+ *      External_ID_4D__c = "REG-" + Registration.ID like everything else, which
  *      satisfies the workbook's "if a PaymentGroup already exists for this
  *      Order, reuse it" rule for free (a re-run just updates the same row
  *      instead of creating a duplicate). Payment_Number__c is an AutoNumber
@@ -71,10 +71,11 @@
  *   (an actual email string, not a lookup) still needs a real value fetched
  *   ahead of time — see "Student email cache" below.
  *
- * Upsert key: External_ID_4D__c = Registration.ID, set on all four objects
- *   (no prefix needed — each lives in its own object namespace, unlike the
- *   Enrollment flow's CourseOfferingParticipant which shares a namespace
- *   with instructor/associate junction rows).
+ * Upsert key: External_ID_4D__c = "REG-" + Registration.ID (registrationExtId
+ *   in commerceShared), set on all four objects. Decided 2026-11-02 so that
+ *   Registration and Purchase ("PUR-") records can be told apart by key.
+ *   Registration Item Import finds the Order, and Payments Import the
+ *   PaymentGroup, with the same REG- key.
  *
  * Student email cache: Salesforce's external-ID relationship trick only
  *   resolves lookup fields (a value copied into a Text field, like
@@ -273,18 +274,16 @@
  * OrderItems exist, Order.TotalAmount becomes platform-calculated, which also
  * reconciles the tab's still-listed CC_Amt → TotalAmount "Direct Map".
  * Also: Payments/Purchase flows use prefixed External IDs (PAY-/PUR-/PIT-);
- * this flow's raw Registration.ID keys are unchanged (a REG- prefix is still
- * an open architect question — see STILL OPEN).
+ * [UPDATED 2026-11-02: this flow now uses REG- keys as well.]
  * [SUPERSEDED 2026-11-02 — the product/price-book questions are answered:
  * Registration lines use the course Product (Product2.External_ID_4D__c =
  * Course_ID) through its entry in the order price book.]
  *
  * ⚠️  STILL OPEN — with the architect (2026-11-02; do not build until answered):
- *   - REG-/PUR- Order External ID prefixes, and how Payments finds its Order.
  *   - Order_Type__c vs a record type to tell Registration and Purchase
- *     Orders apart.
- *   - ATE: the 2026-09-28 "no ATEs for past data" decision vs the mapping
- *     doc; if ATEs are loaded, key = Registration ID + term.
+ *     Orders apart (until then the REG- / PUR- key prefix is the marker).
+ *   (Decided 2026-11-02: REG- prefix; no ATEs for historical data, as the
+ *   2026-09-28 decision says.)
  *   - Payments table as the single payment source; registrations with no
  *     card; transcript-only payments.
  *   - Final state of historical Orders: Draft or Activated.
@@ -338,6 +337,7 @@ import {
   PRICE_BOOKS_CONFIG_VAR,
   loadOrderStates,
   orderPricebook,
+  registrationExtId,
   resolveConfiguredPricebooks,
 } from "./commerceShared";
 import { ACTIVATED_ORDER_STATUS, planOrderActivation } from "./purchaseFlow";
@@ -445,7 +445,7 @@ function resolveTaDiscountType(raw: string): string | undefined {
 
 // ── Raw row type ──────────────────────────────────────────────────────────────
 
-interface RawRegistrationRow {
+export interface RawRegistrationRow {
   ID?: string;
   Student_ID?: string;
   CC_Billing_Address?: string;
@@ -619,7 +619,9 @@ function billingAddressFields(raw: RawRegistrationRow): {
   return { street, city, countryCode, stateCode, zip };
 }
 
-function mapToCardPaymentMethod(raw: RawRegistrationRow): SfRecord | null {
+export function mapToCardPaymentMethod(
+  raw: RawRegistrationRow,
+): SfRecord | null {
   const id = str(raw.ID).trim();
   if (!id) return null;
 
@@ -639,7 +641,7 @@ function mapToCardPaymentMethod(raw: RawRegistrationRow): SfRecord | null {
   // Status="Active", ProcessingMode="External" — both CONFIRMED correct by
   // the architect (2026-10-01).
   const record: SfRecord = {
-    [EXT_ID_FIELD]: id,
+    [EXT_ID_FIELD]: registrationExtId(id),
     Status: "Active",
     ProcessingMode: "External",
   };
@@ -684,7 +686,7 @@ function mapToCardPaymentMethod(raw: RawRegistrationRow): SfRecord | null {
   return record;
 }
 
-function mapToOrder(
+export function mapToOrder(
   raw: RawRegistrationRow,
   logger: { warn: (m: string) => void },
   pricebookId: string,
@@ -693,7 +695,7 @@ function mapToOrder(
   if (!id) return null;
 
   const record: SfRecord = {
-    [EXT_ID_FIELD]: id,
+    [EXT_ID_FIELD]: registrationExtId(id),
     Status: DEFAULT_ORDER_STATUS, // "Draft" — see note above re: FAILED_ACTIVATION
     // Required before any OrderItem can be added; Registration Item Import
     // takes its PricebookEntry from this same book (workbook: Order.Pricebook2Id).
@@ -831,7 +833,7 @@ function mapToOrder(
 // before any record is sent to Salesforce — never actually uploaded.
 const TEMP_STUDENT_ID_KEY = "_studentId4D";
 
-function mapToPayment(
+export function mapToPayment(
   raw: RawRegistrationRow,
   logger: { warn: (m: string) => void },
 ): SfRecord | null {
@@ -862,7 +864,7 @@ function mapToPayment(
   }
 
   const record: SfRecord = {
-    [EXT_ID_FIELD]: id,
+    [EXT_ID_FIELD]: registrationExtId(id),
     Type: "Capture", // Default value per workbook
     Status: "Processed", // Default value per workbook
     // ProcessingMode is required (confirmed via describe) and not in the
@@ -1380,7 +1382,8 @@ export const registrationImport = flow({
     // ── Phase 3: PaymentGroup ─────────────────────────────────────────────────
     // One per successfully-upserted Order: SourceObjectId = that Order's real
     // Salesforce Id (pulled from Order's successfulResults, not re-queried).
-    // Upserted on External_ID_4D__c = Registration.ID, same as every other
+    // Upserted on External_ID_4D__c = "REG-" + Registration.ID (the Order's
+    // own key, reused), same as every other
     // object here — re-running the flow updates the same PaymentGroup instead
     // of creating a duplicate, which is what the workbook's "reuse if one
     // already exists for this Order" instruction asks for. See OPEN ITEMS re:

@@ -16,7 +16,7 @@
  *                      — Draft Orders that have line items → Activated
  *
  * Workbook mapping (Registration tab, OrderItem rows):
- *   Enrollment.Registration_ID → OrderId        (Order.External_ID_4D__c, resolved by Salesforce)
+ *   Enrollment.Registration_ID → OrderId        (Order.External_ID_4D__c = REG-{Registration_ID}, resolved by Salesforce)
  *   Enrollment.Tuition         → UnitPrice      (Direct Map)
  *   (default)                  → Quantity = 1
  *   Enrollment.Course_ID       → Course_Offering__c (CourseOffering.External_ID_4D__c)
@@ -70,6 +70,8 @@ import {
   PRICE_BOOKS_CONFIG_VAR,
   loadOrderStates,
   orderPricebook,
+  REGISTRATION_EXT_PREFIX,
+  registrationExtId,
   resolveConfiguredPricebooks,
   invokeNextWindow,
   parseCurrency,
@@ -253,8 +255,8 @@ export function mapToOrderItem(
 
   const record: SfRecord = {
     [EXT_ID_FIELD]: `${REGISTRATION_ITEM_EXT_PREFIX}${id}`,
-    // Order was created by Registration Import with the raw Registration.ID.
-    "Order.External_ID_4D__c": registrationId,
+    // Order was created by Registration Import with key REG-{Registration.ID}.
+    "Order.External_ID_4D__c": registrationExtId(registrationId),
     PricebookEntryId: pbeId,
     UnitPrice: tuition,
     Quantity: 1,
@@ -361,16 +363,23 @@ export const registrationItemImport = flow({
     const registrationIds = rows
       .map((r) => stripDotZero(r.Registration_ID))
       .filter((v) => v && v !== "0");
+    // Orders are keyed "REG-{id}"; the cache is keyed by the raw
+    // Registration_ID so mapToOrderItem can look it up straight from the row.
     const orderStates = await loadOrderStates(
       sfBase,
       sfToken,
-      registrationIds,
+      registrationIds.map(registrationExtId),
       logger,
     );
     const caches: RegistrationItemCaches = {
       pricebookEntryByCourseId,
       orderStatusByRegistrationId: new Map(
-        [...orderStates].map(([k, v]) => [k, v.status]),
+        [...orderStates].map(([extId, v]) => [
+          extId.startsWith(REGISTRATION_EXT_PREFIX)
+            ? extId.slice(REGISTRATION_EXT_PREFIX.length)
+            : extId,
+          v.status,
+        ]),
       ),
     };
 

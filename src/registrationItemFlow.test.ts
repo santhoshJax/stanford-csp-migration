@@ -49,7 +49,7 @@ describe("Registration Item Import — mapToOrderItem", () => {
     );
     expect(rec).toEqual({
       External_ID_4D__c: "ENR-200058",
-      "Order.External_ID_4D__c": "20046",
+      "Order.External_ID_4D__c": "REG-20046",
       PricebookEntryId: "01uDAR",
       UnitPrice: 200,
       Quantity: 1,

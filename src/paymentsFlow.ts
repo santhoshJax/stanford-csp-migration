@@ -20,9 +20,8 @@
  *                have failed the whole Refund Bulk job.)
  *
  * Upsert key: External_ID_4D__c = "PAY-" + Payments.ID, on Payment and Refund.
- * Prefixed because Registration already writes the raw Registration.ID into
- * Payment.External_ID_4D__c; the two id ranges overlap, so an unprefixed
- * Payments load would overwrite Registration's payments.
+ * Prefixed so Payments rows can never overwrite Registration's payments
+ * (REG-{Registration.ID}) or Purchase's (PUR-{Purchase.ID}) on the same object.
  *
  * MUST RUN AFTER: Registration Import (and Purchase Import / Transcript
  * Request Import, if their payments are in scope) — Payment links to the
@@ -33,7 +32,7 @@
  *   Payment object has no OrderId; an Order is reached THROUGH its
  *   PaymentGroup (PaymentGroup.SourceObjectId). Registration Import already
  *   creates one PaymentGroup per Order with External_ID_4D__c =
- *   Registration.ID, so this flow sets PaymentGroupId through the
+ *   "REG-" + Registration.ID, so this flow sets PaymentGroupId through the
  *   external-ID relationship `PaymentGroup.External_ID_4D__c`. A Registration
  *   whose PaymentGroup does not exist (outside the 2-year scope, or failed) is
  *   SKIPPED and counted rather than failing one Bulk row per payment.
@@ -84,6 +83,7 @@ import {
   parseDateTime4D,
   parseSuccessfulSfIds,
   readWindowCursor,
+  registrationExtId,
   insertViaComposite,
   sfQueryAll,
   streamTsvWindow,
@@ -182,7 +182,7 @@ export function mapToPayment(
       skips.skippedRegistrationLinked++;
       return null;
     }
-    if (!existingPaymentGroupExtIds.has(registrationId)) {
+    if (!existingPaymentGroupExtIds.has(registrationExtId(registrationId))) {
       skips.registrationPaymentGroupMissing++;
       return null;
     }
@@ -210,7 +210,8 @@ export function mapToPayment(
     record["Account.Student_ID_4D__c"] = studentId;
   }
   if (hasRegistration) {
-    record["PaymentGroup.External_ID_4D__c"] = registrationId;
+    record["PaymentGroup.External_ID_4D__c"] =
+      registrationExtId(registrationId);
   }
   const transcriptRequestId = stripDotZero(raw.Transcript_Request_ID);
   if (transcriptRequestId && transcriptRequestId !== "0") {
@@ -330,7 +331,7 @@ export const paymentsImport = flow({
     const sfToken = getAccessToken(sfConn);
     const sfBase = getSfInstanceUrl(sfConn);
 
-    // PaymentGroups that exist (Registration ids are raw, Purchase ids "PUR-…").
+    // PaymentGroups that exist (Registration ids "REG-…", Purchase ids "PUR-…").
     const groups = await sfQueryAll<{ External_ID_4D__c: string }>(
       sfBase,
       sfToken,

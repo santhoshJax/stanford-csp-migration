@@ -753,7 +753,7 @@ Upsert key: `External_ID_4D__c` = `ENR-{enrollment_id}`
 | Field | Notes |
 |---|---|
 | `External_ID_4D__c` | `ENR-{id}` |
-| `AcademicTermEnrollment.External_ID_4D__c` | Registration ID — **external ID ref** |
+| `AcademicTermEnrollment` | **Not set.** No ATEs are created for historical data (architect, 2026-09-28; reconfirmed 2026-11-02) |
 | `ParticipantContactId` | **SF Id** (PersonContactId from student cache) |
 | `ParticipantAccountId` | **SF Id** (Account.Id from student cache) |
 | `CourseOfferingId` | **SF Id** (from CourseOffering cache) |
@@ -923,15 +923,15 @@ Upsert key: `External_ID_4D__c` = source row ID
 | Purchase Inventory | Product2, PricebookEntry (Standard Price Book, insert-only) | `{id}` on Product2 | — |
 | Purchase | CardPaymentMethod, Order (Draft, Standard Price Book), PaymentGroup, Payment | `PUR-{id}` | Student |
 | Purchase Item | OrderItem | `PIT-{id}` (Order via `Order.External_ID_4D__c = PUR-{Purchase_ID}`; product via `Product2.Name` → PricebookEntry) | Purchase Inventory, Purchase |
-| Registration | CardPaymentMethod, Order (Draft, order price book), PaymentGroup, Payment | raw `Registration.ID` | Student, Course imports |
-| Registration Item | OrderItem (`src/registrationItemFlow.ts`; reads the Enrollment TSV) | `ENR-{Enrollment.ID}` (Order via `Order.External_ID_4D__c = Registration_ID`; product via course `Product2.External_ID_4D__c = Course_ID` → PricebookEntry in the order price book) | Course imports, Registration |
-| Payments | Payment, Refund (Referenced) | `PAY-{id}` (PaymentGroup via `External_ID_4D__c = Registration_ID`) | Student, Registration |
+| Registration | CardPaymentMethod, Order (Draft, order price book), PaymentGroup, Payment | `REG-{id}` | Student, Course imports |
+| Registration Item | OrderItem (`src/registrationItemFlow.ts`; reads the Enrollment TSV) | `ENR-{Enrollment.ID}` (Order via `Order.External_ID_4D__c = REG-{Registration_ID}`; product via course `Product2.External_ID_4D__c = Course_ID` → PricebookEntry in the order price book) | Course imports, Registration |
+| Payments | Payment, Refund (Referenced) | `PAY-{id}` (PaymentGroup via `External_ID_4D__c = REG-{Registration_ID}`) | Student, Registration |
 
 **Order lifecycle (Registration and Purchase, decided 2026-10-31 / 2026-11-02):** Orders are created `Draft` with `Pricebook2Id` = the order price book (first custom book in the Price Books config var). The item flow adds OrderItems. The Order flow is then run again with its "Activate … Orders" config var = true, which switches Draft Orders that have at least one OrderItem to `Activated` (shared `planOrderActivation`). Orders without items stay Draft and are logged.
 
 **Registration Item defaults awaiting architect confirmation:** one OrderItem per enrollment row with `Add_Drop = Add`; `Drop` and `Adjustment` rows, and Status `New` / `DupEnrollment`, are skipped (constants `INCLUDE_DROP_ROWS`, `INCLUDE_ADJUSTMENT_ROWS`, `EXCLUDED_STATUSES`); `UnitPrice` = `Tuition` (not `Extension`); `Order.TotalAmount` is calculated by Salesforce and is a reconciliation check against the Payment total, not a mapping. Not yet run against an org; `OrderItem.Student__c` / `Course_Offering__c` relationship names are unverified.
 
-External IDs are **prefixed** because Registration writes the raw `Registration.ID` into the same objects and the id ranges overlap. Purchase / Purchase Item / Payments reuse Registration's windowed-stream + 4-phase (CardPaymentMethod → Order → PaymentGroup → Payment) pattern.
+External IDs are **prefixed** (decided 2026-11-02): Registration uses `REG-` and Purchase `PUR-` on the same four objects. The raw ranges do not overlap (Registration 20044–592436118, Purchase 1–~500); the prefixes mark which order stream a record belongs to until an Order type field is decided, and keep keys safe if a range changes. Purchase / Purchase Item / Payments reuse Registration's windowed-stream + 4-phase (CardPaymentMethod → Order → PaymentGroup → Payment) pattern.
 
 ---
 
@@ -990,7 +990,7 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | `PIT-{id}` | OrderItem (Purchase Item) | `PIT-101` |
 | `ENR-{id}` | OrderItem (Registration Item); also CourseOfferingParticipant (Enrollment) — separate objects | `ENR-200058` |
 | `PAY-{id}` | Payment, Refund (Payments) | `PAY-1` |
-| (raw Registration ID) | Order, CardPaymentMethod, PaymentGroup, Payment (Registration) | `560585` |
+| `REG-{id}` | Order, CardPaymentMethod, PaymentGroup, Payment (Registration) | `REG-560585` |
 | (raw 4D ID) | All other objects | `"6001"` |
 
 ---
