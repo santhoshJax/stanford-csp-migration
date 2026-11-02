@@ -41,23 +41,22 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-10-31
-**Status:** at risk — Code committed & pushed (bc96380); awaiting UAT validation, architect field decision, and deploy
+### Engagement state — 2026-11-02
+**Status:** at risk — Code committed (bc96380); course & purchase flows verified reading shared Price Books setting. UAT setup & architect decision still blockin…
 
 **Done this session**
-- Rebased 6 files onto latest remote (7 newer commits, no conflicts)
-- Consolidated duplicate 'Price Books' settings into one shared setting
-- Standardized 'Activate Purchase Orders' to use 'default: "false"'
-- Deleted duplicate price book helper; purchase flows now use course checks
-- All 48 purchase and course price book tests pass; 133/138 full suite pass
-- Committed and pushed to stanford-csp-orchestrate (bc96380)
+- Verified course flows (All, 2-Year, 5-Year) process in 100-row windows with price book validation, product creation, and dual price book entries
+- Confirmed Purchase flows now also read shared Price Books setting from Course Configuration
+- Validated no duplicate price book logic; all flows use single consolidated setting
 
 **Open items**
-- Verify both price books active and PricebookEntry.External_ID_4D__c exists in UAT org
-- Run purchase load sequence: Inventory → Purchase (off) → Item → Purchase (on)
+- Create PricebookEntry.External_ID_4D__c field (Text, External ID, Unique) in UAT org
+- Verify both price books active in UAT org before purchase load sequence
+- Run purchase load: Inventory → Purchase (Activate off) → Item → Purchase (Activate on)
 - Architect decides: Registration Orders field (Balance_Due__c vs BalanceDue__c)
-- Open PR to main once architect approves and UAT validation complete
-- Deploy to Salesforce org (not yet run)
+- Open PR from stanford-csp-orchestrate to main once architect approves and UAT validation complete
+- Rebuild integrations and import into Prismatic
+- Deploy to Salesforce org
 
 **Decisions**
 - Blank Status counts as New in enrollment rule
@@ -70,40 +69,44 @@
 - Two order streams: Registration (tuition) and Purchase (non-course items)
 
 **Blockers**
-- Registration orders field decision still open (Balance_Due__c vs BalanceDue__c)
-- PricebookEntry.External_ID_4D__c field and both price books must be active in UAT before purchase load run
+- PricebookEntry.External_ID_4D__c field must be created in UAT org
+- Both price books must be active in UAT org before purchase load run
+- Registration Orders field decision still open (Balance_Due__c vs BalanceDue__c)
 
 **Next**
-- Verify in UAT org: both price books active, PricebookEntry.External_ID_4D__c field exists
-- Run purchase load: Inventory → Purchase (Activate off) → Item → Purchase (Activate on)
-- Architect confirms Registration Orders field choice
-- Open PR from stanford-csp-orchestrate to main
-- Schedule Deploy session to ship to Salesforce
+- Create PricebookEntry.External_ID_4D__c field in UAT org
+- Verify both price books active in UAT org
+- Get architect decision on Registration Orders field
+- Run purchase load sequence in UAT
+- Open PR to main
+- Schedule Deploy session
 
-**Checked live on 2026-10-31:** the repository
-### Last session — 2026-10-31
+**Checked live on 2026-11-02:** nothing — the status above is as recorded, not re-checked
+### Last session — 2026-11-02
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Purchase-Orders |
-| Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
+| Name | Stanford-Data-Migration-CourseEnhancement-Products |
+| Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch stanford-csp-orchestrate)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Here's how the three course flows (All, 2-Year and 5-Year) run now. I checked this against the latest code on `stanford-csp-orchestrate`. Since my commit, another session has changed the Purchase flows (`bc96380`) so they also read the same `Price Books` setting. The course flows themselves work the same as when I built them.
 
-Steps 1–4 are done. The change is committed and pushed to `stanford-csp-orchestrate` as commit `bc96380`. I checked that the remote branch now points to that commit and nothing is left uncommitted. It isn't on `main` and hasn't been run in Salesforce.
+## In simple words
 
-**What changed from the plan**
-- **Rebase:** I rebased onto the latest branch with no conflicts. By then the branch had 7 newer commits, not 6, because another handoff note had landed.
-- **One "Price Books" setting:** I removed ours. All the course and purchase flows now read the setting on the Course Configuration page, and I updated its description to cover the purchase flows too.
-- **One set of price book checks:** I deleted our copy of the price book cod
+The course file is processed in **windows of 100 rows**. Each window does the same six things:
+
+**1. Check the price books first**
+- The flow reads the `Price Books` setting (by default: `Standard Price Book,StanfordContinuingStudies Price Book`).
+- It looks both books up in Salesforce.
+- If a book is missing or inactive, or more than one custom book is listed, **the window stops before saving anything**.
+- The Standard Price Book is always included, even if it's left off the list.
+
+**2. Go through the course rows one by one**
+For each course in the window:
+- **Learning Course:** saves the base course (for example, `POL 68`). Sections like `POL 68 H` and `POL 68 Z` share one.
+- **Course Offering:** saves the actual section with its dates, tuition and so on. It's matched on the 4D ID, so a re-run updates the record rather than creating a ne
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
