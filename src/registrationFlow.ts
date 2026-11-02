@@ -10,6 +10,22 @@
  * the previous window ended — this is what keeps a single execution from
  * having to hold the entire (very large) source file in memory at once.
  *
+ * ORDER LIFECYCLE (2026-11-02 — CURRENT; supersedes the Order.Status,
+ * TotalAmount and "no OrderItems" notes further down, kept as history):
+ *   Round 1  "Activate Registration Orders" = false → Orders are created Draft
+ *            with Pricebook2Id = the order price book (first custom book in
+ *            the "Price Books" config var).
+ *   Items    Registration Item Import (src/registrationItemFlow.ts) reads the
+ *            Enrollment TSV and adds one OrderItem per enrollment
+ *            (ENR-{Enrollment.ID}, UnitPrice = Tuition, Quantity 1).
+ *   Round 2  "Activate Registration Orders" = true → every Draft Order with at
+ *            least one OrderItem is switched to Activated (planOrderActivation,
+ *            shared with Purchase Import). Draft Orders without items stay
+ *            Draft and are logged; Activated Orders are never re-sent.
+ *   Order.TotalAmount stays unmapped — Salesforce calculates it from the
+ *   OrderItems, and the workbook's CC_Amt → TotalAmount row is a
+ *   reconciliation check against the Payment total.
+ *
  * Each window bulk-upserts FOUR Salesforce objects from each source row:
  *   1. CardPaymentMethod — stored card details (billing name/address, card
  *      type, last four, expiry).
@@ -183,6 +199,8 @@
  *     above — this flow creates none). Defaulted to "Draft" so Orders can
  *     actually be created; needs the architect to confirm whether Draft is
  *     the intended final state or a later activation step is expected.
+ *     [SUPERSEDED 2026-11-02 — see ORDER LIFECYCLE at the top: Draft, then
+ *     items, then round-2 activation.]
  *   - Order.TotalAmount — NOT a Field-Level Security issue like GroupPayee__c
  *     was. `describe()` shows createable=false/updateable=false — nobody can
  *     write this field via API; it's Order's own built-in platform behavior
@@ -192,6 +210,8 @@
  *     (2026-10-01): the workbook has no Order line item mapping anywhere, so
  *     no OrderItems are created; CC_Amt stays on Payment.Amount only and
  *     Order.TotalAmount is intentionally left blank.
+ *     [SUPERSEDED 2026-11-02 — OrderItems now come from Registration Item
+ *     Import, so TotalAmount is calculated by Salesforce.]
  *   - Order.TA_Discount_Type__c — real source values ("65+", "MLA",
  *     "SAA onetime", "Teacher", ...) don't match any of the object's actual
  *     picklist values ("Senior 65+", "Stanford Affiliate", "SAA Member",
@@ -237,6 +257,8 @@
  *     Status="Draft" default is correct. Also tells us a FUTURE flow (not
  *     built yet) will be needed to transition these Orders from Draft to
  *     Activated after this initial load — out of scope for this flow today.
+ *     [BUILT 2026-11-02 — that step is round 2 of this same flow ("Activate
+ *     Registration Orders" = true), not a separate flow.]
  *
  * ══════════════════════════════════════════════════════════════════════════
  * UPDATED WORKBOOK REVIEW — 2026-10-14 (comment-only; no logic changed)
@@ -250,10 +272,27 @@
  * reports/registration-mapping-review-2026-10-14.md for the full list. Once
  * OrderItems exist, Order.TotalAmount becomes platform-calculated, which also
  * reconciles the tab's still-listed CC_Amt → TotalAmount "Direct Map".
- * Also: Payments/Purchase flows use prefixed External IDs (PAY-/PUR-/PI-);
- * this flow's raw Registration.ID keys are unchanged and must stay that way.
+ * Also: Payments/Purchase flows use prefixed External IDs (PAY-/PUR-/PIT-);
+ * this flow's raw Registration.ID keys are unchanged (a REG- prefix is still
+ * an open architect question — see STILL OPEN).
+ * [SUPERSEDED 2026-11-02 — the product/price-book questions are answered:
+ * Registration lines use the course Product (Product2.External_ID_4D__c =
+ * Course_ID) through its entry in the order price book.]
  *
- * ⚠️  STILL OPEN:
+ * ⚠️  STILL OPEN — with the architect (2026-11-02; do not build until answered):
+ *   - REG-/PUR- Order External ID prefixes, and how Payments finds its Order.
+ *   - Order_Type__c vs a record type to tell Registration and Purchase
+ *     Orders apart.
+ *   - ATE: the 2026-09-28 "no ATEs for past data" decision vs the mapping
+ *     doc; if ATEs are loaded, key = Registration ID + term.
+ *   - Payments table as the single payment source; registrations with no
+ *     card; transcript-only payments.
+ *   - Final state of historical Orders: Draft or Activated.
+ *   - Enrollments whose Registration falls outside the 2-year Order window
+ *     are skipped by Registration Item Import ("Order not loaded").
+ *   - Registration Item defaults (constants in registrationItemFlow.ts):
+ *     only Add_Drop = Add gets a line; Drop / AJST and Status New /
+ *     DupEnrollment are skipped; UnitPrice = Tuition, not Extension.
  *   - Check_No → Order.Check_Number__c is typed "Number"; non-numeric
  *     values are skipped with a warning. DEFERRED (2026-10-01) — architect
  *     indicated historically all payments were by credit card, so this is
@@ -295,6 +334,13 @@ import {
   runBulkJob,
 } from "./utils";
 import { createPerObjectResultsSheet } from "./reportResults";
+import {
+  PRICE_BOOKS_CONFIG_VAR,
+  loadOrderStates,
+  orderPricebook,
+  resolveConfiguredPricebooks,
+} from "./commerceShared";
+import { ACTIVATED_ORDER_STATUS, planOrderActivation } from "./purchaseFlow";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const BULK_BATCH_SIZE = 50_000;
@@ -336,6 +382,18 @@ const TEST_SKIP = 100;
 // final state, or whether a later activation step is expected once/if
 // OrderItems enter scope.
 const DEFAULT_ORDER_STATUS = "Draft";
+
+// Order.Status — DECIDED 2026-11-02 (same two-round model as Purchase Import):
+//   Round 1 ("Activate Registration Orders" = false): Orders are created
+//     Draft with Pricebook2Id = the order price book. Registration Item
+//     Import then adds one OrderItem per enrollment.
+//   Round 2 ("Activate Registration Orders" = true): every existing Order
+//     still in Draft AND with at least one OrderItem is switched to
+//     ACTIVATED_ORDER_STATUS. Draft Orders with no OrderItems stay Draft and
+//     are logged. An Order that is already Activated is never re-sent.
+/** Boolean config var that switches this flow into round 2. */
+export const ACTIVATE_REGISTRATION_ORDERS_CONFIG_VAR =
+  "Activate Registration Orders";
 
 // Order.TA_Discount_Type__c — real picklist values confirmed via
 // `sf sobject describe` against Stanford_UAT. Only an exact match (after
@@ -629,6 +687,7 @@ function mapToCardPaymentMethod(raw: RawRegistrationRow): SfRecord | null {
 function mapToOrder(
   raw: RawRegistrationRow,
   logger: { warn: (m: string) => void },
+  pricebookId: string,
 ): SfRecord | null {
   const id = str(raw.ID).trim();
   if (!id) return null;
@@ -636,6 +695,9 @@ function mapToOrder(
   const record: SfRecord = {
     [EXT_ID_FIELD]: id,
     Status: DEFAULT_ORDER_STATUS, // "Draft" — see note above re: FAILED_ACTIVATION
+    // Required before any OrderItem can be added; Registration Item Import
+    // takes its PricebookEntry from this same book (workbook: Order.Pricebook2Id).
+    Pricebook2Id: pricebookId,
   };
 
   // AccountId / BillToContactId — resolved by Salesforce during the Bulk API
@@ -674,7 +736,11 @@ function mapToOrder(
   // native to the standard Order object). The workbook has no Order line
   // item mapping anywhere, so no OrderItems are created here — CC_Amt stays
   // on Payment.Amount only, and Order.TotalAmount is intentionally left
-  // blank. No longer an open item.
+  // blank. UPDATED 2026-11-02: OrderItems are now loaded by Registration
+  // Item Import (UnitPrice = Enrollment.Tuition), so Salesforce calculates
+  // TotalAmount from them. CC_Amt stays on Payment.Amount, and the
+  // workbook's CC_Amt → TotalAmount row is now a reconciliation check
+  // (TotalAmount vs the Payment total), not a mapping.
 
   // OrderReferenceNumber — workbook marks "Conversion" with no described logic;
   // passthrough raw value. See OPEN ITEMS.
@@ -851,6 +917,7 @@ async function streamAndMapWindow(
   maxRows: number,
   knownHeaders: string[],
   logger: { info: (m: string) => void; warn: (m: string) => void },
+  pricebookId: string,
 ): Promise<WindowStreamResult> {
   const reqHeaders: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
@@ -968,7 +1035,7 @@ async function streamAndMapWindow(
         const cpm = mapToCardPaymentMethod(row);
         if (cpm) cardPaymentMethods.push(cpm);
 
-        const order = mapToOrder(row, logger);
+        const order = mapToOrder(row, logger, pricebookId);
         if (order) orders.push(order);
 
         const payment = mapToPayment(row, logger);
@@ -1086,8 +1153,11 @@ export const registrationImport = flow({
   description:
     "Streams the Registration TSV from Google Drive one window at a time " +
     "and bulk-upserts CardPaymentMethod, Order, PaymentGroup, and Payment " +
-    "records via Bulk API 2.0. Recurses until the full file has been " +
-    "processed. Must run after the Student flow.",
+    "records via Bulk API 2.0. Orders are created Draft with the order " +
+    "price book; run Registration Item Import, then set Activate " +
+    "Registration Orders = true and run this flow again to activate them. " +
+    "Recurses until the full file has been processed. Must run after the " +
+    "Student flow and the Course imports.",
 
   onTrigger: async (_context, payload) => {
     await Promise.resolve();
@@ -1131,6 +1201,25 @@ export const registrationImport = flow({
     const sfToken = getAccessToken(sfConn);
     const sfBase = getSfInstanceUrl(sfConn);
 
+    // ── Order price book + round (see "Order.Status — DECIDED" above) ────────
+    const orderBook = orderPricebook(
+      await resolveConfiguredPricebooks(
+        sfBase,
+        sfToken,
+        configVars[PRICE_BOOKS_CONFIG_VAR] as unknown as string | undefined,
+        logger,
+      ),
+    );
+    logger.info(`[Registration Import] Order price book: "${orderBook.name}"`);
+    const activateOrders =
+      String(configVars[ACTIVATE_REGISTRATION_ORDERS_CONFIG_VAR]) === "true";
+    logger.info(
+      `[Registration Import] ${ACTIVATE_REGISTRATION_ORDERS_CONFIG_VAR} = ${activateOrders} — ` +
+        (activateOrders
+          ? `round 2: Draft Orders with line items → ${ACTIVATED_ORDER_STATUS}`
+          : "round 1: Orders created/refreshed as Draft"),
+    );
+
     // ── Build email cache + stream/map this window in parallel ───────────────
     // Neither depends on the other any more: AccountId/BillToContactId are
     // resolved by Salesforce itself (external-ID relationship syntax), so
@@ -1152,6 +1241,7 @@ export const registrationImport = flow({
         MAX_ROWS,
         knownHeaders,
         logger,
+        orderBook.id,
       ),
     ]);
     logger.info(
@@ -1242,18 +1332,39 @@ export const registrationImport = flow({
       cpmFailedCsv = r.failedCsv;
     }
 
-    // ── Phase 2: Order ────────────────────────────────────────────────────────
+    // ── Phase 2: Order (Draft create, or round-2 activation) ─────────────────
     let orderProcessed = 0;
     let orderFailed = 0;
     let orderSuccessfulCsv = "";
     let orderFailedCsv = "";
 
-    if (orders.length > 0) {
+    const existingOrders = await loadOrderStates(
+      sfBase,
+      sfToken,
+      orders.map((o) => o[EXT_ID_FIELD] as string),
+      logger,
+    );
+    const plan = planOrderActivation(orders, existingOrders, activateOrders);
+    logger.info(
+      `[Registration Import][Order] to send=${plan.toUpsert.length} (activating=${plan.activating}), ` +
+        `already Activated (skipped)=${plan.alreadyActivated.size}, ` +
+        `Draft without line items (left Draft)=${plan.draftWithoutItems.length}`,
+    );
+    if (plan.draftWithoutItems.length > 0) {
+      logger.warn(
+        `[Registration Import][Order] ${plan.draftWithoutItems.length} Draft Order(s) have no OrderItems ` +
+          `and were NOT activated — run Registration Item Import first. e.g. ${plan.draftWithoutItems
+            .slice(0, 10)
+            .join(", ")}`,
+      );
+    }
+
+    if (plan.toUpsert.length > 0) {
       logger.info(
-        `[Registration Import] Upserting ${orders.length} Order record(s)…`,
+        `[Registration Import] Upserting ${plan.toUpsert.length} Order record(s)…`,
       );
       const r = await upsertInBatches(
-        orders,
+        plan.toUpsert,
         SF_ORDER,
         sfBase,
         sfToken,
@@ -1275,6 +1386,13 @@ export const registrationImport = flow({
     // already exists for this Order" instruction asks for. See OPEN ITEMS re:
     // this field's existence on PaymentGroup.
     const orderSfIds = parseSuccessfulSfIds(orderSuccessfulCsv, EXT_ID_FIELD);
+    // Orders skipped this run still exist — keep their PaymentGroup upserts.
+    for (const [extId, sfId] of plan.alreadyActivated)
+      orderSfIds.set(extId, sfId);
+    for (const extId of plan.draftWithoutItems) {
+      const current = existingOrders.get(extId);
+      if (current) orderSfIds.set(extId, current.id);
+    }
     const paymentGroups: SfRecord[] = [];
     for (const [registrationId, orderSfId] of orderSfIds) {
       paymentGroups.push({
@@ -1399,7 +1517,9 @@ export const registrationImport = flow({
       `[Registration Import] Window ${windowNumber} complete —` +
         `\n  Window rows:               ${rowsInWindow}` +
         `\n  CardPaymentMethod submitted: ${cardPaymentMethods.length}, processed: ${cpmProcessed}, failed: ${cpmFailed}` +
-        `\n  Order submitted:             ${orders.length}, processed: ${orderProcessed}, failed: ${orderFailed}` +
+        `\n  Order mapped:                ${orders.length}, sent: ${plan.toUpsert.length}, activating: ${plan.activating}, ` +
+        `already Activated: ${plan.alreadyActivated.size}, Draft w/o items: ${plan.draftWithoutItems.length}` +
+        `\n  Order submitted:             ${plan.toUpsert.length}, processed: ${orderProcessed}, failed: ${orderFailed}` +
         `\n  PaymentGroup submitted:      ${paymentGroups.length}, processed: ${pgProcessed}, failed: ${pgFailed}` +
         `\n  Payment submitted:           ${payments.length}, processed: ${paymentProcessed}, failed: ${paymentFailed}`,
     );
@@ -1441,6 +1561,10 @@ export const registrationImport = flow({
         cardPaymentMethodsProcessed: cpmProcessed,
         cardPaymentMethodsFailed: cpmFailed,
         orders: orders.length,
+        activateOrders,
+        ordersActivating: plan.activating,
+        ordersAlreadyActivated: plan.alreadyActivated.size,
+        ordersDraftWithoutItems: plan.draftWithoutItems.length,
         ordersProcessed: orderProcessed,
         ordersFailed: orderFailed,
         paymentGroups: paymentGroups.length,

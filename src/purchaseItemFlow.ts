@@ -36,12 +36,19 @@
  *   - Quantity must be > 0; zero/negative lines are skipped with a warning.
  *   - Ref_Table_Number: Do Not Map.
  *
+ * Skipped rows: every row not sent (and why) is written to a "Skipped" tab on
+ * the results sheet — the source columns plus "Skip Reason".
+ *
  * Windowed execution / TEST_MODE: same model as Registration; TEST_MODE is ON.
  */
 
 import { flow, type Connection } from "@prismatic-io/spectral";
 import { str, getAccessToken, getSfInstanceUrl } from "./utils";
-import { createPerObjectResultsSheet } from "./reportResults";
+import {
+  buildSkippedTab,
+  createPerObjectResultsSheet,
+  type SkippedRow,
+} from "./reportResults";
 import {
   EXT_ID_FIELD,
   type SfRecord,
@@ -93,18 +100,25 @@ export interface PurchaseItemCaches {
 }
 
 export interface PurchaseItemSkips {
+  noId: number;
   noPurchaseId: number;
   orderNotLoaded: number;
   badQuantity: number;
+  badUnitPrice: number;
   unmatchedProducts: Map<string, number>;
+  /** Every skipped row with its reason — written to the "Skipped" tab. */
+  records: SkippedRow[];
 }
 
 export function newSkips(): PurchaseItemSkips {
   return {
+    noId: 0,
     noPurchaseId: 0,
     orderNotLoaded: 0,
     badQuantity: 0,
+    badUnitPrice: 0,
     unmatchedProducts: new Map(),
+    records: [],
   };
 }
 
@@ -114,18 +128,29 @@ export function mapToOrderItem(
   skips: PurchaseItemSkips,
   logger: { warn: (m: string) => void },
 ): SfRecord | null {
+  const skip = (reason: string): null => {
+    skips.records.push({ row: raw, reason });
+    return null;
+  };
+
   const id = str(raw.ID).trim();
-  if (!id) return null;
+  if (!id) {
+    skips.noId++;
+    return skip("No Purchase Item ID");
+  }
 
   const purchaseId = stripDotZero(raw.Purchase_ID);
   if (!purchaseId || purchaseId === "0") {
     skips.noPurchaseId++;
-    return null;
+    return skip("No Purchase_ID");
   }
   const orderExtId = purchaseExtId(purchaseId);
   if (!caches.existingOrderExtIds.has(orderExtId)) {
     skips.orderNotLoaded++;
-    return null;
+    return skip(
+      `Order not loaded — no Order with External_ID_4D__c = ${orderExtId} ` +
+        "(outside the 2-year Order window, or Purchase Import failed for it)",
+    );
   }
 
   const itemType = str(raw.Item_Type).trim();
@@ -135,7 +160,9 @@ export function mapToOrderItem(
       itemType || "(blank)",
       (skips.unmatchedProducts.get(itemType || "(blank)") ?? 0) + 1,
     );
-    return null;
+    return skip(
+      `No Product2.Name "${itemType || "(blank)"}" with an active entry in the order price book`,
+    );
   }
 
   const quantity = parseCurrency(raw.Quantity);
@@ -144,7 +171,9 @@ export function mapToOrderItem(
     logger.warn(
       `[Purchase Item Import] Purchase Item ${id} has Quantity "${str(raw.Quantity)}" — OrderItem.Quantity must be > 0, skipped`,
     );
-    return null;
+    return skip(
+      `Quantity "${str(raw.Quantity)}" — OrderItem.Quantity must be > 0`,
+    );
   }
 
   const unitPrice = parseCurrency(raw.Unit_Price);
@@ -152,7 +181,10 @@ export function mapToOrderItem(
     logger.warn(
       `[Purchase Item Import] Purchase Item ${id} has no parseable Unit_Price — skipped (UnitPrice is required)`,
     );
-    return null;
+    skips.badUnitPrice++;
+    return skip(
+      `Unit_Price "${str(raw.Unit_Price)}" is not a number (UnitPrice is required)`,
+    );
   }
 
   const extended = parseCurrency(raw.Extended_Amount);
@@ -298,6 +330,7 @@ export const purchaseItemImport = flow({
       `[Purchase Item Import] Window ${windowNumber} stream complete — rows=${rowsInWindow}, ` +
         `orderItems=${items.length}, skipped: noPurchaseId=${skips.noPurchaseId}, ` +
         `parentOrderNotLoaded=${skips.orderNotLoaded}, badQuantity=${skips.badQuantity}, ` +
+        `badUnitPrice=${skips.badUnitPrice}, ` +
         `unmatchedProduct=${unmatched || "0"}`,
     );
     if (skips.unmatchedProducts.size > 0) {
@@ -335,6 +368,7 @@ export const purchaseItemImport = flow({
             failedCsv: result.failedCsv,
           },
         ],
+        skipped: buildSkippedTab(parsedHeaders, skips.records),
         accessToken: gdToken,
         folderId: failedFolderId,
       });
@@ -376,6 +410,7 @@ export const purchaseItemImport = flow({
         orderItems: items.length,
         orderItemsProcessed: result.processed,
         orderItemsFailed: result.failed,
+        skippedTotal: skips.records.length,
         skippedParentOrderNotLoaded: skips.orderNotLoaded,
         skippedUnmatchedProduct: [...skips.unmatchedProducts.values()].reduce(
           (a, b) => a + b,

@@ -238,6 +238,29 @@ describe("Purchase Item → OrderItem", () => {
     expect(skips.orderNotLoaded).toBe(1);
     expect(skips.unmatchedProducts.get("Nope")).toBe(1);
   });
+  it("records each skipped row with its reason for the Skipped tab", () => {
+    const skips = newSkips();
+    const run = (o: Record<string, string>) =>
+      mapToOrderItem({ ...row, ...o }, caches, skips, logger);
+    run({ ID: "" });
+    run({ Purchase_ID: "0" });
+    run({ Purchase_ID: "999" });
+    run({ Item_Type: "Nope" });
+    run({ Quantity: "0" });
+    run({ Unit_Price: "abc" });
+    run({}); // sent — not recorded
+    expect(skips.records).toHaveLength(6);
+    expect(skips.records.map((r) => r.reason)).toEqual([
+      "No Purchase Item ID",
+      "No Purchase_ID",
+      expect.stringContaining("PUR-999"),
+      expect.stringContaining('"Nope"'),
+      expect.stringContaining("Quantity"),
+      expect.stringContaining("Unit_Price"),
+    ]);
+    expect(skips.records[2].row.Purchase_ID).toBe("999");
+    expect(skips).toMatchObject({ noId: 1, badQuantity: 1, badUnitPrice: 1 });
+  });
 });
 
 describe("Payments → Payment / Refund", () => {

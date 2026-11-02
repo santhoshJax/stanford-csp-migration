@@ -183,7 +183,9 @@ Group 6 — Standalone (can run any time after Group 1)
 
 Group 7 — Commerce (Student flow first; see 4.17 for the internal order)
   ├── Purchase Inventory Flow → Product2, PricebookEntry
-  ├── Registration Flow       → CardPaymentMethod, Order, PaymentGroup, Payment
+  ├── Registration Flow       → CardPaymentMethod, Order (Draft), PaymentGroup, Payment
+  ├── Registration Item Flow  → OrderItem        (Enrollment tuition lines; needs Course imports + Registration)
+  │     └── then Registration Flow again with "Activate Registration Orders" = true
   ├── Purchase Flow           → CardPaymentMethod, Order, PaymentGroup, Payment   (PUR- ids)
   ├── Purchase Item Flow      → OrderItem        (needs Purchase Inventory + Purchase)
   └── Payments Flow           → Payment, Refund  (needs Registration; PAY- ids)
@@ -921,7 +923,13 @@ Upsert key: `External_ID_4D__c` = source row ID
 | Purchase Inventory | Product2, PricebookEntry (Standard Price Book, insert-only) | `{id}` on Product2 | — |
 | Purchase | CardPaymentMethod, Order (Draft, Standard Price Book), PaymentGroup, Payment | `PUR-{id}` | Student |
 | Purchase Item | OrderItem | `PIT-{id}` (Order via `Order.External_ID_4D__c = PUR-{Purchase_ID}`; product via `Product2.Name` → PricebookEntry) | Purchase Inventory, Purchase |
+| Registration | CardPaymentMethod, Order (Draft, order price book), PaymentGroup, Payment | raw `Registration.ID` | Student, Course imports |
+| Registration Item | OrderItem (`src/registrationItemFlow.ts`; reads the Enrollment TSV) | `ENR-{Enrollment.ID}` (Order via `Order.External_ID_4D__c = Registration_ID`; product via course `Product2.External_ID_4D__c = Course_ID` → PricebookEntry in the order price book) | Course imports, Registration |
 | Payments | Payment, Refund (Referenced) | `PAY-{id}` (PaymentGroup via `External_ID_4D__c = Registration_ID`) | Student, Registration |
+
+**Order lifecycle (Registration and Purchase, decided 2026-10-31 / 2026-11-02):** Orders are created `Draft` with `Pricebook2Id` = the order price book (first custom book in the Price Books config var). The item flow adds OrderItems. The Order flow is then run again with its "Activate … Orders" config var = true, which switches Draft Orders that have at least one OrderItem to `Activated` (shared `planOrderActivation`). Orders without items stay Draft and are logged.
+
+**Registration Item defaults awaiting architect confirmation:** one OrderItem per enrollment row with `Add_Drop = Add`; `Drop` and `Adjustment` rows, and Status `New` / `DupEnrollment`, are skipped (constants `INCLUDE_DROP_ROWS`, `INCLUDE_ADJUSTMENT_ROWS`, `EXCLUDED_STATUSES`); `UnitPrice` = `Tuition` (not `Extension`); `Order.TotalAmount` is calculated by Salesforce and is a reconciliation check against the Payment total, not a mapping. Not yet run against an org; `OrderItem.Student__c` / `Course_Offering__c` relationship names are unverified.
 
 External IDs are **prefixed** because Registration writes the raw `Registration.ID` into the same objects and the id ranges overlap. Purchase / Purchase Item / Payments reuse Registration's windowed-stream + 4-phase (CardPaymentMethod → Order → PaymentGroup → Payment) pattern.
 
@@ -980,6 +988,7 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | (raw 4D `Student_ID`) | User (`Federation_Identifier__c` — not `External_ID_4D__c`) | Account Login |
 | `PUR-{id}` | Order, CardPaymentMethod, PaymentGroup, Payment (Purchase) | `PUR-2` |
 | `PIT-{id}` | OrderItem (Purchase Item) | `PIT-101` |
+| `ENR-{id}` | OrderItem (Registration Item); also CourseOfferingParticipant (Enrollment) — separate objects | `ENR-200058` |
 | `PAY-{id}` | Payment, Refund (Payments) | `PAY-1` |
 | (raw Registration ID) | Order, CardPaymentMethod, PaymentGroup, Payment (Registration) | `560585` |
 | (raw 4D ID) | All other objects | `"6001"` |
