@@ -42,32 +42,33 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-02
-**Status:** at risk — Code complete with REG- prefixes; architect decision on Order marking still blocks full run
+**Status:** at risk — Code complete with Drop/AJST line items; architect decisions on Order marking & payment scope still block full run
 
 **Done this session**
-- Verified all four places now use REG- prefix for registration orders/cards/payments
-- Confirmed no raw registration keys remain in source code
-- Validated 146 tests pass, code compiles cleanly
+- Enabled Drop and AJST enrollment rows to generate line items (INCLUDE_DROP_ROWS, INCLUDE_ADJUSTMENT_ROWS = true)
+- Added tests for Drop and AJST rows producing separate ENR- keyed line items with correct pricing
+- Updated ARCHITECTURE.md and comments to record Trevor's decisions on line item generation and Tuition pricing
+- Committed and pushed to stanford-csp-orchestrate (head 4632ca4), PR #1 updated automatically
 
 **Open items**
 - Architect decision: Order.Type__c field vs. record type to mark Registration vs. Purchase orders
 - Architect decision: Payments table as sole payment source or other sources exist
 - Architect decision: historical Orders end state (Draft or Activated)
+- Confirm handling of New and DupEnrollment enrollment rows (currently skipped, awaiting decision)
+- Verify Tuition sign on Drop/AJST rows in real Enrollment file (positive vs. negative)
 - Verify UAT org: Student__r.Student_ID_4D__c, Course_Offering__r.External_ID_4D__c field names, price books active
 - Review and merge PR #1 to main
 - Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP before full run
-- Run sf deploy validate against target org
-- Run Deploy session to ship code to target org
 
 **Decisions**
 - REG- prefix applied to registration orders, cards, payment groups, payments
 - ENR- prefix for registration line items; PIT- for purchase line items
 - registrationExtId() shared function ensures consistent key generation
 - Registration flow two-round: Draft load, then OrderItem load, then Activation
-- Skip Drop, AJST, New, DupEnrollment rows in OrderItem load
+- Drop and AJST enrollment rows each generate separate line items (Trevor 2026-11-02)
+- Line item price sourced from Tuition field, not Extension (Trevor 2026-11-02)
+- Skip New and DupEnrollment rows in OrderItem load (default, awaiting confirmation)
 - Product2 upsert keyed on External_ID_4D__c = Course.ID
-- Index version incremented to 2
-- UAT has no registration orders yet—no re-keying needed
 
 **Blockers**
 - Order marking strategy (Order.Type__c vs. record type) blocks full run—REG-/PUR- prefix currently the only differentiator
@@ -75,42 +76,36 @@
 
 **Next**
 - Architect confirms Order marking decision (field vs. record type), payment source scope, historical order status
+- Confirm handling of New and DupEnrollment enrollment rows
+- Obtain real Drop/AJST Enrollment rows from 4D to verify Tuition sign (positive vs. negative)
 - Verify UAT org: price books active, External_ID_4D__c field exists on PricebookEntry
 - Review and merge PR #1 to main
 - Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP in code
 - Run Deploy session: validate then deploy to target org
 
-**Checked live on 2026-11-02:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-11-02:** the repository
 ### Last session — 2026-11-02
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Purchase-Orders |
-| Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
+| Name | Stanford-Data-Migration-Registration-Enhancements- Build |
+| Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-The other session's change is on the branch, so there's nothing left for me to change on the purchase side.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch stanford-csp-orchestrate)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**What's on `stanford-csp-orchestrate` now (head `c40191e`, my local copy is updated to match):**
-- Commit `2f98740`, "Prefix Registration external IDs with REG-", covers all four places I listed:
-  - `commerceShared.ts` now has the shared `REG-` prefix and the `registrationExtId()` helper that builds the key.
-  - `registrationFlow.ts` uses `REG-` for card, Order and Payment. PaymentGroup reuses the Order's key, so it gets `REG-` too.
-  - `registrationItemFlow.ts` finds each line item's Order by `REG-` + Registration ID.
-  - `paymentsFlow.ts` finds and checks PaymentGroups by `REG-` + Registration ID.
-- I searched the source and found nowhere that still builds or looks up a raw registration key.
+I've made the change and pushed it. The new commit is `4632ca4` on `stanford-csp-orchestrate`, and the remote branch now points at it. PR #1 is open from this branch, so it includes the commit automatically.
 
-**External ID prefixes in the code now:**
-
-| Records | Prefix |
-|---|---|
-| Registration orders, cards, payment groups, payments | `REG-` |
-| Purchase orders, cards, payment groups, payments | `PUR-` |
-| Registration line items | `ENR-` |
-| Purchase line items | `PIT-` |
-| Payments flow records | `PAY-` |
-
-**A correction:** last turn I said registration orders were already loaded in
+## What changed
+- **Line item rules:** `INCLUDE_DROP_ROWS` and `INCLUDE_ADJUSTMENT_ROWS` are now `true` in `registrationItemFlow.ts`. Every Add, Drop and AJST enrollment row now becomes its own line item. Each line is keyed `ENR-{Enrollment.ID}` and sits on the row's `REG-` Order.
+- **Tests:** Drop and AJST rows are no longer expected to be skipped. I added a test that runs an Add, a Drop and an AJST row for the same registration and checks they produce three separate lines, each with its own key and 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
