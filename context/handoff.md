@@ -42,26 +42,27 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-02
-**Status:** at risk — Registration patch ready; skipped-rows reporting gap identified. Awaiting architect confirmation on 3 defaults + ATE decision.
+**Status:** at risk — Registration patch ready; Order type marking decision needed. Awaiting architect on 3 defaults + ATE, and org confirmation on fields & pric…
 
 **Done this session**
-- Reviewed registration code on branch; confirmed TypeScript compiles and tests pass
-- Identified gap: skipped rows not written to results sheet; recommended Skipped tab in reportResults.ts
-- Drafted Slack message to architect with 3 defaults + 4 open questions
+- Confirmed Order external ID prefixes: Registration uses raw ID, Purchase uses PUR- prefix
+- Confirmed line item external ID prefix is PI- for purchase items, ENR- for registration (no collision)
+- Identified gap: no Order.Type or record type marking the two order types; recommended standard Order.Type field
 
 **Open items**
-- Apply registration-orderitems-draft-activate.patch via Build session on santhoshJax/stanford-csp-migration
+- Apply registration-orderitems-draft-activate.patch via Build session
 - Architect confirms: UnitPrice = Tuition (not Extension), INCLUDE_DROP_ROWS = false, INCLUDE_ADJUSTMENT_ROWS = false
 - Architect confirms: negative UnitPrice handling in org
 - Architect confirms: ATE population decision (Sep 28 decision vs. mapping doc)
-- Turn off test flags (TEST_MODE, TEST_LIMIT, TEST_SKIP) before full run
-- Create PricebookEntry.External_ID_4D__c field in UAT org
-- Verify Student__r.Student_ID_4D__c and Course_Offering__r.External_ID_4D__c field names in org
-- Verify both price books active in UAT org
+- Decide: use standard Order.Type field or record types to mark Registration vs. Purchase orders
+- Add Skipped tab to reportResults.ts for both Registration and Purchase Item flows
+- Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP before full run
+- Verify Student__r.Student_ID_4D__c and Course_Offering__r.External_ID_4D__c field names in UAT org
 
 **Decisions**
 - Registration flow two-round: Draft load, then OrderItem load, then Activation
-- OrderItem key: ENR-{Enrollment.ID}
+- OrderItem key: ENR-{Enrollment.ID} for registration; PI-{Purchase_Item.ID} for purchase
+- Order external ID: raw Registration ID for registration orders; PUR-{Purchase.ID} for purchase orders
 - TotalAmount unmapped; Salesforce calculates from line items
 - Skip Drop, AJST, New, DupEnrollment rows in OrderItem load
 - Blank Status counts as New in enrollment rule
@@ -70,45 +71,48 @@
 
 **Blockers**
 - Patch must be applied via Build session (General session cannot push code)
-- Test flags still enabled (TEST_MODE=true, TEST_LIMIT, TEST_SKIP=100)
+- Order.Type marking decision needed before full run (standard field vs. record types)
+- Architect confirmation needed on 3 defaults and ATE decision
 - PricebookEntry.External_ID_4D__c field must be created in UAT org
 - Both price books must be active in UAT org before purchase load run
-- Architect confirmation needed on 3 defaults and ATE decision to unblock full run
 
 **Next**
-- Post Slack message to architect (provide channel/handle to send it)
-- Await architect confirmation on: Tuition-only pricing, Drop/Adjustment skip flags, negative UnitPrice, ATE population
+- Decide Order.Type marking approach and communicate choice
+- Post Slack message to architect with 3 defaults + ATE decision request
 - Start Build session to apply registration-orderitems-draft-activate.patch
-- Decide whether to extend patch with Skipped tab in reportResults.ts for both Registration and Purchase Item
-- Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP in both flows
+- If Order.Type chosen: add one-line constant to both flows; update existing registration orders in UAT
+- Extend patch or follow-up to add Skipped tab in reportResults.ts
 - Verify field names and price book status in UAT org
+- Turn off test flags in both flows
 - Run purchase load sequence in UAT
 
 **Checked live on 2026-11-02:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-02
 | | |
 |---|---|
-| Type | GENERAL |
+| Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Registration-Enhancements |
-| Session | `51a1a748-4e1f-426c-9437-2dafc7a5da2b` |
+| Name | Stanford-Data-Migration-Purchase-Orders |
+| Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
 **In its own words (excerpt):**
-# Skipped rows, and the updated Slack message
+I checked the code on `stanford-csp-orchestrate` (commit `89984d6`) and changed nothing. Short answers: yes to 1, no to 2 (the prefix is `PI-`, not `PIT-`), and nothing marks the two Order types yet.
 
-I read the code on the branch this turn and ran nothing. Thanks for confirming that negative `UnitPrice` is accepted and the Order still activates.
+## 1. Order external IDs: yes, purchase orders use `PUR-`
 
-## Are skipped rows kept in the results sheet?
+| Order source | `Order.External_ID_4D__c` |
+|---|---|
+| Registration | The raw Registration ID, e.g. `1234` |
+| Purchase | `PUR-` + Purchase ID, e.g. `PUR-1234` |
 
-**No, not today.** The results sheet has only two tabs per object, **Success** and **Errors**. They are written by the shared `reportResults.ts`, which Purchase Item and the other flows also use. In `registrationItemFlow.ts` a skipped row is:
-- Counted per reason: `orderNotLoaded`, `orderNotDraft`, `dropRows`, `adjustmentRows`, `excludedStatus`, `courseWithoutProduct`, `badTuition` and so on.
-- Written to the log, and to the run summary as `skipped…` numbers.
-- Not written to the sheet. You can't see which enrollment ID was skipped or why.
+Both ID ranges start at 1, so without the prefix a purchase would overwrite the registration order with the same number. Registration keeps raw IDs because they're already loaded in UAT. The same `PUR-` prefix goes on the purchase CardPaymentMethod, PaymentGroup and Payment records.
 
-That is a gap for reconciliation. For example, if 586,169 enrollments give N OrderItems, you want to account for the rest row by row.
+## 2. Line item external IDs: the prefix is `PI-`, not `PIT-`
 
-**What I'd recommend.** Add a third **Skipped** tab per object, with the input fields plus a `Skip Reason` column. The reasons would be the same categories as the counters above. The point is that every input row lands in exactly one tab:
-- **Success:** the OrderItem was cr
+- **Purchase line items** use `PI-` + Purchase_Item ID, e.g. `PI-5678`.
+- **Registration line items** don't exist on the branch yet. The registration flow says it creates no OrderItems. The registration line item change from the other session is still an unapplied patch, and its notes say it would key them as `ENR-` + Enrollment ID.
+
+So the two kinds of line item can't collide: one starts `PI-` and the other `ENR-`. Student
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
