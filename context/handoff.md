@@ -42,12 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-02
-**Status:** at risk — Code committed (bc96380); course & purchase flows verified reading shared Price Books setting. UAT setup & architect decision still blockin…
+**Status:** at risk — Code validated: price book logic blocks >1 custom book. UAT setup & architect decision still blocking.
 
 **Done this session**
-- Verified course flows (All, 2-Year, 5-Year) process in 100-row windows with price book validation, product creation, and dual price book entries
-- Confirmed Purchase flows now also read shared Price Books setting from Course Configuration
-- Validated no duplicate price book logic; all flows use single consolidated setting
+- Validated price book resolution logic: Standard always included, max 1 custom book enforced, run stops before any save if violated
 
 **Open items**
 - Create PricebookEntry.External_ID_4D__c field (Text, External ID, Unique) in UAT org
@@ -91,22 +89,15 @@
 | Name | Stanford-Data-Migration-CourseEnhancement-Products |
 | Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-Here's how the three course flows (All, 2-Year and 5-Year) run now. I checked this against the latest code on `stanford-csp-orchestrate`. Since my commit, another session has changed the Purchase flows (`bc96380`) so they also read the same `Price Books` setting. The course flows themselves work the same as when I built them.
+**Short answer: the run stops at the start of the first window, before any course, offering or product is saved.** Giving two custom books doesn't mean they get used "instead of" Standard. The Standard book is always added, so the flow would end up with Standard plus two custom books, and the code doesn't allow more than one custom book.
 
-## In simple words
+**What happens, step by step** (this is `resolvePriceBooks` in `courseUtils.ts` on `stanford-csp-orchestrate`). Say you set `Price Books` = `StanfordContinuingStudies Price Book,Another Custom Book`:
 
-The course file is processed in **windows of 100 rows**. Each window does the same six things:
-
-**1. Check the price books first**
-- The flow reads the `Price Books` setting (by default: `Standard Price Book,StanfordContinuingStudies Price Book`).
-- It looks both books up in Salesforce.
-- If a book is missing or inactive, or more than one custom book is listed, **the window stops before saving anything**.
-- The Standard Price Book is always included, even if it's left off the list.
-
-**2. Go through the course rows one by one**
-For each course in the window:
-- **Learning Course:** saves the base course (for example, `POL 68`). Sections like `POL 68 H` and `POL 68 Z` share one.
-- **Course Offering:** saves the actual section with its dates, tuition and so on. It's matched on the 4D ID, so a re-run updates the record rather than creating a ne
+1. **It looks up both names.** If either one isn't found or is inactive, the run stops on that error first.
+2. **It finds the Standard Price Book anyway.** It isn't in your list, so the flow adds it and logs a warning. The Standard book can't be left out.
+3. **It counts the custom books.** There are 2, so the run stops with this error:
+   > `[Price Books] Only one custom price book is supported, but 2 are listed: "StanfordContinuingStudies Price Book", "Another Custom Book". Entry keys are Course.ID for the custom book and STD-<Course.ID> for Standard, so a second custom book would overwrite the first.`
+4. **Nothing is written** in that window. No Le
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
