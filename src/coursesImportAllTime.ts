@@ -44,6 +44,9 @@
  * Product2 (workbook Course tab rows 127-131, Oct 2026): one per
  * CourseOffering, upserted on External_ID_4D__c = Course.ID and linked to the
  * offering via Course_Offering__c. Skipped when the CourseOffering fails.
+ * PricebookEntry (Oct 31 2026): each saved Product gets a Standard entry and
+ * one in the custom book named in the "Price Books" config var, List Price =
+ * Tuition. Batched after the row loop — see coursePricebook.ts.
  * No CourseOfferingSchedule, CourseOfferingParticipant, Location, or
  * Department records — none of their source fields (Weekday, Course_Time,
  * Primary_Instructor, Primary_Associate, Building, Room, Coordinator_ID,
@@ -79,7 +82,15 @@ import {
   extractSectionSuffix,
   formatFromSuffix,
   buildCourseProductPayload,
+  parseListPrice,
 } from "./courseUtils";
+import {
+  loadPriceBooks,
+  saveCoursePricebookEntries,
+  summarisePricebookEntries,
+  pricebookEntryResultFields,
+  type CourseProductForPricing,
+} from "./coursePricebook";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const MAX_ROWS = 100;
@@ -587,6 +598,24 @@ export const coursesImportAllTime = flow({
     const sfToken = getAccessToken(sfConn);
     const sfBase = getSfInstanceUrl(sfConn);
 
+    // ── Price books (shared "Price Books" config var) ─────────────────────────
+    // Checked before any row is written: the run stops here if a listed book
+    // is missing or inactive, or more than one custom book is listed. The
+    // Standard Price Book is always added (custom entries need it).
+    const priceBooks = await loadPriceBooks(
+      sfBase,
+      sfToken,
+      configVars["Price Books"] as unknown as string | undefined,
+      logger,
+      "[Course22]",
+    );
+    // Products saved in this window, priced after the row loop.
+    const pricingQueue: (CourseProductForPricing & {
+      code: string;
+      title: string;
+      quarter: string;
+    })[] = [];
+
     // ── Course Correction Sheet (first tab) ───────────────────────────────────
     // Unlike the person flows, a missing or empty tab stops the run: in
     // correction mode an empty map would silently skip every row in the file.
@@ -920,6 +949,15 @@ export const coursesImportAllTime = flow({
           productPayload,
         );
         counts.product.ok++;
+        // List Price = Course.Tuition (blank or 0 → 0), refreshed every run.
+        pricingQueue.push({
+          sourceId,
+          productId: r.id,
+          unitPrice: parseListPrice(row.Tuition),
+          code,
+          title,
+          quarter,
+        });
         ok("Product2", r.id, r.created, {
           External_ID_4D__c: sourceId,
           ...productPayload,
@@ -937,12 +975,48 @@ export const coursesImportAllTime = flow({
       }
     }
 
+    // ── PricebookEntry — Standard first, then the custom book ────────────────
+    const pricingMeta = new Map(pricingQueue.map((p) => [p.sourceId, p]));
+    const pbeResults = await saveCoursePricebookEntries(
+      sfBase,
+      sfToken,
+      priceBooks,
+      pricingQueue,
+    );
+    for (const r of pbeResults) {
+      const meta = pricingMeta.get(r.sourceId);
+      const base = {
+        Source_ID: r.sourceId,
+        Code: meta?.code ?? "",
+        Title: meta?.title ?? "",
+        Quarter: meta?.quarter ?? "",
+        Object: "PricebookEntry",
+        fields: pricebookEntryResultFields(r),
+      };
+      if (r.outcome === "created" || r.outcome === "updated") {
+        successRows.push({
+          ...base,
+          sf__Id: r.sfId ?? "",
+          sf__Created: String(r.outcome === "created"),
+        });
+      } else {
+        if (r.outcome === "failed") {
+          logger.error(
+            `[Course22] ${r.sourceId} PricebookEntry (${r.bookName}): ${r.error}`,
+          );
+        }
+        errorRows.push({ ...base, sf__Error: r.error ?? r.outcome });
+      }
+    }
+    const pbeSummary = summarisePricebookEntries(pbeResults);
+
     // ── Results sheet ─────────────────────────────────────────────────────────
     const RESULT_OBJECTS = [
       "Learning",
       "LearningCourse",
       "CourseOffering",
       "Product2",
+      "PricebookEntry",
     ] as const;
 
     let nextSheetId = courseSheetId;
@@ -1022,7 +1096,8 @@ export const coursesImportAllTime = flow({
         (correctionEnabled
           ? `, ${counts.courseOffering.corrected} date-corrected`
           : "") +
-        `\n  Product2:       ${counts.product.ok} ok, ${counts.product.err} err`,
+        `\n  Product2:       ${counts.product.ok} ok, ${counts.product.err} err` +
+        `\n  PricebookEntry: ${pbeSummary.text}`,
     );
 
     // ── Correction mode: report IDs never found in the file ──────────────────

@@ -590,7 +590,31 @@ Upsert key: `External_ID_4D__c` = Course.ID (same value as the CourseOffering, e
 - **No clash with Purchase Inventory Products.** The Purchase Inventory flow writes its own 4D
   IDs to the same `Product2.External_ID_4D__c` field, but those are small numbers, while
   Course IDs are `<quarter>_<code>` text values, so the two sets cannot overlap.
-- No PricebookEntry is created for course Products yet.
+- Each saved Product also gets PricebookEntry rows — see below.
+
+#### PricebookEntry per course Product2 (added 2026-10-31)
+
+Shared code: `src/coursePricebook.ts` (Salesforce calls) and the price book helpers in
+`src/courseUtils.ts`. Used by all three course flows, after the row loop of each window.
+
+- **Config var `Price Books`** (Course Configuration page, shared by all three flows): a comma
+  list of Pricebook2 names, default `Standard Price Book,StanfordContinuingStudies Price Book`.
+- **Checked before any row is written** (one Pricebook2 query per window). The run stops if a
+  listed book is missing or inactive, or if more than one custom book is listed. The Standard
+  Price Book is always included, even when not listed, because Salesforce rejects a custom
+  entry until the Product has a Standard entry.
+- **Fields:** `UnitPrice` = Course.Tuition (blank or 0 → 0), `IsActive` = true,
+  `UseStandardPrice` = false on the custom entry.
+- **Keys** on `PricebookEntry.External_ID_4D__c` (Text, External ID, Unique — created by the
+  client team): `STD-<Course.ID>` in Standard, `<Course.ID>` in the custom book.
+- **Save:** one query finds existing entries for the window's Products (Product2Id +
+  Pricebook2Id). Missing entries are inserted; existing ones are updated by Id (price, active,
+  key), because Product2Id and Pricebook2Id cannot be changed after creation. Standard first,
+  then the custom book only for Products that have a Standard entry (the rest are logged as
+  "Skipped – Standard entry failed"). sObject Collections, 200 per call, allOrNone = false.
+- **Re-runs** refresh the price from 4D every time and never duplicate entries.
+- **No enrollment filter:** every saved course Product is priced.
+- Results sheets get a `PricebookEntry` tab; run summaries get a PricebookEntry line.
 
 ---
 

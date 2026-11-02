@@ -7,7 +7,7 @@
  * the Registration flow's twin and uses the identical 4-phase chain:
  *
  *   1. CardPaymentMethod — card details (skipped when the row carries no card data)
- *   2. Order             — the purchase header (Draft, Standard Price Book)
+ *   2. Order             — the purchase header (Draft, order price book)
  *   3. PaymentGroup      — one per Order (SourceObjectId = the Order's Id)
  *   4. Payment           — one Capture/Processed payment (PaymentGroupId)
  *
@@ -23,23 +23,33 @@
  * PREREQUISITES: Student flow (AccountId resolved via the external-ID
  * relationship `Account.Student_ID_4D__c`, as in Registration).
  * Purchase Inventory is NOT required by this flow, but Order.Pricebook2Id is
- * set to the Standard Price Book so Purchase Item can attach OrderItems later.
+ * set to the order price book — the first custom price book in the "Price
+ * Books" config var (Standard Price Book when none is configured) — so
+ * Purchase Item can attach OrderItems from that same book later.
  *
  * Windowed execution / TEST_MODE: identical model to registrationFlow.ts
  * (byte-offset cursor, MAX_ROWS per window, self-invoke). TEST_MODE is ON.
  *
  * Differences from the workbook that the review flagged — each is a decision
  * for the architect, none is silent:
- *   - Order.Status: workbook says "Direct Map" from Purchase.Status ("Paid").
- *     Order.Status is a restricted Draft/Activated picklist and Salesforce
- *     rejects any new Order that isn't Draft (see Registration notes). "Paid"
- *     cannot be written. Orders are created Draft; the source status is not
- *     preserved anywhere yet.
+ *   - Order.Status (decided 2026-10-31): Salesforce only creates Orders as
+ *     Draft, and OrderItems can only be added to a Draft Order. So the flow
+ *     runs TWICE:
+ *       Round 1 ("Activate Purchase Orders" = false): Orders created Draft.
+ *       Then Purchase Item Import adds the line items.
+ *       Round 2 ("Activate Purchase Orders" = true): every existing PUR-
+ *       Order still in Draft AND with at least one OrderItem is updated to
+ *       ACTIVATED_ORDER_STATUS. Draft Orders with no line items stay Draft
+ *       and are logged.
+ *     In either round an Order already Activated is never re-sent (that
+ *     would try to change an Activated Order's price book / status).
  *   - Order.TotalAmount (← Subtotal): not writable (derived from OrderItems).
  *     Not mapped. Purchase Item supplies the amounts.
- *   - Order balance: workbook says BalanceDue__c; the field verified in
- *     Stanford_UAT (and used by Registration) is Balance_Due__c. Using the
- *     verified name.
+ *   - Order balance (decided 2026-10-31): BalanceDue__c, Currency(16,2), as
+ *     the workbook says. Existence on Order confirmed in the org by the user
+ *     2026-10-31. Registration writes Balance_Due__c (verified on
+ *     Stanford_UAT 2026-09-29) — Order appears to carry both fields; which
+ *     one registration should use is still an open item.
  *   - Order.Description: workbook maps BOTH Notes and Message to Description.
  *     They are concatenated (Notes, blank line, Message).
  *   - Order.Payment_Transaction_Id__c (← CC_Transaction_ID): per workbook.
@@ -73,13 +83,16 @@ import {
   EXT_ID_FIELD,
   type SfRecord,
   buildStudentEmailCache,
-  getStandardPricebookId,
+  PRICE_BOOKS_CONFIG_VAR,
+  orderPricebook,
+  resolveConfiguredPricebooks,
   invokeNextWindow,
   parseCurrency,
   parseExpiry,
   parseInteger,
   parseSuccessfulSfIds,
   readWindowCursor,
+  sfQueryAll,
   streamTsvWindow,
   stripDotZero,
   upsertInBatches,
@@ -101,6 +114,100 @@ const TEST_SKIP = 0;
 
 /** Same default Registration uses (Draft is the only creatable Order status). */
 const DEFAULT_ORDER_STATUS = "Draft";
+
+/** Status written in round 2. Standard Order.Status value for StatusCode Activated. */
+export const ACTIVATED_ORDER_STATUS = "Activated";
+
+/** Boolean config var that switches the flow into round 2 (see header). */
+export const ACTIVATE_ORDERS_CONFIG_VAR = "Activate Purchase Orders";
+
+/** What Salesforce already holds for one PUR- Order. */
+export interface ExistingOrderState {
+  id: string;
+  status: string;
+  hasItems: boolean;
+}
+
+export interface OrderActivationPlan {
+  /** Records to upsert (new Orders as Draft, Draft→Activated updates). */
+  toUpsert: SfRecord[];
+  /** Already Activated — left untouched; ext id → Order Id (for PaymentGroup). */
+  alreadyActivated: Map<string, string>;
+  /** Draft with no OrderItems in round 2 — left Draft. */
+  draftWithoutItems: string[];
+  /** Draft Orders switched to Activated in round 2. */
+  activating: number;
+}
+
+/**
+ * Decides, per mapped Order, what this run sends. Pure — tested directly.
+ *   - Not in Salesforce yet           → upsert the full Draft record.
+ *   - Already Activated               → skip (never re-sent).
+ *   - Draft, round 1                  → upsert the full Draft record (refresh).
+ *   - Draft, round 2, has OrderItems  → upsert ONLY { ext id, Status: Activated }.
+ *   - Draft, round 2, no OrderItems   → skip, reported as draftWithoutItems.
+ */
+export function planOrderActivation(
+  orders: SfRecord[],
+  existing: Map<string, ExistingOrderState>,
+  activate: boolean,
+): OrderActivationPlan {
+  const plan: OrderActivationPlan = {
+    toUpsert: [],
+    alreadyActivated: new Map(),
+    draftWithoutItems: [],
+    activating: 0,
+  };
+  for (const order of orders) {
+    const extId = order[EXT_ID_FIELD] as string;
+    const current = existing.get(extId);
+    if (!current) {
+      plan.toUpsert.push(order);
+    } else if (current.status !== DEFAULT_ORDER_STATUS) {
+      plan.alreadyActivated.set(extId, current.id);
+    } else if (!activate) {
+      plan.toUpsert.push(order);
+    } else if (current.hasItems) {
+      plan.toUpsert.push({
+        [EXT_ID_FIELD]: extId,
+        Status: ACTIVATED_ORDER_STATUS,
+      });
+      plan.activating++;
+    } else {
+      plan.draftWithoutItems.push(extId);
+    }
+  }
+  return plan;
+}
+
+/** Existing PUR- Orders with their Status and whether they have line items. */
+async function loadExistingPurchaseOrders(
+  sfBase: string,
+  sfToken: string,
+  logger: { info: (m: string) => void },
+): Promise<Map<string, ExistingOrderState>> {
+  const rows = await sfQueryAll<{
+    Id: string;
+    Status: string;
+    External_ID_4D__c: string;
+    OrderItems: { totalSize: number } | null;
+  }>(
+    sfBase,
+    sfToken,
+    "SELECT Id, Status, External_ID_4D__c, (SELECT Id FROM OrderItems LIMIT 1) " +
+      "FROM Order WHERE External_ID_4D__c LIKE 'PUR-%'",
+    logger,
+  );
+  const map = new Map<string, ExistingOrderState>();
+  for (const row of rows) {
+    map.set(row.External_ID_4D__c, {
+      id: row.Id,
+      status: row.Status,
+      hasItems: (row.OrderItems?.totalSize ?? 0) > 0,
+    });
+  }
+  return map;
+}
 
 const TEMP_STUDENT_ID_KEY = "_studentId4D";
 
@@ -197,7 +304,7 @@ export function mapToCardPaymentMethod(raw: RawPurchaseRow): SfRecord | null {
 
 export function mapToOrder(
   raw: RawPurchaseRow,
-  standardPricebookId: string,
+  pricebookId: string,
 ): SfRecord | null {
   const id = str(raw.ID).trim();
   if (!id) return null;
@@ -209,7 +316,7 @@ export function mapToOrder(
     [EXT_ID_FIELD]: purchaseExtId(id),
     Status: DEFAULT_ORDER_STATUS,
     EffectiveDate: purchaseDate,
-    Pricebook2Id: standardPricebookId,
+    Pricebook2Id: pricebookId,
   };
 
   const studentId = stripDotZero(raw.Student_ID);
@@ -230,7 +337,7 @@ export function mapToOrder(
   if (txnId) record.Payment_Transaction_Id__c = txnId;
 
   const balanceDue = parseCurrency(raw.Balance_Due);
-  if (balanceDue !== undefined) record.Balance_Due__c = balanceDue;
+  if (balanceDue !== undefined) record.BalanceDue__c = balanceDue;
 
   return record;
 }
@@ -312,10 +419,31 @@ export const purchaseImport = flow({
     let payments: SfRecord[] = [];
     let filteredOut = 0;
 
-    const stdPricebookId = await getStandardPricebookId(sfBase, sfToken);
+    // Order.Pricebook2Id — the order price book chosen from the "Price
+    // Books" config var (see orderPricebook). Purchase Item Import uses the
+    // same rule, so its OrderItems always match the Order's price book.
+    const orderBook = orderPricebook(
+      await resolveConfiguredPricebooks(
+        sfBase,
+        sfToken,
+        configVars[PRICE_BOOKS_CONFIG_VAR] as unknown as string | undefined,
+        logger,
+      ),
+    );
+    logger.info(`[Purchase Import] Order price book: "${orderBook.name}"`);
 
-    const [emailCache, window] = await Promise.all([
+    const activateOrders =
+      String(configVars[ACTIVATE_ORDERS_CONFIG_VAR]) === "true";
+    logger.info(
+      `[Purchase Import] ${ACTIVATE_ORDERS_CONFIG_VAR} = ${activateOrders} — ` +
+        (activateOrders
+          ? `round 2: Draft Orders with line items → ${ACTIVATED_ORDER_STATUS}`
+          : "round 1: Orders created/refreshed as Draft"),
+    );
+
+    const [emailCache, existingOrders, window] = await Promise.all([
       buildStudentEmailCache(sfBase, sfToken, logger),
+      loadExistingPurchaseOrders(sfBase, sfToken, logger),
       streamTsvWindow(
         fileId,
         gdToken,
@@ -330,7 +458,7 @@ export const purchaseImport = flow({
           }
           const cpm = mapToCardPaymentMethod(row);
           if (cpm) cardPaymentMethods.push(cpm);
-          const order = mapToOrder(row, stdPricebookId);
+          const order = mapToOrder(row, orderBook.id);
           if (order) orders.push(order);
           const payment = mapToPayment(row, logger);
           if (payment) payments.push(payment);
@@ -387,11 +515,25 @@ export const purchaseImport = flow({
           )
         : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
 
-    // ── Phase 2: Order ───────────────────────────────────────────────────────
+    // ── Phase 2: Order (Draft create, or round-2 activation) ─────────────────
+    const plan = planOrderActivation(orders, existingOrders, activateOrders);
+    logger.info(
+      `[Purchase Import][Order] to send=${plan.toUpsert.length} (activating=${plan.activating}), ` +
+        `already Activated (skipped)=${plan.alreadyActivated.size}, ` +
+        `Draft without line items (left Draft)=${plan.draftWithoutItems.length}`,
+    );
+    if (plan.draftWithoutItems.length > 0) {
+      logger.warn(
+        `[Purchase Import][Order] ${plan.draftWithoutItems.length} Draft Order(s) have no OrderItems ` +
+          `and were NOT activated — run Purchase Item Import first. e.g. ${plan.draftWithoutItems
+            .slice(0, 10)
+            .join(", ")}`,
+      );
+    }
     const orderResult =
-      orders.length > 0
+      plan.toUpsert.length > 0
         ? await upsertInBatches(
-            orders,
+            plan.toUpsert,
             SF_ORDER,
             sfBase,
             sfToken,
@@ -402,6 +544,12 @@ export const purchaseImport = flow({
 
     // ── Phase 3: PaymentGroup (one per successful Order) ─────────────────────
     const orderSfIds = parseSuccessfulSfIds(orderResult.successfulCsv);
+    // Orders skipped this run still exist — keep their PaymentGroup upserts.
+    for (const [extId, sfId] of plan.alreadyActivated) orderSfIds.set(extId, sfId);
+    for (const extId of plan.draftWithoutItems) {
+      const current = existingOrders.get(extId);
+      if (current) orderSfIds.set(extId, current.id);
+    }
     const paymentGroups: SfRecord[] = [];
     for (const [extId, orderSfId] of orderSfIds) {
       paymentGroups.push({ [EXT_ID_FIELD]: extId, SourceObjectId: orderSfId });
@@ -492,7 +640,9 @@ export const purchaseImport = flow({
       `[Purchase Import] Window ${windowNumber} complete —` +
         `\n  Window rows:                 ${rowsInWindow}` +
         `\n  CardPaymentMethod submitted: ${cardPaymentMethods.length}, processed: ${cpm.processed}, failed: ${cpm.failed}` +
-        `\n  Order submitted:             ${orders.length}, processed: ${orderResult.processed}, failed: ${orderResult.failed}` +
+        `\n  Order mapped:                ${orders.length}, sent: ${plan.toUpsert.length}, activating: ${plan.activating}, ` +
+        `already Activated: ${plan.alreadyActivated.size}, Draft w/o items: ${plan.draftWithoutItems.length}` +
+        `\n  Order submitted:             ${plan.toUpsert.length}, processed: ${orderResult.processed}, failed: ${orderResult.failed}` +
         `\n  PaymentGroup submitted:      ${paymentGroups.length}, processed: ${pg.processed}, failed: ${pg.failed}` +
         `\n  Payment submitted:           ${payments.length}, processed: ${paymentResult.processed}, failed: ${paymentResult.failed}`,
     );
@@ -524,6 +674,10 @@ export const purchaseImport = flow({
         cardPaymentMethodsProcessed: cpm.processed,
         cardPaymentMethodsFailed: cpm.failed,
         orders: orders.length,
+        activateOrders,
+        ordersActivating: plan.activating,
+        ordersAlreadyActivated: plan.alreadyActivated.size,
+        ordersDraftWithoutItems: plan.draftWithoutItems.length,
         ordersProcessed: orderResult.processed,
         ordersFailed: orderResult.failed,
         paymentGroups: paymentGroups.length,

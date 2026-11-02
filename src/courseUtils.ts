@@ -468,3 +468,149 @@ export function buildCourseProductPayload(
   if (description) payload.Description = description;
   return payload;
 }
+
+// ── PricebookEntry per course Product2 ────────────────────────────────────────
+//
+// Decisions (Oct 2026):
+//   - One config var, "Price Books", a comma list of Pricebook2 names shared by
+//     Course Import - All / 2-Year / 5-Year.
+//   - The Standard Price Book is always included, even when it is not listed,
+//     because Salesforce rejects a custom-book entry until the Product has a
+//     Standard entry.
+//   - At most ONE custom book: the keys below only give two distinct values.
+//   - UnitPrice = Course.Tuition; blank or 0 → 0 (a free course still gets an
+//     entry). Refreshed on every run. Entries are IsActive = true.
+//   - No enrollment filter: every Product that saves gets its entries.
+
+/** Default value of the "Price Books" config var. */
+export const DEFAULT_PRICE_BOOKS =
+  "Standard Price Book,StanfordContinuingStudies Price Book";
+
+/** Prefix on PricebookEntry.External_ID_4D__c for Standard Price Book entries. */
+export const STANDARD_ENTRY_KEY_PREFIX = "STD-";
+
+/**
+ * Splits the "Price Books" config var into distinct, trimmed names. Matching
+ * is case-insensitive (as SOQL `Name IN` is), so "a, A" is one name.
+ */
+export function parsePriceBookNames(v: string | undefined | null): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const part of String(v ?? "").split(",")) {
+    const name = part.trim();
+    if (!name || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    names.push(name);
+  }
+  return names;
+}
+
+export interface PricebookRecord {
+  Id: string;
+  Name: string;
+  IsStandard: boolean;
+  IsActive: boolean;
+}
+
+export interface ResolvedPriceBooks {
+  standard: PricebookRecord;
+  /** The one custom book, or null when only Standard is configured. */
+  custom: PricebookRecord | null;
+  /** True when Standard was not in the config var and was added anyway. */
+  standardAdded: boolean;
+  /** Non-fatal notes for the run log. */
+  warnings: string[];
+}
+
+/**
+ * Checks the configured names against the Pricebook2 records found in the org
+ * (the query returns every listed name plus the Standard book). Throws before
+ * any row is written when:
+ *   - a listed name has no Pricebook2, or that Pricebook2 is inactive
+ *   - more than one custom (non-Standard) book is listed
+ *   - the org has no Standard Price Book
+ */
+export function resolvePriceBooks(
+  configuredNames: string[],
+  found: PricebookRecord[],
+): ResolvedPriceBooks {
+  const standard = found.find((b) => b.IsStandard);
+  if (!standard) {
+    throw new Error(
+      "[Price Books] No Standard Price Book found (Pricebook2.IsStandard = true).",
+    );
+  }
+  const byName = new Map(found.map((b) => [b.Name.trim().toLowerCase(), b]));
+  const missing: string[] = [];
+  const inactive: string[] = [];
+  const customs: PricebookRecord[] = [];
+  let standardListed = false;
+  for (const name of configuredNames) {
+    const book = byName.get(name.toLowerCase());
+    if (!book) {
+      missing.push(name);
+      continue;
+    }
+    if (!book.IsActive) inactive.push(name);
+    if (book.IsStandard) standardListed = true;
+    else if (!customs.some((c) => c.Id === book.Id)) customs.push(book);
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `[Price Books] Not found in Salesforce: ${missing.map((m) => `"${m}"`).join(", ")}. ` +
+        "Check the spelling in the Price Books config var, or create the price book first.",
+    );
+  }
+  if (inactive.length > 0) {
+    throw new Error(
+      `[Price Books] Inactive in Salesforce: ${inactive.map((m) => `"${m}"`).join(", ")}. ` +
+        "Activate the price book, or remove it from the Price Books config var.",
+    );
+  }
+  if (customs.length > 1) {
+    throw new Error(
+      `[Price Books] Only one custom price book is supported, but ${customs.length} are listed: ` +
+        `${customs.map((c) => `"${c.Name}"`).join(", ")}. ` +
+        "Entry keys are Course.ID for the custom book and STD-<Course.ID> for Standard, so a second custom book would overwrite the first.",
+    );
+  }
+  const warnings: string[] = [];
+  if (!standardListed) {
+    warnings.push(
+      `"${standard.Name}" is not in the Price Books config var — added anyway, because custom price book entries need a Standard entry first.`,
+    );
+  }
+  if (!standard.IsActive) {
+    warnings.push(
+      `"${standard.Name}" is inactive — entries are still created in it, but orders cannot use an inactive price book.`,
+    );
+  }
+  return {
+    standard,
+    custom: customs[0] ?? null,
+    standardAdded: !standardListed,
+    warnings,
+  };
+}
+
+/**
+ * Course.Tuition → PricebookEntry.UnitPrice. Unlike parseFloatVal, 0 is kept
+ * as 0, and a blank or unreadable value also becomes 0. "$1,250.00" → 1250.
+ */
+export function parseListPrice(v: string | undefined | null): number {
+  const s = String(v ?? "")
+    .replace(/[$,\s]/g, "")
+    .trim();
+  if (!s) return 0;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** PricebookEntry.External_ID_4D__c for one Product in one book. */
+export function pricebookEntryKey(
+  sourceId: string,
+  isStandard: boolean,
+): string {
+  const id = sourceId.trim();
+  return isStandard ? `${STANDARD_ENTRY_KEY_PREFIX}${id}` : id;
+}

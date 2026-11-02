@@ -5,13 +5,14 @@
  * line on a Purchase → one OrderItem on the Order that Purchase Import created.
  *
  * MUST RUN AFTER: Purchase Inventory Import (Product2 + PricebookEntry) and
- * Purchase Import (the Orders, which carry Pricebook2Id = Standard Price Book).
+ * Purchase Import (the Orders, which carry Pricebook2Id = the order price
+ * book: first custom book in the "Price Books" config var).
  *
  * Upsert key: OrderItem.External_ID_4D__c = "PI-" + Purchase_Item.ID.
  * (Prefixed so a later Registration OrderItem load can't collide with it.)
  *
  * Pre-flight caches (built once per window, before the Bulk job):
- *   - Product name → PricebookEntry Id (Standard Price Book). Item_Type is
+ *   - Product name → PricebookEntry Id (order price book). Item_Type is
  *     resolved by Product2.Name, as the workbook says ("Product2Id will need
  *     to be found by the name of the Product"). OrderItem takes the
  *     PricebookEntryId (which implies the Product2); Product2Id is derived by
@@ -44,7 +45,9 @@ import { createPerObjectResultsSheet } from "./reportResults";
 import {
   EXT_ID_FIELD,
   type SfRecord,
-  getStandardPricebookId,
+  PRICE_BOOKS_CONFIG_VAR,
+  orderPricebook,
+  resolveConfiguredPricebooks,
   invokeNextWindow,
   parseCurrency,
   readWindowCursor,
@@ -83,7 +86,7 @@ export interface RawPurchaseItemRow {
 }
 
 export interface PurchaseItemCaches {
-  /** Product2.Name → standard-pricebook PricebookEntry.Id */
+  /** Product2.Name → order-price-book PricebookEntry.Id */
   pricebookEntryByProductName: Map<string, string>;
   /** External IDs ("PUR-…") of Orders that exist in the org */
   existingOrderExtIds: Set<string>;
@@ -223,12 +226,22 @@ export const purchaseItemImport = flow({
     const sfBase = getSfInstanceUrl(sfConn);
 
     // ── Caches ───────────────────────────────────────────────────────────────
-    const stdPricebookId = await getStandardPricebookId(sfBase, sfToken);
+    // Same order price book Purchase Import put on the Orders — an OrderItem
+    // must use an entry from its Order's price book.
+    const orderBook = orderPricebook(
+      await resolveConfiguredPricebooks(
+        sfBase,
+        sfToken,
+        configVars[PRICE_BOOKS_CONFIG_VAR] as unknown as string | undefined,
+        logger,
+      ),
+    );
+    logger.info(`[Purchase Item Import] Order price book: "${orderBook.name}"`);
     const [entries, orders] = await Promise.all([
       sfQueryAll<{ Id: string; Product2: { Name: string } | null }>(
         sfBase,
         sfToken,
-        `SELECT Id, Product2.Name FROM PricebookEntry WHERE Pricebook2Id = '${stdPricebookId}' AND Product2.External_ID_4D__c != null`,
+        `SELECT Id, Product2.Name FROM PricebookEntry WHERE Pricebook2Id = '${orderBook.id}' AND Product2.External_ID_4D__c != null`,
         logger,
       ),
       sfQueryAll<{ External_ID_4D__c: string }>(
@@ -249,12 +262,13 @@ export const purchaseItemImport = flow({
       }
     }
     logger.info(
-      `[Purchase Item Import] Caches — products with pricebook entry=${caches.pricebookEntryByProductName.size}, ` +
+      `[Purchase Item Import] Caches — products with an entry in "${orderBook.name}"=${caches.pricebookEntryByProductName.size}, ` +
         `PUR- orders=${caches.existingOrderExtIds.size}`,
     );
     if (caches.pricebookEntryByProductName.size === 0) {
       throw new Error(
-        "No Product2/PricebookEntry rows with External_ID_4D__c found — run Purchase Inventory Import first.",
+        `No Product2/PricebookEntry rows with External_ID_4D__c found in "${orderBook.name}" — ` +
+          "run Purchase Inventory Import first (with this price book in the Price Books config var).",
       );
     }
     if (caches.existingOrderExtIds.size === 0) {

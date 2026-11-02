@@ -41,76 +41,67 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-10-29
-**Status:** at risk — Enrollment rule pushed to stanford-csp-orchestrate (f1f7922); PR review & merge to main pending before deploy
+### Engagement state — 2026-11-02
+**Status:** at risk — Purchase flows restored to committed state; 41 objects mapped. UAT field creation & architect decision still blocking.
 
 **Done this session**
-- Committed enrollment rule changes (6 files, 222 added/83 removed) to stanford-csp-orchestrate
-- Pushed commit f1f7922 to GitHub after fixing author name
-- Confirmed blank Status treated as New in rule logic
+- Verified purchase flows match last committed code (89984d6)
+- Removed uncommitted file rename from local copy
+- Confirmed split purchase flow approach abandoned — three flows, four runs
 
 **Open items**
-- Team confirms blank Status field handling (currently New) and reviews enrollment rule changes
-- Open pull request from stanford-csp-orchestrate into main
-- Review and merge PR to main
-- Fix 5 failing Student Import tests before merge
-- Run Deploy session to ship code live to Salesforce org
-- Run full integration on ~160,000 rows; verify Success + Errors + Not Processed + Skipped = source count
-- Architect: confirm two order types (Registration, Purchase) or add third for transcripts
-- Architect: decide Order/OrderItem/Product external ID prefixes (REG-, PUR-, ENR-, PIT-, CRS-)
+- Create PricebookEntry.External_ID_4D__c field (Text, External ID, Unique) in UAT org
+- Verify both price books active in UAT org before purchase load sequence
+- Architect decides: Registration Orders field (Balance_Due__c vs BalanceDue__c)
+- Confirm all 41 objects and fields exist in UAT org
+- Run purchase load: Inventory → Purchase (off) → Item → Purchase (on)
+- Open PR from stanford-csp-orchestrate to main
+- Rebuild integrations and import into Prismatic
+- Deploy to Salesforce org
 
 **Decisions**
-- Blank Status counts as New in enrollment rule (awaiting team confirmation)
-- Index version incremented to 2; old saved index will not be reused
+- Blank Status counts as New in enrollment rule
+- Index version incremented to 2
 - Product2 step: IsActive=FALSE, no price book entries created yet
-- Product2 upsert keyed on External_ID_4D__c = Course.ID; Course_Offering__c lookup points to saved offering
+- Product2 upsert keyed on External_ID_4D__c = Course.ID
 - MAX_ROWS=500, POLL_BUDGET_MS=10min, MAX_JOB_HANDOFFS=6
-- ENR- prefix for Enrollment ID
+- ENR- prefix for Enrollment ID, PUR- for Purchase orders
 - TEST_MODE=false for next full run
-- Two order streams: Registration (tuition) and Purchase (non-course items)
+- Three purchase flows, four runs (no split)
 
 **Blockers**
-- Product2.External_ID_4D__c clash: Purchase Inventory and Course flows both upsert same field—silent overwrites break downstream lookups; prefix format not decided
-- Architect has not confirmed external ID prefix strategy (REG-, PUR-, ENR-, PIT-, CRS-) for both streams
-- Architect has not confirmed price book entry value for course Products or UnitPrice source (Tuition vs Extension)
-- Architect has not confirmed whether OrderItems follow deduplicated COP rows or all enrollment rows
-- Salesforce org licence or storage limit exceeded; all User creates rejected with LIMIT_EXCEEDED
-- 5 Student Import tests failing (pre-existing, not caused by this commit)
+- PricebookEntry.External_ID_4D__c field must be created in UAT org
+- Both price books must be active in UAT org before purchase load run
+- Registration Orders field decision still open (Balance_Due__c vs BalanceDue__c)
 
 **Next**
-- Team reviews enrollment rule changes and confirms blank Status treatment
-- Open pull request from stanford-csp-orchestrate into main
-- Fix 5 failing Student Import tests
-- Merge PR to main
-- Run Deploy session to ship code live to Salesforce org
+- Create PricebookEntry.External_ID_4D__c field in UAT org
+- Verify both price books active in UAT org
+- Get architect decision on Registration Orders field name
+- Confirm all 41 objects and fields exist in UAT org
+- Run purchase load sequence in UAT
+- Open PR to main
+- Schedule Deploy session
 
-**Checked live on 2026-10-29:** the repository
-### Last session — 2026-10-29
+**Checked live on 2026-11-02:** nothing — the status above is as recorded, not re-checked
+### Last session — 2026-11-02
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-AccountLogin-IssueFix(again) |
-| Session | `153060d9-eedb-5466-b1ec-6a7a785b2b1c` |
+| Name | Stanford-Data-Migration-Purchase-Orders |
+| Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch stanford-csp-orchestrate)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The purchase flows are back to exactly what was last committed, and I'm not splitting them.
 
-The new enrollment rule is pushed to `stanford-csp-orchestrate` as commit `f1f7922`, on top of `f4e6964`. I fetched the branch back from GitHub to check: the commit is there, with the same 6 files (222 lines added, 83 removed), and there are no local changes left.
+**What I checked:**
+- **GitHub:** `stanford-csp-orchestrate` is at `89984d6`. The only commits after our purchase change (`bc96380`) are 5 automatic handoff notes, and none of them touch code.
+- **Local copy:** the split I'd started before you stopped the session had left one uncommitted change on disk. It was a file rename (`purchaseItemFlow.ts` to `purchaseItems.ts`) with no content changes, and it had never been committed or pushed. I undid it, so the local copy now has no changes and matches the branch.
 
-The first push attempt failed because the commit had no author name. I set it to the name used on the branch's earlier commits (Santhosh) and pushed again.
+**How it stays:** three purchase flows, run four times: Purchase Inventory, then Purchase with activation off, then Purchase Item, then Purchase again with **Activate Purchase Orders** on.
 
-**What it changes:**
-- **Login created:** any of the student's Enrollment rows has a Status other than New.
-- **Skipped as "Only New enrollments":** every row is New or blank.
-- **Skipped as "No enrollment rows":** the student has no rows in the Enrollment file.
-- **Index rebuilt:** the Stud
+**About the payment source file:** you're right. The Purchase flows read only the Purchase file. The separate Payments flow (flow 29) is the one that reads the payment source file.
 
-_[summary truncated — see the session record for the full text]_
+Sources: checked live: the local checkout and the remote `stanford-csp-orchestrate` branch (git status, log, ls-remote) · not checked: the Salesforce org
 <!-- orchestrate:session-state:end -->
