@@ -29,6 +29,21 @@ export interface Logger {
 }
 
 export const EXT_ID_FIELD = "External_ID_4D__c";
+
+/**
+ * External-ID namespace for Registration Import (Order, CardPaymentMethod,
+ * PaymentGroup, Payment). Decided 2026-11-02: Registration keys are
+ * "REG-{Registration.ID}" and Purchase keys "PUR-{Purchase.ID}", so the two
+ * order streams can be told apart by key alone. Registration Item Import
+ * (Order lookup) and Payments Import (PaymentGroup lookup) build the same key
+ * with registrationExtId().
+ */
+export const REGISTRATION_EXT_PREFIX = "REG-";
+
+/** "560585" → "REG-560585". The one rule every flow uses for Registration keys. */
+export function registrationExtId(id: string): string {
+  return `${REGISTRATION_EXT_PREFIX}${id}`;
+}
 export const BULK_BATCH_SIZE = 50_000;
 
 /**
@@ -128,6 +143,60 @@ export async function sfQueryAll<T>(
   await fetchPage(null);
   while (!done && nextUrl) await fetchPage(nextUrl);
   return all;
+}
+
+/** What Salesforce already holds for one Order (looked up by External_ID_4D__c). */
+export interface OrderState {
+  id: string;
+  status: string;
+  hasItems: boolean;
+}
+
+const ORDER_QUERY_ID_CHUNK = 200;
+
+/**
+ * Status and "has any OrderItem" for the Orders whose External_ID_4D__c is in
+ * `extIds`, queried in chunks so the URL stays short. Used by Registration
+ * Import (round 1 / round 2 activation) and Registration Item Import (an
+ * OrderItem can only be added to a Draft Order). Ids with no Order are simply
+ * absent from the result.
+ */
+export async function loadOrderStates(
+  base: string,
+  token: string,
+  extIds: string[],
+  logger?: { info: (m: string) => void },
+): Promise<Map<string, OrderState>> {
+  const map = new Map<string, OrderState>();
+  const unique = [...new Set(extIds)];
+  for (let i = 0; i < unique.length; i += ORDER_QUERY_ID_CHUNK) {
+    const list = unique
+      .slice(i, i + ORDER_QUERY_ID_CHUNK)
+      .map((id) => `'${id.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`)
+      .join(",");
+    const rows = await sfQueryAll<{
+      Id: string;
+      Status: string;
+      External_ID_4D__c: string;
+      OrderItems: { totalSize: number } | null;
+    }>(
+      base,
+      token,
+      "SELECT Id, Status, External_ID_4D__c, (SELECT Id FROM OrderItems LIMIT 1) " +
+        `FROM Order WHERE External_ID_4D__c IN (${list})`,
+    );
+    for (const row of rows) {
+      map.set(row.External_ID_4D__c, {
+        id: row.Id,
+        status: row.Status,
+        hasItems: (row.OrderItems?.totalSize ?? 0) > 0,
+      });
+    }
+  }
+  logger?.info(
+    `[Orders] state loaded for ${map.size} of ${unique.length} Order(s) in this window`,
+  );
+  return map;
 }
 
 /** Student_ID_4D__c → PersonEmail (Payment.GroupPayee, same as Registration). */

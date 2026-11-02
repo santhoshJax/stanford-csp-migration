@@ -42,46 +42,43 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-02
-**Status:** at risk — Purchase flows restored to committed state; 41 objects mapped. UAT field creation & architect decision still blocking.
+**Status:** at risk — Code complete with REG- prefixes; architect decision on Order marking still blocks full run
 
 **Done this session**
-- Verified purchase flows match last committed code (89984d6)
-- Removed uncommitted file rename from local copy
-- Confirmed split purchase flow approach abandoned — three flows, four runs
+- Verified all four places now use REG- prefix for registration orders/cards/payments
+- Confirmed no raw registration keys remain in source code
+- Validated 146 tests pass, code compiles cleanly
 
 **Open items**
-- Create PricebookEntry.External_ID_4D__c field (Text, External ID, Unique) in UAT org
-- Verify both price books active in UAT org before purchase load sequence
-- Architect decides: Registration Orders field (Balance_Due__c vs BalanceDue__c)
-- Confirm all 41 objects and fields exist in UAT org
-- Run purchase load: Inventory → Purchase (off) → Item → Purchase (on)
-- Open PR from stanford-csp-orchestrate to main
-- Rebuild integrations and import into Prismatic
-- Deploy to Salesforce org
+- Architect decision: Order.Type__c field vs. record type to mark Registration vs. Purchase orders
+- Architect decision: Payments table as sole payment source or other sources exist
+- Architect decision: historical Orders end state (Draft or Activated)
+- Verify UAT org: Student__r.Student_ID_4D__c, Course_Offering__r.External_ID_4D__c field names, price books active
+- Review and merge PR #1 to main
+- Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP before full run
+- Run sf deploy validate against target org
+- Run Deploy session to ship code to target org
 
 **Decisions**
-- Blank Status counts as New in enrollment rule
-- Index version incremented to 2
-- Product2 step: IsActive=FALSE, no price book entries created yet
+- REG- prefix applied to registration orders, cards, payment groups, payments
+- ENR- prefix for registration line items; PIT- for purchase line items
+- registrationExtId() shared function ensures consistent key generation
+- Registration flow two-round: Draft load, then OrderItem load, then Activation
+- Skip Drop, AJST, New, DupEnrollment rows in OrderItem load
 - Product2 upsert keyed on External_ID_4D__c = Course.ID
-- MAX_ROWS=500, POLL_BUDGET_MS=10min, MAX_JOB_HANDOFFS=6
-- ENR- prefix for Enrollment ID, PUR- for Purchase orders
-- TEST_MODE=false for next full run
-- Three purchase flows, four runs (no split)
+- Index version incremented to 2
+- UAT has no registration orders yet—no re-keying needed
 
 **Blockers**
-- PricebookEntry.External_ID_4D__c field must be created in UAT org
-- Both price books must be active in UAT org before purchase load run
-- Registration Orders field decision still open (Balance_Due__c vs BalanceDue__c)
+- Order marking strategy (Order.Type__c vs. record type) blocks full run—REG-/PUR- prefix currently the only differentiator
+- Architect confirmation needed on payment source scope and historical order end state
 
 **Next**
-- Create PricebookEntry.External_ID_4D__c field in UAT org
-- Verify both price books active in UAT org
-- Get architect decision on Registration Orders field name
-- Confirm all 41 objects and fields exist in UAT org
-- Run purchase load sequence in UAT
-- Open PR to main
-- Schedule Deploy session
+- Architect confirms Order marking decision (field vs. record type), payment source scope, historical order status
+- Verify UAT org: price books active, External_ID_4D__c field exists on PricebookEntry
+- Review and merge PR #1 to main
+- Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP in code
+- Run Deploy session: validate then deploy to target org
 
 **Checked live on 2026-11-02:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-02
@@ -93,15 +90,27 @@
 | Name | Stanford-Data-Migration-Purchase-Orders |
 | Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
 **In its own words (excerpt):**
-The purchase flows are back to exactly what was last committed, and I'm not splitting them.
+The other session's change is on the branch, so there's nothing left for me to change on the purchase side.
 
-**What I checked:**
-- **GitHub:** `stanford-csp-orchestrate` is at `89984d6`. The only commits after our purchase change (`bc96380`) are 5 automatic handoff notes, and none of them touch code.
-- **Local copy:** the split I'd started before you stopped the session had left one uncommitted change on disk. It was a file rename (`purchaseItemFlow.ts` to `purchaseItems.ts`) with no content changes, and it had never been committed or pushed. I undid it, so the local copy now has no changes and matches the branch.
+**What's on `stanford-csp-orchestrate` now (head `c40191e`, my local copy is updated to match):**
+- Commit `2f98740`, "Prefix Registration external IDs with REG-", covers all four places I listed:
+  - `commerceShared.ts` now has the shared `REG-` prefix and the `registrationExtId()` helper that builds the key.
+  - `registrationFlow.ts` uses `REG-` for card, Order and Payment. PaymentGroup reuses the Order's key, so it gets `REG-` too.
+  - `registrationItemFlow.ts` finds each line item's Order by `REG-` + Registration ID.
+  - `paymentsFlow.ts` finds and checks PaymentGroups by `REG-` + Registration ID.
+- I searched the source and found nowhere that still builds or looks up a raw registration key.
 
-**How it stays:** three purchase flows, run four times: Purchase Inventory, then Purchase with activation off, then Purchase Item, then Purchase again with **Activate Purchase Orders** on.
+**External ID prefixes in the code now:**
 
-**About the payment source file:** you're right. The Purchase flows read only the Purchase file. The separate Payments flow (flow 29) is the one that reads the payment source file.
+| Records | Prefix |
+|---|---|
+| Registration orders, cards, payment groups, payments | `REG-` |
+| Purchase orders, cards, payment groups, payments | `PUR-` |
+| Registration line items | `ENR-` |
+| Purchase line items | `PIT-` |
+| Payments flow records | `PAY-` |
 
-Sources: checked live: the local checkout and the remote `stanford-csp-orchestrate` branch (git status, log, ls-remote) · not checked: the Salesforce org
+**A correction:** last turn I said registration orders were already loaded in
+
+_[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->

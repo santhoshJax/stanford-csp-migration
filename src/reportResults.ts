@@ -10,6 +10,8 @@
  * Sheet title  : "Stanford CSP - {flowName} - {objectName} - {date} {time}"
  * Success tab  : all input fields  +  Salesforce Record ID  +  Action (Created/Updated)
  * Errors tab   : all input fields  +  Error Message
+ * Skipped tab  : all input fields  +  Skip Reason  (rows a flow did not send;
+ *                optional, see PerObjectReportParams.skipped)
  */
 
 import axios, { AxiosError } from "axios";
@@ -61,6 +63,59 @@ export interface PerObjectReportParams {
   folderId?: string;
   /** Pass the ID from the previous iteration to append rather than create */
   spreadsheetId?: string;
+  /**
+   * Optional rows the flow skipped before the Bulk job (never sent to
+   * Salesforce). Written to a "Skipped" tab: the source input columns plus a
+   * "Skip Reason" column. Build it with buildSkippedTab().
+   */
+  skipped?: SkippedTabData;
+}
+
+/** Rows for the "Skipped" tab: headers include the trailing Skip Reason column. */
+export interface SkippedTabData {
+  headers: string[];
+  rows: string[][];
+  /** Defaults to "Skipped". */
+  tabName?: string;
+}
+
+/** One source row a flow chose not to send, and why. */
+export interface SkippedRow {
+  row: Record<string, string | undefined>;
+  reason: string;
+}
+
+export const SKIP_REASON_COLUMN = "Skip Reason";
+
+/**
+ * Turns skipped source rows into "Skipped" tab data: every input column (in
+ * source-file order, from `sourceHeaders`) followed by "Skip Reason". When the
+ * header list is empty the columns are taken from the rows themselves, in the
+ * order first seen. Pure — tested directly.
+ */
+export function buildSkippedTab(
+  sourceHeaders: string[],
+  skipped: SkippedRow[],
+): SkippedTabData {
+  const columns = sourceHeaders.filter((h) => h && h !== SKIP_REASON_COLUMN);
+  if (columns.length === 0) {
+    const seen = new Set<string>();
+    for (const entry of skipped) {
+      for (const key of Object.keys(entry.row)) {
+        if (!seen.has(key)) {
+          seen.add(key);
+          columns.push(key);
+        }
+      }
+    }
+  }
+  return {
+    headers: [...columns, SKIP_REASON_COLUMN],
+    rows: skipped.map((entry) => [
+      ...columns.map((c) => entry.row[c] ?? ""),
+      entry.reason,
+    ]),
+  };
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -999,8 +1054,10 @@ async function addObjectTabPair(
 export async function createPerObjectResultsSheet(
   params: PerObjectReportParams,
 ): Promise<{ url: string; spreadsheetId: string }> {
-  const { flowName, objects, accessToken, folderId } = params;
+  const { flowName, objects, accessToken, folderId, skipped } = params;
   const auth = { Authorization: `Bearer ${accessToken}` };
+  const skippedTab = skipped?.tabName ?? SKIPPED_TAB;
+  const hasSkipped = !!skipped && skipped.rows.length > 0;
 
   // Parse CSVs up-front
   const parsed = objects
@@ -1089,6 +1146,16 @@ export async function createPerObjectResultsSheet(
       }
     }
 
+    if (skipped && skipped.rows.length > 0) {
+      await appendSkippedRecords(
+        sid,
+        accessToken,
+        skipped.headers,
+        skipped.rows,
+        skippedTab,
+      );
+    }
+
     return {
       url: `https://docs.google.com/spreadsheets/d/${sid}`,
       spreadsheetId: sid,
@@ -1114,6 +1181,9 @@ export async function createPerObjectResultsSheet(
     { addSheet: { properties: { title: `${obj.name} - Success` } } },
     { addSheet: { properties: { title: `${obj.name} - Errors` } } },
   ]);
+  if (hasSkipped) {
+    addRequests.push({ addSheet: { properties: { title: skippedTab } } });
+  }
 
   if (addRequests.length > 0) {
     await axios.post(
@@ -1140,6 +1210,12 @@ export async function createPerObjectResultsSheet(
           : [["(no records)"]],
     },
   ]);
+  if (hasSkipped && skipped) {
+    writeData.push({
+      range: `${skippedTab}!A1`,
+      values: [skipped.headers, ...skipped.rows],
+    });
+  }
 
   if (writeData.length > 0) {
     await axios.post(
@@ -1149,8 +1225,9 @@ export async function createPerObjectResultsSheet(
     );
   }
 
-  // Delete the default Sheet1
-  if (defaultSheetId !== undefined) {
+  // Delete the default Sheet1 — only when another tab exists (a spreadsheet
+  // must keep at least one sheet, e.g. a window where nothing was sent).
+  if (defaultSheetId !== undefined && addRequests.length > 0) {
     await axios.post(
       `${SHEETS_BASE}/${spreadsheetId}:batchUpdate`,
       { requests: [{ deleteSheet: { sheetId: defaultSheetId } }] },

@@ -241,7 +241,8 @@ export const configPages = {
         dataType: "string",
         description:
           "Google Drive file ID of the TSV that contains Enrollment records. " +
-          "Must run after Student, Course, and Registration flows.",
+          "Must run after Student, Course, and Registration flows. Also read by Registration Item Import, " +
+          "which creates one OrderItem per enrollment on the Draft registration Orders.",
       }),
       "Enrollment Waiver File ID": configVar({
         stableKey: "ew001122-3344-4556-7788-99aabbccddee",
@@ -308,7 +309,19 @@ export const configPages = {
         dataType: "string",
         description:
           "Google Drive file ID of the TSV that contains Registration records. " +
-          "Migrates CardPaymentMethod, Order, and Payment records. Must run after Student flow.",
+          "Migrates CardPaymentMethod, Order (Draft, with the order price book), PaymentGroup, and Payment records. " +
+          "Must run after the Student flow and the Course imports.",
+      }),
+      "Activate Registration Orders": configVar({
+        stableKey: "ract2026-1102-4c02-8c20-1b2c3d4e5f12",
+        dataType: "boolean",
+        default: "false",
+        description:
+          "Round 2 of Registration Import. Leave false for the first run (Orders are " +
+          "created Draft), run Registration Item Import (it uses Enrollment File ID), " +
+          "then set true and run Registration Import again: every Draft registration " +
+          "Order with at least one line item is changed to Activated. Orders without " +
+          "line items stay Draft.",
       }),
       "Purchase Inventory File ID": configVar({
         stableKey: "pinv2026-1014-4b01-8c20-1b2c3d4e5f01",
