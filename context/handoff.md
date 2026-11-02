@@ -42,16 +42,18 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-02
-**Status:** at risk — Code validated: price book logic blocks >1 custom book. UAT setup & architect decision still blocking.
+**Status:** at risk — Mapped 31 flows → 40 objects; UAT field creation & architect decision still blocking purchase load run.
 
 **Done this session**
-- Validated price book resolution logic: Standard always included, max 1 custom book enforced, run stops before any save if violated
+- Scanned codebase: 31 flows writing to ~40 Salesforce objects (custom + standard + Education Cloud)
+- Built object-to-flow map from stanford-csp-orchestrate branch 7c3a691
 
 **Open items**
 - Create PricebookEntry.External_ID_4D__c field (Text, External ID, Unique) in UAT org
 - Verify both price books active in UAT org before purchase load sequence
-- Run purchase load: Inventory → Purchase (Activate off) → Item → Purchase (Activate on)
 - Architect decides: Registration Orders field (Balance_Due__c vs BalanceDue__c)
+- Verify all ~40 objects and their External_ID_4D__c fields exist in UAT org
+- Run purchase load: Inventory → Purchase (Activate off) → Item → Purchase (Activate on)
 - Open PR from stanford-csp-orchestrate to main once architect approves and UAT validation complete
 - Rebuild integrations and import into Prismatic
 - Deploy to Salesforce org
@@ -73,11 +75,11 @@
 
 **Next**
 - Create PricebookEntry.External_ID_4D__c field in UAT org
-- Verify both price books active in UAT org
+- Verify all ~40 objects and External_ID_4D__c fields exist in UAT org
 - Get architect decision on Registration Orders field
+- Verify both price books active in UAT org
 - Run purchase load sequence in UAT
 - Open PR to main
-- Schedule Deploy session
 
 **Checked live on 2026-11-02:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-02
@@ -89,15 +91,36 @@
 | Name | Stanford-Data-Migration-CourseEnhancement-Products |
 | Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-**Short answer: the run stops at the start of the first window, before any course, offering or product is saved.** Giving two custom books doesn't mean they get used "instead of" Standard. The Standard book is always added, so the flow would end up with Standard plus two custom books, and the code doesn't allow more than one custom book.
+The integration has 31 flows, and between them they write to about 40 Salesforce objects. I took this from the latest code on `stanford-csp-orchestrate` (`7c3a691`). Objects ending in `__c` are custom; the rest are standard or Education Cloud / Commerce objects.
 
-**What happens, step by step** (this is `resolvePriceBooks` in `courseUtils.ts` on `stanford-csp-orchestrate`). Say you set `Price Books` = `StanfordContinuingStudies Price Book,Another Custom Book`:
+## People and organisations
+| Flow | Objects written |
+|---|---|
+| Student | `Account` (Person Accounts) |
+| Account Login | `User`, `PermissionSetAssignment` |
+| Instructor / Associate | `Account`, `PersonEmployment` |
+| Department | `Account` (business accounts) |
 
-1. **It looks up both names.** If either one isn't found or is inactive, the run stops on that error first.
-2. **It finds the Standard Price Book anyway.** It isn't in your list, so the flow adds it and logs a warning. The Standard book can't be left out.
-3. **It counts the custom books.** There are 2, so the run stops with this error:
-   > `[Price Books] Only one custom price book is supported, but 2 are listed: "StanfordContinuingStudies Price Book", "Another Custom Book". Entry keys are Course.ID for the custom book and STD-<Course.ID> for Standard, so a second custom book would overwrite the first.`
-4. **Nothing is written** in that window. No Le
+## Academic calendar
+| Flow | Objects written |
+|---|---|
+| Quarter / Quarter Before 2013 | `AcademicYear`, `AcademicTerm`, `AcademicSession` |
+
+## Courses
+| Flow | Objects written |
+|---|---|
+| Course All / 2-Year / 5-Year | `LearningCourse`, `CourseOffering`, `Product2`, `PricebookEntry` (Standard + custom book) |
+| Tuition Rule | `Tuition_Rule__c` |
+| Unit Rule | `Unit_Rule__c` |
+| Course Associate Instructor | `Course_Offering_Staff_Detail__c` |
+| Course Other Cost | `CourseOfferingExpense__c` |
+| Course Timecard | `Course_Offering_Staff_Timecard__c` |
+| Coursework | `Syllabus__c` |
+| Textbook | `Textbook__c` |
+
+## Enrollments
+| Flow | Objects written |
+|-
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
