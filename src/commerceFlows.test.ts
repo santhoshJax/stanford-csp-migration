@@ -217,7 +217,7 @@ describe("Purchase Item → OrderItem", () => {
     const skips = newSkips();
     const i = mapToOrderItem(row, caches, skips, logger);
     expect(i).toMatchObject({
-      External_ID_4D__c: "PI-101",
+      External_ID_4D__c: "PIT-101",
       "Order.External_ID_4D__c": "PUR-68",
       PricebookEntryId: "01u000000000001",
       UnitPrice: 10,

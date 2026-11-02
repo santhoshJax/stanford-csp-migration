@@ -920,7 +920,7 @@ Upsert key: `External_ID_4D__c` = source row ID
 |---|---|---|---|
 | Purchase Inventory | Product2, PricebookEntry (Standard Price Book, insert-only) | `{id}` on Product2 | — |
 | Purchase | CardPaymentMethod, Order (Draft, Standard Price Book), PaymentGroup, Payment | `PUR-{id}` | Student |
-| Purchase Item | OrderItem | `PI-{id}` (Order via `Order.External_ID_4D__c = PUR-{Purchase_ID}`; product via `Product2.Name` → PricebookEntry) | Purchase Inventory, Purchase |
+| Purchase Item | OrderItem | `PIT-{id}` (Order via `Order.External_ID_4D__c = PUR-{Purchase_ID}`; product via `Product2.Name` → PricebookEntry) | Purchase Inventory, Purchase |
 | Payments | Payment, Refund (Referenced) | `PAY-{id}` (PaymentGroup via `External_ID_4D__c = Registration_ID`) | Student, Registration |
 
 External IDs are **prefixed** because Registration writes the raw `Registration.ID` into the same objects and the id ranges overlap. Purchase / Purchase Item / Payments reuse Registration's windowed-stream + 4-phase (CardPaymentMethod → Order → PaymentGroup → Payment) pattern.
@@ -979,7 +979,7 @@ Every object has a `External_ID_4D__c` custom field as the upsert key. The namin
 | `NOISBN_{slug}` | Textbook__c (no ISBN) | `NOISBN_intro-to-python_smith` |
 | (raw 4D `Student_ID`) | User (`Federation_Identifier__c` — not `External_ID_4D__c`) | Account Login |
 | `PUR-{id}` | Order, CardPaymentMethod, PaymentGroup, Payment (Purchase) | `PUR-2` |
-| `PI-{id}` | OrderItem (Purchase Item) | `PI-101` |
+| `PIT-{id}` | OrderItem (Purchase Item) | `PIT-101` |
 | `PAY-{id}` | Payment, Refund (Payments) | `PAY-1` |
 | (raw Registration ID) | Order, CardPaymentMethod, PaymentGroup, Payment (Registration) | `560585` |
 | (raw 4D ID) | All other objects | `"6001"` |

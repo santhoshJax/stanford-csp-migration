@@ -8,7 +8,7 @@
  * Purchase Import (the Orders, which carry Pricebook2Id = the order price
  * book: first custom book in the "Price Books" config var).
  *
- * Upsert key: OrderItem.External_ID_4D__c = "PI-" + Purchase_Item.ID.
+ * Upsert key: OrderItem.External_ID_4D__c = "PIT-" + Purchase_Item.ID. (PIT- chosen 2026-11-02.)
  * (Prefixed so a later Registration OrderItem load can't collide with it.)
  *
  * Pre-flight caches (built once per window, before the Bulk job):
@@ -60,7 +60,7 @@ import { purchaseExtId } from "./purchaseFlow";
 
 const SF_ORDER_ITEM = "OrderItem";
 const FLOW_NAME = "Purchase Item Import";
-export const ORDER_ITEM_EXT_PREFIX = "PI-";
+export const ORDER_ITEM_EXT_PREFIX = "PIT-";
 
 const MAX_ROWS = 25_000;
 const TEST_MODE = true;
