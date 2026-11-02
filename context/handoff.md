@@ -42,12 +42,12 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-02
-**Status:** at risk — Registration patch ready; Order type marking decision needed. Awaiting architect on 3 defaults + ATE, and org confirmation on fields & pric…
+**Status:** at risk — Purchase Item prefix changed to PIT-; code committed & pushed. Awaiting architect on registration defaults, Order.Type decision, and UAT or…
 
 **Done this session**
-- Confirmed Order external ID prefixes: Registration uses raw ID, Purchase uses PUR- prefix
-- Confirmed line item external ID prefix is PI- for purchase items, ENR- for registration (no collision)
-- Identified gap: no Order.Type or record type marking the two order types; recommended standard Order.Type field
+- Changed purchase line item prefix from PI- to PIT- in purchaseItemFlow.ts, tests, and ARCHITECTURE.md
+- Committed 3 files (b48b665) and pushed to stanford-csp-orchestrate branch
+- Verified project compiles with no errors; all 48 tests pass
 
 **Open items**
 - Apply registration-orderitems-draft-activate.patch via Build session
@@ -61,7 +61,7 @@
 
 **Decisions**
 - Registration flow two-round: Draft load, then OrderItem load, then Activation
-- OrderItem key: ENR-{Enrollment.ID} for registration; PI-{Purchase_Item.ID} for purchase
+- OrderItem key: ENR-{Enrollment.ID} for registration; PIT-{Purchase_Item.ID} for purchase
 - Order external ID: raw Registration ID for registration orders; PUR-{Purchase.ID} for purchase orders
 - TotalAmount unmapped; Salesforce calculates from line items
 - Skip Drop, AJST, New, DupEnrollment rows in OrderItem load
@@ -70,23 +70,22 @@
 - Product2 upsert keyed on External_ID_4D__c = Course.ID
 
 **Blockers**
-- Patch must be applied via Build session (General session cannot push code)
-- Order.Type marking decision needed before full run (standard field vs. record types)
+- Registration patch not yet applied (requires Build session)
+- Order.Type marking decision needed before full run
 - Architect confirmation needed on 3 defaults and ATE decision
-- PricebookEntry.External_ID_4D__c field must be created in UAT org
-- Both price books must be active in UAT org before purchase load run
+- PricebookEntry.External_ID_4D__c field must exist in UAT org
+- Both price books must be active in UAT org
 
 **Next**
-- Decide Order.Type marking approach and communicate choice
+- Open PR on GitHub for stanford-csp-orchestrate → review → merge to main
+- Schedule Deploy session to ship merged code to Salesforce
 - Post Slack message to architect with 3 defaults + ATE decision request
-- Start Build session to apply registration-orderitems-draft-activate.patch
-- If Order.Type chosen: add one-line constant to both flows; update existing registration orders in UAT
-- Extend patch or follow-up to add Skipped tab in reportResults.ts
-- Verify field names and price book status in UAT org
-- Turn off test flags in both flows
-- Run purchase load sequence in UAT
+- Decide Order.Type marking approach (standard field vs. record types) and communicate
+- Verify UAT org: price books active, PricebookEntry.External_ID_4D__c field exists, field names correct
+- Apply registration-orderitems-draft-activate.patch in next Build session
+- Turn off test flags and run purchase load sequence in UAT
 
-**Checked live on 2026-11-02:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-11-02:** the repository
 ### Last session — 2026-11-02
 | | |
 |---|---|
@@ -96,23 +95,24 @@
 | Name | Stanford-Data-Migration-Purchase-Orders |
 | Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
 **In its own words (excerpt):**
-I checked the code on `stanford-csp-orchestrate` (commit `89984d6`) and changed nothing. Short answers: yes to 1, no to 2 (the prefix is `PI-`, not `PIT-`), and nothing marks the two Order types yet.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch stanford-csp-orchestrate)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## 1. Order external IDs: yes, purchase orders use `PUR-`
+The `PIT-` change is committed and pushed to `stanford-csp-orchestrate` as commit `b48b665`. The GitHub branch now points to that commit, and `purchaseItemFlow.ts` on GitHub shows `ORDER_ITEM_EXT_PREFIX = "PIT-"`. Nothing went to `main` or Salesforce.
 
-| Order source | `Order.External_ID_4D__c` |
-|---|---|
-| Registration | The raw Registration ID, e.g. `1234` |
-| Purchase | `PUR-` + Purchase ID, e.g. `PUR-1234` |
+**What's in the commit (3 files, 5 lines):**
+- `src/purchaseItemFlow.ts`: purchase line items are now keyed `PIT-` + Purchase_Item ID, e.g. `PIT-101`.
+- `src/commerceFlows.test.ts`: the test now expects `PIT-101`.
+- `ARCHITECTURE.md`: both tables that listed the prefix now say `PIT-{id}`.
 
-Both ID ranges start at 1, so without the prefix a purchase would overwrite the registration order with the same number. Registration keeps raw IDs because they're already loaded in UAT. The same `PUR-` prefix goes on the purchase CardPaymentMethod, PaymentGroup and Payment records.
+**Checks before committing:** the project compiles with no errors, and all 48 purchase and course price book tests pass. I didn't re-run the full suite this time.
 
-## 2. Line item external IDs: the prefix is `PI-`, not `PIT-`
-
-- **Purchase line items** use `PI-` + Purchase_Item ID, e.g. `PI-5678`.
-- **Registration line items** don't exist on the branch yet. The registration flow says it creates no OrderItems. The registration line item change from the other session is still an unapplied patch, and its notes say it would key them as `ENR-` + Enrollment ID.
-
-So the two kinds of line item can't collide: one starts `PI-` and the other `ENR-`. Student
+**Uncha
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
