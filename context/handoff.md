@@ -42,23 +42,23 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-02
-**Status:** at risk — Patch applied & tested cleanly; Build session needed to commit/push/PR. Architect decisions & UAT verification still pending.
+**Status:** on track — Patch committed & pushed to stanford-csp-orchestrate (eaf36e5). PR auto-added. Awaiting architect decisions & UAT field verification.
 
 **Done this session**
-- Patch applied to stanford-csp-orchestrate (conflict resolved: PI-→PIT-, added ENR- rows)
-- tsc & jest passed (141 pass, 5 Student-flow tests ignored as expected)
-- Skipped tab implemented for Registration Item flow with skip reasons
-- registrationFlow.ts header refreshed with architect open items listed
+- Patch committed to stanford-csp-orchestrate branch (eaf36e5)
+- Pushed to GitHub remote
+- Skipped tab completed for both Registration Item and Purchase Item flows
+- Type check & 143 tests passing (5 known Student-flow tests ignored)
 
 **Open items**
-- Commit & push patch via Build session, then open PR stanford-csp-orchestrate → main
 - Architect confirms: UnitPrice = Tuition, INCLUDE_DROP_ROWS = false, INCLUDE_ADJUSTMENT_ROWS = false
 - Architect confirms: negative UnitPrice handling in org
 - Architect confirms: ATE population decision (Sep 28 decision vs. mapping doc)
 - Decide: use standard Order.Type field or record types to mark Registration vs. Purchase orders
-- Add Skipped tab to reportResults.ts for Purchase Item flow (Registration Item done)
 - Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP before full run
 - Verify Student__r.Student_ID_4D__c and Course_Offering__r.External_ID_4D__c field names in UAT org
+- Open/refresh PR #1, review, merge to main
+- Run Deploy session to ship code to target org
 
 **Decisions**
 - Registration flow two-round: Draft load, then OrderItem load, then Activation
@@ -71,42 +71,41 @@
 - Product2 upsert keyed on External_ID_4D__c = Course.ID
 
 **Blockers**
-- Patch not yet committed/pushed to GitHub (General session cannot write repo code)
-- Order.Type marking decision needed before full run
 - Architect confirmation needed on 3 defaults and ATE decision
+- Order.Type marking decision needed before full run
 - PricebookEntry.External_ID_4D__c field must exist in UAT org
 - Both price books must be active in UAT org
 
 **Next**
-- Start Build session on stanford-csp-orchestrate to commit patch, push, and open PR to main
 - Post Slack message to architect with 3 defaults + ATE decision request
 - Decide Order.Type marking approach (standard field vs. record types) and communicate
 - Verify UAT org: price books active, PricebookEntry.External_ID_4D__c field exists, field names correct
-- Add Skipped tab for Purchase Item flow (follow-up after Registration Item pattern)
-- Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP when ready for full load
+- Open/refresh PR #1 on GitHub, review, and merge to main
+- Run Deploy session to ship committed code to target org
 
 **Checked live on 2026-11-02:** the repository
 ### Last session — 2026-11-02
 | | |
 |---|---|
-| Type | GENERAL |
+| Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Registration-Enhancements |
-| Session | `422d462b-583e-4819-b0ea-cc287228936d` |
+| Name | Stanford-Data-Migration-Registration-Enhancements- Build |
+| Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-The patch is applied and checked, but I couldn't commit, push or open the PR. This is a General session, which can't change repository code. The patch needs a Build session pointed at `santhoshJax/stanford-csp-migration`. Nothing has been written to GitHub, so the PR (to-do 5) is not done.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch stanford-csp-orchestrate)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## Patch result
-- **Apply:** your patch is built for c837f37, but `stanford-csp-orchestrate` is at 2fadc88. `git apply --check` failed on `ARCHITECTURE.md` only, because the PI- → PIT- rename touched the same lines. The other 7 files applied cleanly with `--3way`.
-- **Conflict fix:** I kept `PIT-` for Purchase Item and added your Registration, Registration Item and `ENR-` rows. I also fixed a stale `"PI-"` mention in the new flow's header comment.
-- **`tsc --noEmit`:** clean.
-- **jest:** 141 pass. The only failures are the 5 Student-flow tests you said to ignore.
-- **Lint:** prettier is clean on the files I touched. One lint error remains in `registrationFlow.ts` (an irregular-whitespace error on an existing BOM-stripping regex); it is in code I didn't touch.
+The commit is pushed to `stanford-csp-orchestrate`. The remote branch head is now `eaf36e5`, which matches my local commit. As you asked, I didn't create a PR or post a comment. PR #1 is still open from this branch, though, so GitHub has added this commit to it automatically.
 
-## To-do status
-1. **Skipped tab: done for Registration Item.**
-   - I added `writeSkippedInputTab` in `reportResults.ts`. It writes Wind
+**Commit `eaf36e5`:** "Add Registration Item OrderItem load and Draft-then-Activate orders" (10 files, +1066 / −25). The message covers:
+- **Registration Import:** Orders now load as Draft with the price book set. A new "Activate Registration Orders" setting runs the second round that activates them. TotalAmount stays unmapped.
+- **New Registration Item Import:** one OrderItem per enrollment, keyed `ENR-{Enrollment.ID}`, with the def
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
