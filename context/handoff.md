@@ -42,20 +42,20 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-02
-**Status:** at risk — 41 objects mapped across 29 flows; code validated. UAT field creation & architect decision still blocking.
+**Status:** at risk — Purchase flows restored to committed state; 41 objects mapped. UAT field creation & architect decision still blocking.
 
 **Done this session**
-- Mapped all 41 Salesforce objects written by 29 flows in load order
-- Confirmed shared objects use prefixed external IDs (PUR-, ENR-) to keep records apart
-- Verified code matches object and field names on stanford-csp-orchestrate branch
+- Verified purchase flows match last committed code (89984d6)
+- Removed uncommitted file rename from local copy
+- Confirmed split purchase flow approach abandoned — three flows, four runs
 
 **Open items**
 - Create PricebookEntry.External_ID_4D__c field (Text, External ID, Unique) in UAT org
 - Verify both price books active in UAT org before purchase load sequence
 - Architect decides: Registration Orders field (Balance_Due__c vs BalanceDue__c)
-- Run purchase load: Inventory → Purchase (Activate off) → Item → Purchase (Activate on)
-- Confirm all 41 objects and fields exist in UAT org (code checked, org not attached)
-- Open PR from stanford-csp-orchestrate to main once architect approves
+- Confirm all 41 objects and fields exist in UAT org
+- Run purchase load: Inventory → Purchase (off) → Item → Purchase (on)
+- Open PR from stanford-csp-orchestrate to main
 - Rebuild integrations and import into Prismatic
 - Deploy to Salesforce org
 
@@ -67,7 +67,7 @@
 - MAX_ROWS=500, POLL_BUDGET_MS=10min, MAX_JOB_HANDOFFS=6
 - ENR- prefix for Enrollment ID, PUR- for Purchase orders
 - TEST_MODE=false for next full run
-- Two order streams: Registration (tuition) and Purchase (non-course items)
+- Three purchase flows, four runs (no split)
 
 **Blockers**
 - PricebookEntry.External_ID_4D__c field must be created in UAT org
@@ -93,28 +93,15 @@
 | Name | Stanford-Data-Migration-Purchase-Orders |
 | Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
 **In its own words (excerpt):**
-The migration loads data into **41 Salesforce objects**: 29 standard and 12 custom. They're written by the 29 flows registered on `stanford-csp-orchestrate`. The table is in run order, and each object is listed under the first flow that writes it.
+The purchase flows are back to exactly what was last committed, and I'm not splitting them.
 
-## People and setup
+**What I checked:**
+- **GitHub:** `stanford-csp-orchestrate` is at `89984d6`. The only commits after our purchase change (`bc96380`) are 5 automatic handoff notes, and none of them touch code.
+- **Local copy:** the split I'd started before you stopped the session had left one uncommitted change on disk. It was a file rename (`purchaseItemFlow.ts` to `purchaseItems.ts`) with no content changes, and it had never been committed or pushed. I undid it, so the local copy now has no changes and matches the branch.
 
-| Flow | Salesforce objects |
-|---|---|
-| 1. Student | Account (Person Account) |
-| 2. Instructor | Account (Person Account), PersonEmployment |
-| 3. Associate | Account (Person Account), PersonEmployment |
-| 4 / 4b. Quarter, Quarter Before 2013 | AcademicYear, AcademicTerm, AcademicSession |
-| 5. Department | Account (business accounts, parent and child) |
-| 6. Unit Rule | Unit_Rule__c |
-| 7. Tuition Rule | Tuition_Rule__c |
-| 22. Account Login | User (portal users) |
-| 21. Alert | RecordAlert |
+**How it stays:** three purchase flows, run four times: Purchase Inventory, then Purchase with activation off, then Purchase Item, then Purchase again with **Activate Purchase Orders** on.
 
-## Courses (Course Import: 2 Year, 5 Year, All Time)
+**About the payment source file:** you're right. The Purchase flows read only the Purchase file. The separate Payments flow (flow 29) is the one that reads the payment source file.
 
-| Flow | Salesforce objects |
-|---|---|
-| 8 / 23 / 24. Course Import | Learning, LearningCourse, Location, CourseOffering, Product2, PricebookEntry, CourseOfferingSchedule, CourseOfferingParticipant (instructor, coordinator, associate). These flows also update the registration open date on AcademicTerm. |
-| 9. Course Associate / Instructor | Course_Offering_Staff_Detail_
-
-_[summary truncated — see the session record for the full text]_
+Sources: checked live: the local checkout and the remote `stanford-csp-orchestrate` branch (git status, log, ls-remote) · not checked: the Salesforce org
 <!-- orchestrate:session-state:end -->
