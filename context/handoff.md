@@ -42,22 +42,21 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-02
-**Status:** on track — Patch committed & pushed (eaf36e5). Awaiting architect decisions on defaults, ATE, Order.Type marking, and prefix strategy.
+**Status:** on track — REG- prefix scope mapped: 10–15 code lines, 8 test assertions, docs. Awaiting architect decision to proceed.
 
 **Done this session**
-- Verified external ID prefix usage in codebase (PUR-, PIT-, ENR-, PAY- confirmed)
-- Analyzed prefix necessity given ID ranges and shared key fields
-- Documented rationale for keeping PUR- prefix
+- Mapped exact scope of REG- prefix addition: 3 code files, 2 test files, docs
+- Verified Purchase/PIT/Enrollment flows unaffected by REG- change
+- Confirmed ATE and data cleanup out of scope for this decision
 
 **Open items**
 - Architect confirms: UnitPrice = Tuition, INCLUDE_DROP_ROWS = false, INCLUDE_ADJUSTMENT_ROWS = false
 - Architect confirms: negative UnitPrice handling in org
 - Architect confirms: ATE population decision (Sep 28 decision vs. mapping doc)
 - Decide: use standard Order.Type field or record types to mark Registration vs. Purchase orders
-- Decide: keep PUR- prefix on purchase orders or drop it (impacts Order.External_ID_4D__c disambiguation)
-- If dropping PUR-, verify Payments flow and other lookups don't rely on it
+- Decide: add REG- prefix to Registration orders (consistency & record type marking) or keep raw IDs
+- Verify UAT org: price books active, PricebookEntry.External_ID_4D__c field exists, field names correct
 - Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP before full run
-- Verify Student__r.Student_ID_4D__c and Course_Offering__r.External_ID_4D__c field names in UAT org
 
 **Decisions**
 - Registration flow two-round: Draft load, then OrderItem load, then Activation
@@ -72,15 +71,14 @@
 **Blockers**
 - Architect confirmation needed on 3 defaults and ATE decision
 - Order.Type marking decision needed before full run
-- Prefix strategy decision (PUR-, PIT-) needed before full run
+- REG- prefix decision: add for consistency/marking or keep raw IDs (ID ranges don't require it)
 
 **Next**
-- Post Slack message to architect with 3 defaults + ATE decision request
-- Decide Order.Type marking approach (standard field vs. record types) and communicate
-- Decide external ID prefix strategy: keep PUR-/PIT- or drop; if dropping, verify Payments flow and other lookups
-- Verify UAT org: price books active, PricebookEntry.External_ID_4D__c field exists, field names correct
+- Architect decides: REG- prefix yes/no; if yes, proceed with 10–15 line change
+- Post Slack message to architect with 3 defaults + ATE + Order.Type + prefix decisions
+- If REG- approved: make change, run tsc and jest, commit and push to stanford-csp-orchestrate
 - Open/refresh PR #1 on GitHub, review, and merge to main
-- Run Deploy session to ship committed code to target org
+- Run Deploy session to ship code to target org
 
 **Checked live on 2026-11-02:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-02
@@ -89,23 +87,26 @@
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Purchase-Orders |
-| Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
+| Name | Stanford-Data-Migration-Registration-Enhancements- Build |
+| Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-You're right. With those ranges, the prefixes aren't needed to keep the records apart today. Registration IDs (20044 to 592436118) and purchase IDs (1 to under 500) don't overlap, so a raw purchase ID can't overwrite a registration order.
+I checked the code: keeping both prefixes is a smaller change than it sounds. `PUR-` is already built in all the Purchase flows, so only the Registration side needs work, in **3 code files, 2 test files and the docs**.
 
-One correction first. **The code on this branch doesn't use a `REG-` prefix.** I checked `stanford-csp-orchestrate` (head `2bff428`), and registration orders are keyed on the raw Registration ID. If `REG-` is used, it's in a flow or patch that isn't on this branch. The prefixes in the code today are:
+## What changes
 
-| Records | External ID |
-|---|---|
-| Registration orders and their card, payment group and payment records | raw Registration ID |
-| Purchase orders and their card, payment group and payment records | `PUR-` + Purchase ID |
-| Purchase line items | `PIT-` + Purchase_Item ID |
-| Payments flow records | `PAY-` + Payment ID |
-| Enrollments (CourseOfferingParticipant) | `ENR-` + Enrollment ID |
+**1. `commerceShared.ts`: one new shared helper**
+- Add `REGISTRATION_EXT_PREFIX = "REG-"` and a `registrationExtId(id)` function, the same way `purchaseFlow.ts` does it for `PUR-`. All three flows then use the same rule instead of each adding `"REG-"` by hand.
 
-**Why I still lean towards keeping `PUR-`**
-1. **The ranges come from the data, not from a rule.** Nothing in 4D stops the purchase and registration ID sequences from running into each other later, or a re-export from bringing in different numbers. The prefix st
+**2. `registrationFlow.ts`: the writer (3 lines)**
+- `mapToCardPaymentMethod` (line 642), `mapToOrder` (line 696) and `mapToPayment` (line 865) write `REG-{ID}` instead of the raw ID.
+- Everything else follows on its own, because it reuses the keys from step 1:
+  - the PaymentGroup key (line 1399) comes from the Order results, so it becomes `REG-` too;
+  - matching each Payment to its PaymentGroup (line 1440) compares two keys that are now both `REG-`;
+  - the round-2 activation lookup (`loadOrderStates`, line 1344) uses the Order keys.
+
+**3. `registrationItemFlow.ts`: Order lookup**
+- Line 257 changes to `"Order.External_ID_4D__c": registrationExtId(registrationId)`.
+- Line 362 (the order-s
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
