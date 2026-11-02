@@ -42,10 +42,12 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-02
-**Status:** blocked — I checked the sample (it's 99 rows, not 100) against the Registration Import code on the branch (`044eacc`).
+**Status:** blocked — Branch up to date at c40191e; PR #1 ready; architect decisions still needed on Order marking & payments
 
 **Done this session**
-- I checked the sample (it's 99 rows, not 100) against the Registration Import code on the branch (`044eacc`). All 99 rows are dated 3/30–4/1/2026, so they're all inside the 2-year cutoff of `2024-10-06`. The money columns also add up on eve…
+- Verified branch is up to date with remote (c40191e)
+- Confirmed no uncommitted changes since REG- prefix commit (2f98740)
+- Confirmed PR #1 ready to merge once architect approves
 
 **Open items**
 - Architect decision: Order.Type__c field vs. record type to mark Registration vs. Purchase orders
@@ -75,7 +77,6 @@
 - Review PR #1 on GitHub and merge to main once architect confirms decisions
 - Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP in code before Deploy
 - Run Deploy session: validate against target org, then deploy to ship code live
-- Verify UAT org field names and price book setup before data load
 
 **Checked live on 2026-11-02:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-02
@@ -87,20 +88,11 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-I checked the sample (it's 99 rows, not 100) against the Registration Import code on the branch (`044eacc`). All 99 rows are dated 3/30–4/1/2026, so they're all inside the 2-year cutoff of `2024-10-06`. The money columns also add up on every row: Courses_Subtotal + Reg_Fee + Discount_Amt + Adjustment − CC_Amt − Check_Amt = Balance_Due. Most rows load as expected, but I found two likely bugs, two places where a value gets dropped, and one design gap.
+Yes, the branch is up to date now. My local copy was one commit behind `stanford-csp-orchestrate` on GitHub. That commit was `c40191e`, the automatic handoff-notes update that ran when the last session ended, and it only changed `context/handoff.md`. I fast-forwarded the local copy to match it.
 
-## What gets created from these 99 rows
+- **Against the remote branch:** they match exactly, at `c40191e`.
+- **Against `main`:** nothing is missing from `main`, so no rebase is needed. The branch is 118 commits ahead, and PR #1 is still open for those commits.
+- **Uncommitted changes:** none. No code has changed since the `REG-` prefix commit (`2f98740`), as you asked.
 
-| Row type | Rows | Order | Card record | Payment group | Payment |
-|---|---|---|---|---|---|
-| Paid with a card (including 2 partly STAP-covered: $35 and $31) | 55 | 55 | 55 | 55 | 55 |
-| Drop rows ("Drop-Reg for: …") | 38 | 38 | 0 (no card details) | 38 | 0 (CC_Amt is 0) |
-| STAP drop rows (no billing at all) | 2 | 2 | 0 | 2 | 0 |
-| NOFEE (STAP covers everything) | 3 | 3 | 0 | 3 | 0 |
-| Adjustment (592436039, CC_Amt −165) | 1 | 1 | 0 | 1 | 1, a **negative** $165 "Capture" |
-| **Total** | **99** | **99** | **55** | **99** | **56** |
-
-Discount types map cleanly: `65+` → Senior 65+, `STAP` → STAP Benefit, `SAA` → SAA Member, and `Teacher` and `CSP Full` match as they are. `not` is treated as no d
-
-_[summary truncated — see the session record for the full text]_
+Sources: checked live: the repository (fetched from GitHub and compared with the remote branch and `main`) · not checked: the Salesforce org (none attached)
 <!-- orchestrate:session-state:end -->
