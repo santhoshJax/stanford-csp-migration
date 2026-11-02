@@ -42,21 +42,22 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-02
-**Status:** on track — REG- prefix scope mapped: 10–15 code lines, 8 test assertions, docs. Awaiting architect decision to proceed.
+**Status:** at risk — Code ready for REG- prefix; UAT data migration risk blocks full run
 
 **Done this session**
-- Mapped exact scope of REG- prefix addition: 3 code files, 2 test files, docs
-- Verified Purchase/PIT/Enrollment flows unaffected by REG- change
-- Confirmed ATE and data cleanup out of scope for this decision
+- Mapped all code changes needed to add REG- prefix (4 files, ~10 lines)
+- Identified test updates required (registrationItemFlow.test.ts, commerceFlows.test.ts)
+- Documented data risk: existing UAT records keyed on raw IDs will duplicate if prefix applied
 
 **Open items**
 - Architect confirms: UnitPrice = Tuition, INCLUDE_DROP_ROWS = false, INCLUDE_ADJUSTMENT_ROWS = false
 - Architect confirms: negative UnitPrice handling in org
 - Architect confirms: ATE population decision (Sep 28 decision vs. mapping doc)
 - Decide: use standard Order.Type field or record types to mark Registration vs. Purchase orders
-- Decide: add REG- prefix to Registration orders (consistency & record type marking) or keep raw IDs
-- Verify UAT org: price books active, PricebookEntry.External_ID_4D__c field exists, field names correct
+- Decide: apply REG- prefix to registration orders or keep raw IDs (impacts UAT data already loaded)
+- If applying REG- prefix: re-key or delete/reload existing registration records in UAT org
 - Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP before full run
+- Verify Student__r.Student_ID_4D__c and Course_Offering__r.External_ID_4D__c field names in UAT org
 
 **Decisions**
 - Registration flow two-round: Draft load, then OrderItem load, then Activation
@@ -69,14 +70,16 @@
 - Product2 upsert keyed on External_ID_4D__c = Course.ID
 
 **Blockers**
+- REG- prefix decision: code changes ready but UAT has existing records on raw IDs—applying prefix will create duplicates unless records are re-keyed or deleted first
 - Architect confirmation needed on 3 defaults and ATE decision
 - Order.Type marking decision needed before full run
-- REG- prefix decision: add for consistency/marking or keep raw IDs (ID ranges don't require it)
 
 **Next**
-- Architect decides: REG- prefix yes/no; if yes, proceed with 10–15 line change
-- Post Slack message to architect with 3 defaults + ATE + Order.Type + prefix decisions
-- If REG- approved: make change, run tsc and jest, commit and push to stanford-csp-orchestrate
+- Decide: apply REG- prefix and handle UAT data (re-key or delete/reload), or keep raw IDs for registration orders
+- If REG- approved: implement 4 code changes + test updates, verify UAT data migration plan
+- Post Slack message to architect with 3 defaults + ATE decision request + prefix/UAT data decision
+- Decide Order.Type marking approach (standard field vs. record types) and communicate
+- Verify UAT org: price books active, PricebookEntry.External_ID_4D__c field exists, field names correct
 - Open/refresh PR #1 on GitHub, review, and merge to main
 - Run Deploy session to ship code to target org
 
@@ -87,26 +90,20 @@
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Registration-Enhancements- Build |
-| Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
+| Name | Stanford-Data-Migration-Purchase-Orders |
+| Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
 **In its own words (excerpt):**
-I checked the code: keeping both prefixes is a smaller change than it sounds. `PUR-` is already built in all the Purchase flows, so only the Registration side needs work, in **3 code files, 2 test files and the docs**.
+I've finished checking the code and nothing has changed. If you keep both prefixes, **the purchase side is already done**: `PUR-` and `PIT-` are in place, and none of the purchase flows need changes. All the work is in adding `REG-` to the registration side. Three flows and their tests need updating, plus one data step in UAT.
 
-## What changes
+I checked the latest `stanford-csp-orchestrate` (`1bdc854`). It now includes the Registration Item flow from commit `eaf36e5`.
 
-**1. `commerceShared.ts`: one new shared helper**
-- Add `REGISTRATION_EXT_PREFIX = "REG-"` and a `registrationExtId(id)` function, the same way `purchaseFlow.ts` does it for `PUR-`. All three flows then use the same rule instead of each adding `"REG-"` by hand.
+## Code that has to change
 
-**2. `registrationFlow.ts`: the writer (3 lines)**
-- `mapToCardPaymentMethod` (line 642), `mapToOrder` (line 696) and `mapToPayment` (line 865) write `REG-{ID}` instead of the raw ID.
-- Everything else follows on its own, because it reuses the keys from step 1:
-  - the PaymentGroup key (line 1399) comes from the Order results, so it becomes `REG-` too;
-  - matching each Payment to its PaymentGroup (line 1440) compares two keys that are now both `REG-`;
-  - the round-2 activation lookup (`loadOrderStates`, line 1344) uses the Order keys.
-
-**3. `registrationItemFlow.ts`: Order lookup**
-- Line 257 changes to `"Order.External_ID_4D__c": registrationExtId(registrationId)`.
-- Line 362 (the order-s
+| # | File | What changes |
+|---|---|---|
+| 1 | `commerceShared.ts` | Add one shared constant `REGISTRATION_EXT_PREFIX = "REG-"` and a small helper (for example `registrationKey(id)`), so all three flows build the key the same way. |
+| 2 | `registrationFlow.ts` | Use `REG-` + Registration ID when building the **CardPaymentMethod, Order and Payment** records (3 places). PaymentGroup and the Payment-to-PaymentGroup link then pick up `REG-` automatically, because they reuse the Order's key. The activation round (Order lookup and activate) also follows without changes. |
+| 3 | `registrationItemFlow.ts` | It finds each line item's Order by the raw Registration_ID in 2 places: the Order lookup (`loadOrderStates
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
