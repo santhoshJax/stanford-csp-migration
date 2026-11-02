@@ -40,9 +40,10 @@
  *     one in the Bulk job.
  *
  * WHICH ENROLLMENT ROWS GET A LINE — each rule is a constant below, not silent:
- *   - Status "New" (abandoned cart, per the Enrollment tab) and "DupEnrollment"
- *     (duplicate row) are skipped (default chosen 2026-11-02; not yet
- *     confirmed by the architect).
+ *   - EVERY enrollment row under a registration gets a line, whatever its
+ *     Status — CONFIRMED by the architect (2026-11-02): "bring all enrollment
+ *     rows under each registration". Status "New" and "DupEnrollment" are no
+ *     longer skipped (EXCLUDED_STATUSES is empty).
  *   - Add, Drop and Adjustment (AJST) rows EACH get their own line —
  *     CONFIRMED by the architect (Trevor, 2026-11-02): "They'll need to have
  *     a line item and show up as extra rows. CSP has already agreed to the
@@ -111,8 +112,13 @@ export const INCLUDE_DROP_ROWS = true;
  * true = they get their own line (architect, 2026-11-02).
  */
 export const INCLUDE_ADJUSTMENT_ROWS = true;
-/** Enrollment.Status values that never get a line (lower case). */
-export const EXCLUDED_STATUSES = new Set(["new", "dupenrollment"]);
+/**
+ * Enrollment.Status values that never get a line (lower case). EMPTY by
+ * architect decision (2026-11-02): every enrollment row under a registration
+ * gets a line, including Status "New" and "DupEnrollment". Kept as a set so a
+ * status can be excluded again without touching the mapper.
+ */
+export const EXCLUDED_STATUSES = new Set<string>();
 
 export interface RawEnrollmentRow {
   ID?: string;
@@ -409,7 +415,7 @@ export const registrationItemImport = flow({
       .join(", ");
     logger.info(
       `[${FLOW_NAME}] Window ${windowNumber} mapped — rows=${rowsInWindow}, orderItems=${items.length}, skipped: ` +
-        `noRegistrationId=${skips.noRegistrationId}, status New/DupEnrollment=${skips.excludedStatus}, ` +
+        `noRegistrationId=${skips.noRegistrationId}, excludedStatus=${skips.excludedStatus}, ` +
         `dropRows=${skips.dropRows}, adjustmentRows=${skips.adjustmentRows}, ` +
         `orderNotLoaded=${skips.orderNotLoaded}, orderNotDraft=${skips.orderNotDraft}, ` +
         `noCourseId=${skips.noCourseId}, badTuition=${skips.badTuition}, ` +
