@@ -42,13 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-02
-**Status:** at risk — REG- prefix implemented & pushed; awaiting architect decisions on Order marking, payment source, historical status before full run
+**Status:** blocked — I checked the sample (it's 99 rows, not 100) against the Registration Import code on the branch (`044eacc`).
 
 **Done this session**
-- Implemented REG- prefix across all registration flows (commerceShared, registrationFlow, registrationItemFlow, Payments)
-- Updated tests: 146 pass, prefix keys verified, PaymentGroup old-key rejection confirmed
-- Fixed ARCHITECTURE.md: corrected ID overlap claim, documented prefix purpose, set ATE to 'not set'
-- Committed to stanford-csp-orchestrate (2f98740) and pushed; PR #1 auto-updated
+- I checked the sample (it's 99 rows, not 100) against the Registration Import code on the branch (`044eacc`). All 99 rows are dated 3/30–4/1/2026, so they're all inside the 2-year cutoff of `2024-10-06`. The money columns also add up on eve…
 
 **Open items**
 - Architect decision: Order.Type__c field vs. record type to mark Registration vs. Purchase orders
@@ -80,7 +77,7 @@
 - Run Deploy session: validate against target org, then deploy to ship code live
 - Verify UAT org field names and price book setup before data load
 
-**Checked live on 2026-11-02:** the repository
+**Checked live on 2026-11-02:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-02
 | | |
 |---|---|
@@ -90,21 +87,20 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch stanford-csp-orchestrate)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+I checked the sample (it's 99 rows, not 100) against the Registration Import code on the branch (`044eacc`). All 99 rows are dated 3/30–4/1/2026, so they're all inside the 2-year cutoff of `2024-10-06`. The money columns also add up on every row: Courses_Subtotal + Reg_Fee + Discount_Amt + Adjustment − CC_Amt − Check_Amt = Balance_Due. Most rows load as expected, but I found two likely bugs, two places where a value gets dropped, and one design gap.
 
-I've added the `REG-` prefix and pushed it to `stanford-csp-orchestrate` as commit `2f98740`. The remote branch head matches. I didn't create a new PR, but PR #1 is open from this branch, so it picks up the commit automatically.
+## What gets created from these 99 rows
 
-## What changed
-- **Shared rule:** a new `registrationExtId()` function in `commerceShared.ts` turns `560585` into `REG-560585`. All three flows use it.
-- **Registration Import:** the Order, card and Payment records are now keyed `REG-{ID}`. The PaymentGroup reuses the Order's key, so it gets `REG-` too, and the round-2 activation lookup works without changes.
-- **Registration Item Import:** each line item now finds its Order by `REG-{Registration_ID}`.
-- **Payments Import:** find
+| Row type | Rows | Order | Card record | Payment group | Payment |
+|---|---|---|---|---|---|
+| Paid with a card (including 2 partly STAP-covered: $35 and $31) | 55 | 55 | 55 | 55 | 55 |
+| Drop rows ("Drop-Reg for: …") | 38 | 38 | 0 (no card details) | 38 | 0 (CC_Amt is 0) |
+| STAP drop rows (no billing at all) | 2 | 2 | 0 | 2 | 0 |
+| NOFEE (STAP covers everything) | 3 | 3 | 0 | 3 | 0 |
+| Adjustment (592436039, CC_Amt −165) | 1 | 1 | 0 | 1 | 1, a **negative** $165 "Capture" |
+| **Total** | **99** | **99** | **55** | **99** | **56** |
+
+Discount types map cleanly: `65+` → Senior 65+, `STAP` → STAP Benefit, `SAA` → SAA Member, and `Teacher` and `CSP Full` match as they are. `not` is treated as no d
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
