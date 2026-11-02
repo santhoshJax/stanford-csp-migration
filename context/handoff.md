@@ -42,49 +42,49 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-02
-**Status:** at risk — Registration flow matches mapping doc except OrderItems (not built); test flags still on. Architect decisions needed on pricing, payment de…
+**Status:** at risk — Registration OrderItems drafted; patch ready for Build session. Test flags still on, architect decisions pending.
 
 **Done this session**
-- Verified registration flow against live mapping doc (rows 5–69)
-- Identified 10 differences: 1 not built (OrderItems), 3 intentional, 6 need architect input
+- Wrote registrationItemFlow.ts with OrderItem creation (ENR- key, Tuition pricing, Add rows only)
+- Updated registrationFlow.ts for two-round activation (Draft → Activated with Pricebook2Id)
+- TypeScript compiles; new test file passes on sample rows
+- Generated registration-orderitems-draft-activate.patch (applies cleanly to c837f37)
 
 **Open items**
+- Apply patch via Build session on santhoshJax/stanford-csp-migration to push code
+- Architect confirms: UnitPrice = Tuition (not Extension), INCLUDE_DROP_ROWS = false, INCLUDE_ADJUSTMENT_ROWS = false
+- Architect confirms: negative UnitPrice handling in org
+- Turn off test flags (TEST_MODE, TEST_LIMIT, TEST_SKIP) before full run
 - Create PricebookEntry.External_ID_4D__c field in UAT org
 - Verify both price books active in UAT org
-- Architect decides: Registration Orders field name (Balance_Due__c vs BalanceDue__c)
-- Architect decides: OrderItem pricing (price book entry price, Tuition vs Extension, dropped/adjusted rows)
-- Architect decides: Payment dedup (Registration flow CC_Amt vs Payments flow PAY- key)
-- Architect decides: CardPaymentMethod skip rules for cash, check, refund rows
-- Turn off test flags (TEST_MODE, TEST_LIMIT, TEST_SKIP) before full run
-- Build OrderItem phase and Pricebook step in registrationFlow.ts
+- Verify Student__r.Student_ID_4D__c and Course_Offering__r.External_ID_4D__c field names in org
 
 **Decisions**
+- Registration flow now two-round: Draft load, then OrderItem load, then Activation
+- OrderItem key: ENR-{Enrollment.ID}
+- TotalAmount unmapped; Salesforce calculates from line items (reconcile against Payment total)
+- Skip Drop, AJST, New (abandoned), DupEnrollment rows in OrderItem load
 - Blank Status counts as New in enrollment rule
 - Index version incremented to 2
 - Product2 step: IsActive=FALSE, no price book entries created yet
 - Product2 upsert keyed on External_ID_4D__c = Course.ID
-- MAX_ROWS=500, POLL_BUDGET_MS=10min, MAX_JOB_HANDOFFS=6
-- ENR- prefix for Enrollment ID, PUR- for Purchase orders
-- TEST_MODE=false for next full run
-- Three purchase flows, four runs (no split)
 
 **Blockers**
+- Patch must be applied via Build session (General session cannot push code)
+- Test flags still enabled (TEST_MODE=true, TEST_LIMIT, TEST_SKIP=100)
 - PricebookEntry.External_ID_4D__c field must be created in UAT org
 - Both price books must be active in UAT org before purchase load run
-- Architect decision on OrderItem pricing (price book entry price, Tuition vs Extension handling)
-- Architect decision on Payment dedup strategy (CC_Amt vs PAY- key conflict)
-- Architect decision on CardPaymentMethod skip rules for non-card payment types
 
 **Next**
-- Get architect decisions on: OrderItem pricing, Payment dedup, CardPaymentMethod skip rules, cash/check handling
-- Update mapping workbook with stale rows (Order.Status, TotalAmount, Pricebook, OrderItem, required fields, discount alias, date filter)
-- Build OrderItem phase and Pricebook step in registrationFlow.ts
-- Turn off test flags (TEST_MODE, TEST_LIMIT, TEST_SKIP)
+- Start Build session on santhoshJax/stanford-csp-migration to apply registration-orderitems-draft-activate.patch
+- Architect confirms three defaults: Tuition pricing, Drop/Adjustment row skip flags, negative UnitPrice handling
+- Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP in both flows
+- Verify Student__r.Student_ID_4D__c and Course_Offering__r.External_ID_4D__c exist in UAT org
 - Create PricebookEntry.External_ID_4D__c field in UAT org
 - Verify both price books active in UAT org
-- Run purchase load sequence in UAT
+- Run purchase load sequence in UAT (Course → Registration Draft → Registration Items → Registration Activate)
 
-**Checked live on 2026-11-02:** Google Workspace, the repository
+**Checked live on 2026-11-02:** the repository, Google Workspace
 ### Last session — 2026-11-02
 | | |
 |---|---|
@@ -94,22 +94,17 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements |
 | Session | `51a1a748-4e1f-426c-9437-2dafc7a5da2b` |
 **In its own words (excerpt):**
-# Registration flow vs. the mapping doc
+I wrote the registration changes, but I could not push or open a PR. This is a General session, which can't change code in the repository, and the refusal is final for it. The changes are attached to this session as `registration-orderitems-draft-activate.patch`. The patch applies cleanly to `stanford-csp-orchestrate` at `c837f37`. To get it pushed, start a **Build** session on `santhoshJax/stanford-csp-migration` on that branch and apply the patch there.
 
-**Short answer:** the flow matches the Registration tab for everything except the OrderItem block, which isn't built at all. It also differs on Order status and TotalAmount, and has a few small extras.
+On the checks I ran: TypeScript compiles, and my new test file passes against your sample rows. Five tests in the Student flow suite fail, and they fail the same way without my changes. Nothing was run against an org.
 
-I read the live Registration tab (rows 5–69) and `src/registrationFlow.ts` (all 1,457 lines) on `stanford-csp-orchestrate`. I didn't run the flow or check the org, so the org-behaviour notes come from the code's own comments.
+## What changed
 
-## 1. What matches
-
-| Workbook row(s) | Code | Status |
-|---|---|---|
-| `ID` → `Order.External_ID_4D__c` (Upsert) | Raw `Registration.ID` is the key on all four objects, no prefix | ✅ |
-| `Student_ID` → `AccountId` on CardPaymentMethod, Order, Payment | Resolved through `Account.Student_ID_4D__c` in the bulk job | ✅ |
-| `Order.BillToContact` | `BillToContact.Student_ID_4D__c` | ✅ |
-| Billing address → CardPaymentMethod and Order | Uses `PaymentMethodStreet/City/StateCode/PostalCode/CountryCode`. Order uses `Billing*`. Country and state are converted to codes. | ✅ |
-| Card type, expiry month and year, last four, cardholder names | All mapped. Expiry is parsed from the packed `610` form. | ✅ |
-| Order fields: `Adjustment_
+**Registration Import (`registrationFlow.ts`)** now follows the same two rounds as Purchase:
+- **Round 1:** Orders still load as Draft, now with `Pricebook2Id` set from the Price Books config var. The workbook lists this field as required before any OrderItem can be added.
+- **Round 2:** a new config var, "Activate Registration Orders", switches the flow into activation. Draft Orders that have at least one line item become Activated.
+  - Orders with no line items stay Draft and are logged.
+  - Orde
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
