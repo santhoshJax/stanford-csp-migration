@@ -42,12 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-03
-**Status:** at risk — Course Products removal planned; architect decisions still blocking build. Session documented current Product/PricebookEntry writes across…
+**Status:** blocked — I read the whole standup transcript (about 75 minutes, 61,645 characters) and checked it against the latest code on `stanford-csp-orchestra…
 
 **Done this session**
-- Documented all Product2 fields written by course flows vs. Purchase Inventory
-- Documented all PricebookEntry fields and update logic for both flows
-- Clarified org automation dependency once course Products removed
+- I read the whole standup transcript (about 75 minutes, 61,645 characters) and checked it against the latest code on `stanford-csp-orchestrate` (`0d9e218`). The newer commits on GitHub only touch the handoff notes and one small text-length…
 
 **Open items**
 - Architect decision: Registration Item lookup strategy (Course Offering vs. Product External_ID)
@@ -81,29 +79,28 @@
 - Obtain real Drop/AJST Enrollment rows from 4D to verify Tuition sign
 - Verify UAT org: price books active, External_ID_4D__c field exists on PricebookEntry
 
-**Checked live on 2026-11-03:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-11-03:** meeting transcripts
 ### Last session — 2026-11-03
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-CourseEnhancement-Products |
-| Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
+| Name | Stanford-Data-Migration-Registration-Enhancements- Build |
+| Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-Two groups of flows write these objects: the three course flows and Purchase Inventory. Below is every field each one writes, taken from the latest code on `stanford-csp-orchestrate` (`247f2e0`). The course flows still create Products and price book entries, because the removal we planned last turn hasn't been built yet.
+I read the whole standup transcript (about 75 minutes, 61,645 characters) and checked it against the latest code on `stanford-csp-orchestrate` (`0d9e218`). The newer commits on GitHub only touch the handoff notes and one small text-length helper, so none of the logic below is affected. I haven't changed any code.
 
-## Product2
+## Decided in the meeting
 
-| Field | Course flows (All / 2-Year / 5-Year) | Purchase Inventory |
+| Topic | What Trevor said | Does the code match? |
 |---|---|---|
-| `External_ID_4D__c` (upsert key) | Course.ID, e.g. `20241_POL 68 H` | Purchase Inventory.ID, e.g. `3` |
-| `Name` | Course.Title with HTML removed, up to 255 characters. If the title is blank it uses Course.Code, then Course.ID | Item_Type |
-| `ProductCode` | Course.Code, e.g. `POL 68 H` (only if there is one) | Item_Type |
-| `Description` | Course.Description converted to plain text, `_4DNL_` turned into line breaks, cut to 4,000 characters (only if there is one) | Description, cut to 4,000 characters (only if there is one) |
-| `IsActive` | Always `false` | The 4D `Active` value |
-| `Course_Offering__c` | The Course Offering saved for the same row | — |
-| `QuantityUnitOfMeasure` | — | Unit_Description, only if it's a known picklist value. Anything else is skipped wit
+| All enrollment rows | Bring in every status, including New and DupEnrollment. "If they tell us that's no good, we'll deal with it then." | Yes, done in `50546de` |
+| Drops and adjustments | Positive and negative rows each get their own line item | Yes, done in `4632ca4` |
+| Order type | Not needed: "an order is an order." The `REG-` / `PUR-` prefix is enough to tell them apart | Yes, nothing to build |
+| Discount type | Stays at the Order level only, not on the line item or the adjustment | Yes, `TA_Discount_Type__c` is already on Order |
+| Payment methods | Every card on Registration and Purchase gets its own record. No duplicate check, because the last four digits and expiry can't identify a card | Yes, card records are insert-per-row |
+| Payments table | Never create card rec
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
