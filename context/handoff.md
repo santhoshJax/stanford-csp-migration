@@ -42,12 +42,12 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-03
-**Status:** at risk — Course Products removal planned; awaiting 3 architect decisions before build
+**Status:** at risk — Course Products removal planned; architect decisions still blocking build. Session documented current Product/PricebookEntry writes across…
 
 **Done this session**
-- Analyzed course Product/PricebookEntry code across three commits
-- Identified Registration Item dependency on course Products
-- Drafted removal plan with three decision points
+- Documented all Product2 fields written by course flows vs. Purchase Inventory
+- Documented all PricebookEntry fields and update logic for both flows
+- Clarified org automation dependency once course Products removed
 
 **Open items**
 - Architect decision: Registration Item lookup strategy (Course Offering vs. Product External_ID)
@@ -81,7 +81,7 @@
 - Obtain real Drop/AJST Enrollment rows from 4D to verify Tuition sign
 - Verify UAT org: price books active, External_ID_4D__c field exists on PricebookEntry
 
-**Checked live on 2026-11-03:** the repository
+**Checked live on 2026-11-03:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-03
 | | |
 |---|---|
@@ -91,24 +91,19 @@
 | Name | Stanford-Data-Migration-CourseEnhancement-Products |
 | Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-I haven't changed anything yet. Here's what I found and the plan.
+Two groups of flows write these objects: the three course flows and Purchase Inventory. Below is every field each one writes, taken from the latest code on `stanford-csp-orchestrate` (`247f2e0`). The course flows still create Products and price book entries, because the removal we planned last turn hasn't been built yet.
 
-## What's on the branch now (`7c7ad00`)
-The course Product work came in three commits, and they affect all three course flows (All, 2-Year, 5-Year):
+## Product2
 
-| Commit | What it added |
-|---|---|
-| `8e29ccc` | A Product2 upsert for each Course Offering (Name, ProductCode, Description, `Course_Offering__c`, key `External_ID_4D__c` = Course.ID) |
-| `2ab766a` | Cleans the Product Description: strips the HTML and caps it at 4,000 characters |
-| `e17c1bb` | Standard and custom PricebookEntry for each Product (`coursePricebook.ts`) |
-
-## Plan: remove Products and price book entries from the course flows
-**Removed from the All, 2-Year and 5-Year flows:**
-- The Product2 step, the price book check at the start of each window, the price book entry step, the `Product2` and `PricebookEntry` results tabs, and their summary lines.
-- `coursePricebook.ts` and its tests, plus the Product payload and Description code in `courseUtils.ts` and `courseProduct.test.ts`. Nothing else uses them, and git history keeps them if you ever need them back.
-
-**Unchanged:**
-- Learning Course and Course Offering loads work exactly as before. Your org automati
+| Field | Course flows (All / 2-Year / 5-Year) | Purchase Inventory |
+|---|---|---|
+| `External_ID_4D__c` (upsert key) | Course.ID, e.g. `20241_POL 68 H` | Purchase Inventory.ID, e.g. `3` |
+| `Name` | Course.Title with HTML removed, up to 255 characters. If the title is blank it uses Course.Code, then Course.ID | Item_Type |
+| `ProductCode` | Course.Code, e.g. `POL 68 H` (only if there is one) | Item_Type |
+| `Description` | Course.Description converted to plain text, `_4DNL_` turned into line breaks, cut to 4,000 characters (only if there is one) | Description, cut to 4,000 characters (only if there is one) |
+| `IsActive` | Always `false` | The 4D `Active` value |
+| `Course_Offering__c` | The Course Offering saved for the same row | — |
+| `QuantityUnitOfMeasure` | — | Unit_Description, only if it's a known picklist value. Anything else is skipped wit
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
