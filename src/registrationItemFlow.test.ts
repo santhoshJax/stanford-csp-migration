@@ -7,6 +7,8 @@ import {
   INCLUDE_ADJUSTMENT_ROWS,
   INCLUDE_DROP_ROWS,
   mapToOrderItem,
+  mapToOrderItemAdjustment,
+  newAdjustmentStats,
   newSkips,
   normalizeAddDrop,
   type RawEnrollmentRow,
@@ -269,5 +271,92 @@ describe("Skipped tab (reportResults.buildSkippedTab)", () => {
       ["1", "", "r1"],
       ["2", "3", "r2"],
     ]);
+  });
+});
+
+describe("Discount adjustment line (option A: Amount = Extension − Tuition)", () => {
+  // Real rows from the Enrollment sample pasted on 2026-11-03:
+  // [ID, Add_Drop, Tuition, Extension, TA_Discount, expected Amount]
+  const sample: [string, string, string, string, string, number][] = [
+    ["948272", "ADD", "250", "200", "-50", -50],
+    ["948250", "ADD", "395", "335.75", "-59.25", -59.25],
+    ["948251", "DROP", "-655", "-524", "131", 131],
+    ["948194", "DROP", "-475", "-403.75", "71.25", 71.25],
+    ["948196", "DROP", "-365", "-292", "73", 73],
+    ["948201", "AJST", "0", "-165", "-165", -165],
+  ];
+
+  it.each(sample)(
+    "enrollment %s (%s): Tuition %s, Extension %s → Amount %s",
+    (id, addDrop, tuition, extension, taDiscount, amount) => {
+      const stats = newAdjustmentStats();
+      const raw = row({
+        ID: id,
+        Add_Drop: addDrop,
+        Tuition: tuition,
+        Extension: extension,
+        TA_Discount: taDiscount,
+      });
+      const adj = mapToOrderItemAdjustment(raw, stats, logger);
+      expect(adj).toEqual({
+        External_ID_4D__c: `ADJ-${id}`,
+        "OrderItem.External_ID_4D__c": `ENR-${id}`,
+        Name: `Discount — Enrollment ${id}`,
+        Amount: amount,
+      });
+      // Line total (UnitPrice + adjustment) equals Extension.
+      expect(Number(tuition) + (adj?.Amount as number)).toBeCloseTo(
+        Number(extension),
+        2,
+      );
+      expect(stats.discountMismatch).toBe(0);
+    },
+  );
+
+  it("adds no adjustment when Extension equals Tuition", () => {
+    const stats = newAdjustmentStats();
+    const raw = row({
+      ID: "1",
+      Tuition: "200",
+      Extension: "200",
+      TA_Discount: "0",
+    });
+    expect(mapToOrderItemAdjustment(raw, stats, logger)).toBeNull();
+    expect(stats.zeroAmount).toBe(1);
+  });
+
+  it("adds no adjustment when Extension is blank, and counts it", () => {
+    const stats = newAdjustmentStats();
+    expect(
+      mapToOrderItemAdjustment(row({ ID: "2", Extension: "" }), stats, logger),
+    ).toBeNull();
+    expect(stats.noExtension).toBe(1);
+  });
+
+  it("loads Extension − Tuition but flags a TA_Discount mismatch", () => {
+    const stats = newAdjustmentStats();
+    const adj = mapToOrderItemAdjustment(
+      row({ ID: "632968", Tuition: "480", Extension: "485", TA_Discount: "0" }),
+      stats,
+      logger,
+    );
+    expect(adj?.Amount).toBe(5);
+    expect(stats.discountMismatch).toBe(1);
+    expect(stats.positiveAmount).toBe(1);
+  });
+
+  it("counts positive (Drop) adjustments", () => {
+    const stats = newAdjustmentStats();
+    mapToOrderItemAdjustment(
+      row({
+        ID: "948251",
+        Add_Drop: "DROP",
+        Tuition: "-655",
+        Extension: "-524",
+      }),
+      stats,
+      logger,
+    );
+    expect(stats.positiveAmount).toBe(1);
   });
 });

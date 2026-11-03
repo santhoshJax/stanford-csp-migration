@@ -49,13 +49,29 @@
  *     a line item and show up as extra rows. CSP has already agreed to the
  *     extra rows living in salesforce for the migration."
  *     (INCLUDE_DROP_ROWS / INCLUDE_ADJUSTMENT_ROWS = true.) The line's
- *     UnitPrice is the row's Tuition as-is; whether 4D stores Tuition on a
- *     Drop/AJST row as negative or repeats the positive price is not yet
- *     checked against real Enrollment rows — if positive, Order totals will
- *     overstate the charge.
+ *     UnitPrice is the row's Tuition as-is. CHECKED against the 2026-11-03
+ *     Enrollment sample: Drop rows carry a NEGATIVE Tuition and Extension
+ *     (e.g. −655 / −524), so a drop nets against the original Add.
  *   - UnitPrice = Tuition — CONFIRMED by the architect (2026-11-02): "Use the
- *     tuition". Fee, Extension (net) and TA_Discount have no line and are not
- *     mapped. Salesforce totals the Order from its line items.
+ *     tuition". Salesforce totals the Order from its line items.
+ *   - DISCOUNT ADJUSTMENT LINE — architect design (standup, 2026-11-03),
+ *     option A chosen by the team: every OrderItem whose Extension differs
+ *     from its Tuition gets ONE OrderItemAdjustmentLineItem with
+ *       Amount = Extension − Tuition
+ *     so the line's adjusted total equals Extension. Add rows get a negative
+ *     adjustment (250 → 200: −50), Drop rows a positive one (−365 → −292:
+ *     +73), with no per-row-type sign rule. Amount 0 → no adjustment. In the
+ *     2026-11-03 Enrollment sample (19 rows) Extension − Tuition equals
+ *     TA_Discount on every row; a row where it does not is still loaded with
+ *     Extension − Tuition and is logged as a mismatch. Loaded as step 2 of
+ *     each window, after the OrderItems and only for OrderItems that
+ *     succeeded, so it always lands before activation (adjustments cannot be
+ *     added to an Activated Order). Key: External_ID_4D__c = "ADJ-" +
+ *     Enrollment.ID; parent via OrderItem.External_ID_4D__c = "ENR-" + ID.
+ *     No OrderAdjustmentGroup is created (single-item adjustment).
+ *     NOT YET RUN AGAINST AN ORG: External_ID_4D__c must exist on
+ *     OrderItemAdjustmentLineItem, and the org must accept a positive Amount
+ *     and no adjustment group.
  *   - Orders are the 2-year scope (Registration_Date), so enrollments of older
  *     registrations are skipped as "Order not loaded".
  *
@@ -78,6 +94,7 @@ import {
   PRICE_BOOKS_CONFIG_VAR,
   loadOrderStates,
   orderPricebook,
+  parseSuccessfulSfIds,
   REGISTRATION_EXT_PREFIX,
   registrationExtId,
   resolveConfiguredPricebooks,
@@ -96,6 +113,12 @@ export const REGISTRATION_ITEM_EXT_PREFIX = "ENR-";
 
 /** OrderItem.Type default per the workbook. */
 export const ORDER_ITEM_TYPE = "Order Product";
+
+const SF_ORDER_ITEM_ADJUSTMENT = "OrderItemAdjustmentLineItem";
+/** OrderItemAdjustmentLineItem.External_ID_4D__c = "ADJ-" + Enrollment.ID. */
+export const REGISTRATION_ITEM_ADJUSTMENT_EXT_PREFIX = "ADJ-";
+/** Differences smaller than this (currency rounding) count as equal. */
+const CENT_TOLERANCE = 0.005;
 
 const MAX_ROWS = 25_000;
 const TEST_MODE = true;
@@ -128,6 +151,8 @@ export interface RawEnrollmentRow {
   Status?: string;
   Add_Drop?: string;
   Tuition?: string;
+  Extension?: string;
+  TA_Discount?: string;
   [key: string]: string | undefined;
 }
 
@@ -166,6 +191,82 @@ export function newSkips(): RegistrationItemSkips {
     badTuition: 0,
     unmatchedCourses: new Map(),
     records: [],
+  };
+}
+
+/** Why rows did not get an adjustment line (their OrderItem still loads). */
+export interface AdjustmentStats {
+  /** Extension blank or not a number — no adjustment, OrderItem still sent. */
+  noExtension: number;
+  /** Extension equals Tuition — nothing to adjust. */
+  zeroAmount: number;
+  /** Extension − Tuition differs from TA_Discount — loaded, but logged. */
+  discountMismatch: number;
+  /** Positive Amount (Drop rows) — loaded; org acceptance not yet verified. */
+  positiveAmount: number;
+}
+
+export function newAdjustmentStats(): AdjustmentStats {
+  return {
+    noExtension: 0,
+    zeroAmount: 0,
+    discountMismatch: 0,
+    positiveAmount: 0,
+  };
+}
+
+const roundCents = (n: number): number => Math.round(n * 100) / 100;
+
+/**
+ * The discount adjustment for one Enrollment row (option A):
+ * Amount = Extension − Tuition, so the OrderItem's adjusted total equals
+ * Extension. Returns null when there is nothing to adjust. Call it only for a
+ * row mapToOrderItem accepted (it assumes ID and Tuition are valid). Pure.
+ */
+export function mapToOrderItemAdjustment(
+  raw: RawEnrollmentRow,
+  stats: AdjustmentStats,
+  logger: { warn: (m: string) => void },
+): SfRecord | null {
+  const id = stripDotZero(raw.ID);
+  const tuition = parseCurrency(raw.Tuition);
+  if (!id || tuition === undefined) return null;
+
+  const extension = parseCurrency(raw.Extension);
+  if (extension === undefined) {
+    stats.noExtension++;
+    logger.warn(
+      `[${FLOW_NAME}] Enrollment ${id} has no parseable Extension "${str(raw.Extension)}" — ` +
+        "OrderItem loaded at Tuition with no discount adjustment",
+    );
+    return null;
+  }
+
+  const amount = roundCents(extension - tuition);
+  if (Math.abs(amount) < CENT_TOLERANCE) {
+    stats.zeroAmount++;
+    return null;
+  }
+
+  const taDiscount = parseCurrency(raw.TA_Discount);
+  if (
+    taDiscount !== undefined &&
+    Math.abs(amount - taDiscount) >= CENT_TOLERANCE
+  ) {
+    stats.discountMismatch++;
+    logger.warn(
+      `[${FLOW_NAME}] Enrollment ${id}: Extension − Tuition = ${amount} but TA_Discount = ${taDiscount} — ` +
+        "adjustment loaded as Extension − Tuition; check whether Fee/Other_Costs are inside Extension",
+    );
+  }
+  if (amount > 0) stats.positiveAmount++;
+
+  return {
+    [EXT_ID_FIELD]: `${REGISTRATION_ITEM_ADJUSTMENT_EXT_PREFIX}${id}`,
+    // Parent OrderItem, upserted in step 1 with key ENR-{Enrollment.ID}.
+    "OrderItem.External_ID_4D__c": `${REGISTRATION_ITEM_EXT_PREFIX}${id}`,
+    Name: `Discount — Enrollment ${id}`,
+    Amount: amount,
   };
 }
 
@@ -297,7 +398,8 @@ export const registrationItemImport = flow({
   description:
     "Streams the Enrollment TSV from Google Drive one window at a time and " +
     "bulk-upserts one OrderItem (tuition line) per enrollment onto the Draft " +
-    "Orders created by Registration Import. Must run after the Course imports " +
+    "Orders created by Registration Import, then one discount adjustment " +
+    "(Extension − Tuition) per OrderItem that needs one. Must run after the Course imports " +
     "and Registration Import; then run Registration Import again with " +
     "Activate Registration Orders = true.",
 
@@ -404,10 +506,24 @@ export const registrationItemImport = flow({
 
     let items: SfRecord[] = [];
     const skips = newSkips();
+    const adjustmentStats = newAdjustmentStats();
+    // ENR- key of the OrderItem → its discount adjustment (step 2).
+    const adjustmentByItemKey = new Map<string, SfRecord>();
     for (const row of rows) {
       const item = mapToOrderItem(row, caches, skips, logger);
-      if (item) items.push(item);
+      if (!item) continue;
+      items.push(item);
+      const adjustment = mapToOrderItemAdjustment(row, adjustmentStats, logger);
+      if (adjustment) {
+        adjustmentByItemKey.set(item[EXT_ID_FIELD] as string, adjustment);
+      }
     }
+    logger.info(
+      `[${FLOW_NAME}] Discount adjustments mapped: ${adjustmentByItemKey.size} ` +
+        `(no adjustment: Extension = Tuition ${adjustmentStats.zeroAmount}, ` +
+        `no Extension ${adjustmentStats.noExtension}; positive Amount ${adjustmentStats.positiveAmount}; ` +
+        `Extension − Tuition ≠ TA_Discount ${adjustmentStats.discountMismatch})`,
+    );
 
     const unmatched = [...skips.unmatchedCourses.entries()]
       .slice(0, 20)
@@ -453,6 +569,26 @@ export const registrationItemImport = flow({
           )
         : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
 
+    // ── Step 2: discount adjustments, only on OrderItems that loaded ─────────
+    // Same window, before any activation run. An OrderItem that failed (or
+    // was cut by TEST_MODE) gets no adjustment, so nothing is orphaned.
+    const loadedItemKeys = parseSuccessfulSfIds(result.successfulCsv);
+    const adjustments: SfRecord[] = [];
+    for (const [itemKey, adjustment] of adjustmentByItemKey) {
+      if (loadedItemKeys.has(itemKey)) adjustments.push(adjustment);
+    }
+    const adjustmentResult =
+      adjustments.length > 0
+        ? await upsertInBatches(
+            adjustments,
+            SF_ORDER_ITEM_ADJUSTMENT,
+            sfBase,
+            sfToken,
+            logger,
+            `[${FLOW_NAME}][OrderItemAdjustmentLineItem]`,
+          )
+        : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
+
     try {
       const sheet = await createPerObjectResultsSheet({
         flowName: FLOW_NAME,
@@ -461,6 +597,11 @@ export const registrationItemImport = flow({
             objectName: SF_ORDER_ITEM,
             successfulCsv: result.successfulCsv,
             failedCsv: result.failedCsv,
+          },
+          {
+            objectName: SF_ORDER_ITEM_ADJUSTMENT,
+            successfulCsv: adjustmentResult.successfulCsv,
+            failedCsv: adjustmentResult.failedCsv,
           },
         ],
         skipped: buildSkippedTab(parsedHeaders, skips.records),
@@ -476,7 +617,9 @@ export const registrationItemImport = flow({
 
     logger.info(
       `[${FLOW_NAME}] Window ${windowNumber} complete — OrderItem submitted: ${items.length}, ` +
-        `processed: ${result.processed}, failed: ${result.failed}`,
+        `processed: ${result.processed}, failed: ${result.failed}; ` +
+        `OrderItemAdjustmentLineItem submitted: ${adjustments.length}, ` +
+        `processed: ${adjustmentResult.processed}, failed: ${adjustmentResult.failed}`,
     );
 
     if (TEST_MODE && hasMore) {
@@ -505,6 +648,10 @@ export const registrationItemImport = flow({
         orderItems: items.length,
         orderItemsProcessed: result.processed,
         orderItemsFailed: result.failed,
+        adjustments: adjustments.length,
+        adjustmentsProcessed: adjustmentResult.processed,
+        adjustmentsFailed: adjustmentResult.failed,
+        adjustmentsDiscountMismatch: adjustmentStats.discountMismatch,
         skippedTotal: skips.records.length,
         skippedOrderNotLoaded: skips.orderNotLoaded,
         skippedOrderNotDraft: skips.orderNotDraft,
