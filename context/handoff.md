@@ -42,20 +42,22 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-03
-**Status:** at risk — All enrollment rows now generate line items; code complete. Order marking & payment scope still block full run.
+**Status:** at risk — Course Products removal planned; awaiting 3 architect decisions before build
 
 **Done this session**
-- Verified External_ID_4D__c field usage across Product2, PricebookEntry, and Purchase Inventory flows
+- Analyzed course Product/PricebookEntry code across three commits
+- Identified Registration Item dependency on course Products
+- Drafted removal plan with three decision points
 
 **Open items**
+- Architect decision: Registration Item lookup strategy (Course Offering vs. Product External_ID)
+- Architect decision: keep or delete unused Product/PricebookEntry code after removal
 - Architect decision: Order.Type__c field vs. record type to mark Registration vs. Purchase orders
 - Architect decision: Payments table as sole payment source or other sources exist
 - Architect decision: historical Orders end state (Draft or Activated)
 - Verify Tuition sign on Drop/AJST rows in real Enrollment file (positive vs. negative)
 - Verify UAT org: Student__r.Student_ID_4D__c, Course_Offering__r.External_ID_4D__c field names, price books active
 - Review and merge PR #1 to main
-- Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP before full run
-- Reconcile Order totals against Payments (New/DupEnrollment rows may increase totals)
 
 **Decisions**
 - REG- prefix applied to registration orders, cards, payment groups, payments
@@ -68,18 +70,18 @@
 - Product2 upsert keyed on External_ID_4D__c = Course.ID
 
 **Blockers**
-- Order marking strategy (Order.Type__c vs. record type) blocks full run—REG-/PUR- prefix currently the only differentiator
+- Order marking strategy (Order.Type__c vs. record type) blocks full run
 - Architect confirmation needed on payment source scope and historical order end state
+- Registration Item course Product lookup strategy must be decided before course Product removal
 
 **Next**
-- Architect confirms Order marking decision (field vs. record type), payment source scope, historical order status
-- Obtain real Drop/AJST Enrollment rows from 4D to verify Tuition sign (positive vs. negative)
+- Architect decides: Registration Item lookup on Course Offering or Product External_ID
+- Architect decides: delete or keep unused Product/PricebookEntry code
+- Architect decides: build with diff review or build and push directly
+- Obtain real Drop/AJST Enrollment rows from 4D to verify Tuition sign
 - Verify UAT org: price books active, External_ID_4D__c field exists on PricebookEntry
-- Review and merge PR #1 to main
-- Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP in code
-- Run Deploy session: validate then deploy to target org
 
-**Checked live on 2026-11-03:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-11-03:** the repository
 ### Last session — 2026-11-03
 | | |
 |---|---|
@@ -89,29 +91,24 @@
 | Name | Stanford-Data-Migration-CourseEnhancement-Products |
 | Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-Here's what the code on `stanford-csp-orchestrate` (`ed2be45`) saves in each one.
+I haven't changed anything yet. Here's what I found and the plan.
 
-## Product2: `External_ID_4D__c`
-| Flow | Value saved | Example |
-|---|---|---|
-| Course All / 2-Year / 5-Year | **Course.ID**, unchanged | `20241_POL 68 H` |
-| Purchase Inventory | **Purchase Inventory.ID**, unchanged | `3` |
+## What's on the branch now (`7c7ad00`)
+The course Product work came in three commits, and they affect all three course flows (All, 2-Year, 5-Year):
 
-Both flows upsert on this field, so a re-run updates the existing Product instead of creating a new one. Course IDs and inventory IDs (1–9) never overlap, so neither needs a prefix.
+| Commit | What it added |
+|---|---|
+| `8e29ccc` | A Product2 upsert for each Course Offering (Name, ProductCode, Description, `Course_Offering__c`, key `External_ID_4D__c` = Course.ID) |
+| `2ab766a` | Cleans the Product Description: strips the HTML and caps it at 4,000 characters |
+| `e17c1bb` | Standard and custom PricebookEntry for each Product (`coursePricebook.ts`) |
 
-## Pricebook2: no external ID
-- Nothing is saved, because the flows never create price books.
-- They find each book **by name**, using the `Price Books` config var. The Standard Price Book is found by `IsStandard = true`.
+## Plan: remove Products and price book entries from the course flows
+**Removed from the All, 2-Year and 5-Year flows:**
+- The Product2 step, the price book check at the start of each window, the price book entry step, the `Product2` and `PricebookEntry` results tabs, and their summary lines.
+- `coursePricebook.ts` and its tests, plus the Product payload and Description code in `courseUtils.ts` and `courseProduct.test.ts`. Nothing else uses them, and git history keeps them if you ever need them back.
 
-## PricebookEntry: `External_ID_4D__c`
-| Flow | Book | Value saved | Example |
-|---|---|---|---|
-| Course flows | Standard | `STD-` + Course.ID | `STD-20241_POL 68 H` |
-| Course flows | Custom (StanfordContinuingStudies) | Course.ID | `20241_POL 68 H` |
-| Purchase Inventory | any | **Nothing.** The field is left blank | — |
-
-**Two things to be aware of:**
-- **The course flows don't match on this key.** They find an existing entry by Product + Price Book, then insert or update it
+**Unchanged:**
+- Learning Course and Course Offering loads work exactly as before. Your org automati
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
