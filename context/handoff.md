@@ -42,44 +42,46 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-03
-**Status:** blocked — I read the whole standup transcript (about 75 minutes, 61,645 characters) and checked it against the latest code on `stanford-csp-orchestra…
+**Status:** at risk — Discount adjustment logic built & pushed (commit 6a4a78b); awaits validation deploy & UAT org field verification
 
 **Done this session**
-- I read the whole standup transcript (about 75 minutes, 61,645 characters) and checked it against the latest code on `stanford-csp-orchestrate` (`0d9e218`). The newer commits on GitHub only touch the handoff notes and one small text-length…
+- Built discount adjustment line item logic (option A) using Extension − Tuition formula
+- Verified sample data: all 19 rows match expected behavior, Order totals now align with Courses_Subtotal
+- Committed to stanford-csp-orchestrate branch, pushed to GitHub, included in PR #1
+- 158 unit tests pass; 5 known Student-flow test failures remain
 
 **Open items**
+- Validate deploy to org (sf deploy validate not yet run)
+- Verify UAT org: External_ID_4D__c field exists on OrderItemAdjustmentLineItem
+- Verify UAT org: accepts positive adjustment amounts on Drop rows
+- Confirm no adjustment group record needed (B2C-to-Order Management mapping)
+- Confirm STAP registration-level discount already included in TA_Discount
+- Verify file encoding (UTF-8 re-export) handles garbled Notes values
 - Architect decision: Registration Item lookup strategy (Course Offering vs. Product External_ID)
 - Architect decision: keep or delete unused Product/PricebookEntry code after removal
-- Architect decision: Order.Type__c field vs. record type to mark Registration vs. Purchase orders
-- Architect decision: Payments table as sole payment source or other sources exist
-- Architect decision: historical Orders end state (Draft or Activated)
-- Verify Tuition sign on Drop/AJST rows in real Enrollment file (positive vs. negative)
-- Verify UAT org: Student__r.Student_ID_4D__c, Course_Offering__r.External_ID_4D__c field names, price books active
-- Review and merge PR #1 to main
 
 **Decisions**
-- REG- prefix applied to registration orders, cards, payment groups, payments
-- ENR- prefix for registration line items; PIT- for purchase line items
-- registrationExtId() shared function ensures consistent key generation
-- Registration flow two-round: Draft load, then OrderItem load, then Activation
-- Drop and AJST enrollment rows each generate separate line items
-- Line item price sourced from Tuition field, not Extension
+- Discount adjustment amount = Extension − Tuition (no separate sign rule per row type)
+- Adjustment keyed ADJ-{Enrollment.ID}, attached to line via ENR-{id}
+- Adjustment loads as second step in Registration Item Import, before activation
+- No adjustment created if Extension − Tuition = 0
+- Mismatch rows (Extension − Tuition ≠ TA_Discount) load with warning logged
+- REG- prefix for registration orders; ENR- for registration line items; PIT- for purchase line items
 - All enrollment rows (Add, Drop, AJST, New, DupEnrollment, Course cancel) generate line items
-- Product2 upsert keyed on External_ID_4D__c = Course.ID
+- Line item price sourced from Tuition field, not Extension
 
 **Blockers**
-- Order marking strategy (Order.Type__c vs. record type) blocks full run
-- Architect confirmation needed on payment source scope and historical order end state
-- Registration Item course Product lookup strategy must be decided before course Product removal
+- External_ID_4D__c field must exist on OrderItemAdjustmentLineItem or load fails
+- Validation deploy not yet run — code unverified against target org
 
 **Next**
-- Architect decides: Registration Item lookup on Course Offering or Product External_ID
-- Architect decides: delete or keep unused Product/PricebookEntry code
-- Architect decides: build with diff review or build and push directly
-- Obtain real Drop/AJST Enrollment rows from 4D to verify Tuition sign
-- Verify UAT org: price books active, External_ID_4D__c field exists on PricebookEntry
+- Run sf deploy validate against UAT org to confirm field requirements
+- Verify in UAT org: External_ID_4D__c on OrderItemAdjustmentLineItem, price books active
+- Test Drop rows with positive adjustment amounts in UAT
+- Review & merge PR #1 to main
+- Run Deploy session to ship code to production
 
-**Checked live on 2026-11-03:** meeting transcripts
+**Checked live on 2026-11-03:** the repository, the web
 ### Last session — 2026-11-03
 | | |
 |---|---|
@@ -89,18 +91,29 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-I read the whole standup transcript (about 75 minutes, 61,645 characters) and checked it against the latest code on `stanford-csp-orchestrate` (`0d9e218`). The newer commits on GitHub only touch the handoff notes and one small text-length helper, so none of the logic below is affected. I haven't changed any code.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch stanford-csp-orchestrate)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## Decided in the meeting
+I built the discount adjustment line using option A for both choices, and pushed it to `stanford-csp-orchestrate` as commit `6a4a78b`. The remote branch now points at it, and PR #1 includes it. It hasn't been run against an org yet.
 
-| Topic | What Trevor said | Does the code match? |
-|---|---|---|
-| All enrollment rows | Bring in every status, including New and DupEnrollment. "If they tell us that's no good, we'll deal with it then." | Yes, done in `50546de` |
-| Drops and adjustments | Positive and negative rows each get their own line item | Yes, done in `4632ca4` |
-| Order type | Not needed: "an order is an order." The `REG-` / `PUR-` prefix is enough to tell them apart | Yes, nothing to build |
-| Discount type | Stays at the Order level only, not on the line item or the adjustment | Yes, `TA_Discount_Type__c` is already on Order |
-| Payment methods | Every card on Registration and Purchase gets its own record. No duplicate check, because the last four digits and expiry can't identify a card | Yes, card records are insert-per-row |
-| Payments table | Never create card rec
+## How your sample works with this logic
+
+All 19 rows behave the way Trevor described. On every row, Extension − Tuition comes out exactly equal to TA_Discount.
+
+| Enrollment | Type | Tuition (line price) | Adjustment | Line total = Extension |
+|---|---|---|---|---|
+| 948272 | ADD | 250 | −50 | 200 |
+| 948250 | ADD | 395 | −59.25 | 335.75 |
+| 948251 | DROP | −655 | +131 | −524 |
+| 948194 | DROP | −475 | +71.25 | −403.75 |
+| 948201 | AJST | 0 | −165 | −165 |
+
+What the sample te
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
