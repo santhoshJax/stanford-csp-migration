@@ -42,23 +42,20 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-03
-**Status:** at risk — Discount adjustment logic built & pushed (commit 6a4a78b); awaits validation deploy & UAT org field verification
+**Status:** at risk — Discount logic built & pushed (commit 6a4a78b); validation deploy & Registration Item lookup strategy still pending
 
 **Done this session**
-- Built discount adjustment line item logic (option A) using Extension − Tuition formula
-- Verified sample data: all 19 rows match expected behavior, Order totals now align with Courses_Subtotal
-- Committed to stanford-csp-orchestrate branch, pushed to GitHub, included in PR #1
-- 158 unit tests pass; 5 known Student-flow test failures remain
+- Mapped Course.ID external ID usage across CourseOffering, Product2, PricebookEntry (Standard & custom)
 
 **Open items**
-- Validate deploy to org (sf deploy validate not yet run)
-- Verify UAT org: External_ID_4D__c field exists on OrderItemAdjustmentLineItem
-- Verify UAT org: accepts positive adjustment amounts on Drop rows
-- Confirm no adjustment group record needed (B2C-to-Order Management mapping)
-- Confirm STAP registration-level discount already included in TA_Discount
+- Run sf deploy validate against UAT org to confirm field requirements
+- Verify in UAT org: External_ID_4D__c on OrderItemAdjustmentLineItem, price books active
+- Test Drop rows with positive adjustment amounts in UAT
+- Confirm Registration Item lookup: use Product2.Course_Offering__r.External_ID_4D__c or rely on org automation to copy Course Offering 4D ID to Product
+- Decide: keep or delete unused Product/PricebookEntry code after removal from course flows
 - Verify file encoding (UTF-8 re-export) handles garbled Notes values
-- Architect decision: Registration Item lookup strategy (Course Offering vs. Product External_ID)
-- Architect decision: keep or delete unused Product/PricebookEntry code after removal
+- Confirm STAP registration-level discount already included in TA_Discount
+- Confirm no adjustment group record needed (B2C-to-Order Management mapping)
 
 **Decisions**
 - Discount adjustment amount = Extension − Tuition (no separate sign rule per row type)
@@ -73,47 +70,42 @@
 **Blockers**
 - External_ID_4D__c field must exist on OrderItemAdjustmentLineItem or load fails
 - Validation deploy not yet run — code unverified against target org
+- Registration Item lookup strategy unresolved: Product2.External_ID_4D__c vs. Product2.Course_Offering__r.External_ID_4D__c
 
 **Next**
 - Run sf deploy validate against UAT org to confirm field requirements
 - Verify in UAT org: External_ID_4D__c on OrderItemAdjustmentLineItem, price books active
 - Test Drop rows with positive adjustment amounts in UAT
+- Resolve Registration Item lookup: confirm org automation or update query to use Course_Offering__r.External_ID_4D__c
 - Review & merge PR #1 to main
 - Run Deploy session to ship code to production
 
-**Checked live on 2026-11-03:** the repository, the web
+**Checked live on 2026-11-03:** the repository
 ### Last session — 2026-11-03
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Registration-Enhancements- Build |
-| Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
+| Name | Stanford-Data-Migration-CourseEnhancement-Products |
+| Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch stanford-csp-orchestrate)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+In the Course import flow (All, 2-Year and 5-Year), the Course Offering's key `External_ID_4D__c` = **Course.ID** (for example `20241_POL 68 H`). That same value is reused on two more objects.
 
-I built the discount adjustment line using option A for both choices, and pushed it to `stanford-csp-orchestrate` as commit `6a4a78b`. The remote branch now points at it, and PR #1 includes it. It hasn't been run against an org yet.
+## Objects that carry the Course Offering's 4D ID
 
-## How your sample works with this logic
+| Object | Field | Value saved | Example |
+|---|---|---|---|
+| **CourseOffering** (the original) | `External_ID_4D__c` | Course.ID | `20241_POL 68 H` |
+| **Product2** | `External_ID_4D__c` | Course.ID, the same value | `20241_POL 68 H` |
+| **PricebookEntry**, custom book | `External_ID_4D__c` | Course.ID, the same value | `20241_POL 68 H` |
+| **PricebookEntry**, Standard book | `External_ID_4D__c` | `STD-` + Course.ID | `STD-20241_POL 68 H` |
 
-All 19 rows behave the way Trevor described. On every row, Extension − Tuition comes out exactly equal to TA_Discount.
+The Product also links to its offering through `Product2.Course_Offering__c`. That field holds the Course Offering's Salesforce record Id, not the 4D ID.
 
-| Enrollment | Type | Tuition (line price) | Adjustment | Line total = Extension |
-|---|---|---|---|---|
-| 948272 | ADD | 250 | −50 | 200 |
-| 948250 | ADD | 395 | −59.25 | 335.75 |
-| 948251 | DROP | −655 | +131 | −524 |
-| 948194 | DROP | −475 | +71.25 | −403.75 |
-| 948201 | AJST | 0 | −165 | −165 |
-
-What the sample te
+## Objects that use a different key
+- **Learning** and **LearningCourse** don't use Course.ID. Their `External_ID_4D__c` is the **base course code with the section suffix removed**, for example `POL 68`, so all the sections of a course share one Learning Course.
+- The Course Offering points back to its Learning Course through that base code (`Learnin
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
