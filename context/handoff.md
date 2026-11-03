@@ -41,14 +41,11 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-11-02
-**Status:** at risk — Code complete: all enrollment rows now generate line items. Order marking & payment scope still block full run.
+### Engagement state — 2026-11-03
+**Status:** at risk — All enrollment rows now generate line items; code complete. Order marking & payment scope still block full run.
 
 **Done this session**
-- Removed EXCLUDED_STATUSES filter—New and DupEnrollment rows now generate line items
-- Updated tests to verify all enrollment statuses produce separate ENR- keyed lines
-- Committed and pushed to stanford-csp-orchestrate (head 50546de), PR #1 updated automatically
-- Updated ARCHITECTURE.md and code comments to record decision on all-rows line item generation
+- Verified External_ID_4D__c field usage across Product2, PricebookEntry, and Purchase Inventory flows
 
 **Open items**
 - Architect decision: Order.Type__c field vs. record type to mark Registration vs. Purchase orders
@@ -65,9 +62,9 @@
 - ENR- prefix for registration line items; PIT- for purchase line items
 - registrationExtId() shared function ensures consistent key generation
 - Registration flow two-round: Draft load, then OrderItem load, then Activation
-- Drop and AJST enrollment rows each generate separate line items (Trevor 2026-11-02)
-- Line item price sourced from Tuition field, not Extension (Trevor 2026-11-02)
-- All enrollment rows (Add, Drop, AJST, New, DupEnrollment, Course cancel) generate line items (2026-11-02)
+- Drop and AJST enrollment rows each generate separate line items
+- Line item price sourced from Tuition field, not Extension
+- All enrollment rows (Add, Drop, AJST, New, DupEnrollment, Course cancel) generate line items
 - Product2 upsert keyed on External_ID_4D__c = Course.ID
 
 **Blockers**
@@ -82,29 +79,39 @@
 - Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP in code
 - Run Deploy session: validate then deploy to target org
 
-**Checked live on 2026-11-02:** the repository
-### Last session — 2026-11-02
+**Checked live on 2026-11-03:** nothing — the status above is as recorded, not re-checked
+### Last session — 2026-11-03
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Registration-Enhancements- Build |
-| Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
+| Name | Stanford-Data-Migration-CourseEnhancement-Products |
+| Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch stanford-csp-orchestrate)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Here's what the code on `stanford-csp-orchestrate` (`ed2be45`) saves in each one.
 
-Every enrollment row under a registration now gets its own line item, including rows with Status `New` and `DupEnrollment`. I pushed the change to `stanford-csp-orchestrate` as commit `50546de`; the remote branch points at it, and PR #1 includes it automatically. You'd already approved the same kind of change and push for drop rows, so I went ahead without asking again.
+## Product2: `External_ID_4D__c`
+| Flow | Value saved | Example |
+|---|---|---|
+| Course All / 2-Year / 5-Year | **Course.ID**, unchanged | `20241_POL 68 H` |
+| Purchase Inventory | **Purchase Inventory.ID**, unchanged | `3` |
 
-## What changed
-- **Status filter removed:** `EXCLUDED_STATUSES` in `registrationItemFlow.ts` is now empty, so no Status is skipped any more. I kept the setting itself, so a status can be excluded again later with a one-line change.
-- **Combined with Trevor's earlier answer:** Add, Drop and AJST rows were already each getting a line. So no
+Both flows upsert on this field, so a re-run updates the existing Product instead of creating a new one. Course IDs and inventory IDs (1–9) never overlap, so neither needs a prefix.
+
+## Pricebook2: no external ID
+- Nothing is saved, because the flows never create price books.
+- They find each book **by name**, using the `Price Books` config var. The Standard Price Book is found by `IsStandard = true`.
+
+## PricebookEntry: `External_ID_4D__c`
+| Flow | Book | Value saved | Example |
+|---|---|---|---|
+| Course flows | Standard | `STD-` + Course.ID | `STD-20241_POL 68 H` |
+| Course flows | Custom (StanfordContinuingStudies) | Course.ID | `20241_POL 68 H` |
+| Purchase Inventory | any | **Nothing.** The field is left blank | — |
+
+**Two things to be aware of:**
+- **The course flows don't match on this key.** They find an existing entry by Product + Price Book, then insert or update it
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
