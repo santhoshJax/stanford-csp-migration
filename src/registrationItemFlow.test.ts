@@ -3,6 +3,9 @@
  * Rows are from the sample the team pasted on 2026-11-02. No network.
  */
 import {
+  EXCLUDED_STATUSES,
+  INCLUDE_ADJUSTMENT_ROWS,
+  INCLUDE_DROP_ROWS,
   mapToOrderItem,
   newSkips,
   normalizeAddDrop,
@@ -102,10 +105,6 @@ describe("Registration Item Import — mapToOrderItem", () => {
     };
     const run = (o: RawEnrollmentRow) =>
       mapToOrderItem(row({ ...base, ...o }), caches(), skips, logger);
-    expect(run({ Status: "New" })).toBeNull();
-    expect(run({ Status: "DupEnrollment" })).toBeNull();
-    expect(run({ Add_Drop: "DROP" })).toBeNull();
-    expect(run({ Add_Drop: "AJST" })).toBeNull();
     expect(run({ Registration_ID: "0" })).toBeNull();
     expect(run({ Registration_ID: "999" })).toBeNull(); // Order not loaded
     expect(run({ Registration_ID: "20048" })).toBeNull(); // Order Activated
@@ -113,9 +112,9 @@ describe("Registration Item Import — mapToOrderItem", () => {
     expect(run({ Course_ID: "20081_ZZZ 1" })).toBeNull(); // no Product
     expect(run({ Tuition: "abc" })).toBeNull();
     expect(skips).toMatchObject({
-      excludedStatus: 2,
-      dropRows: 1,
-      adjustmentRows: 1,
+      excludedStatus: 0,
+      dropRows: 0,
+      adjustmentRows: 0,
       noRegistrationId: 1,
       orderNotLoaded: 1,
       orderNotDraft: 1,
@@ -135,19 +134,83 @@ describe("Registration Item Import — mapToOrderItem", () => {
     const run = (o: RawEnrollmentRow) =>
       mapToOrderItem(row({ ...base, ...o }), caches(), skips, logger);
     run({}); // sent
-    run({ Status: "New" });
-    run({ Add_Drop: "Drop" });
-    run({ Registration_ID: "999" });
+    run({ Status: "New" }); // sent (all statuses get a line)
+    run({ Add_Drop: "Drop" }); // sent (drop rows get a line)
+    run({ Registration_ID: "999", Status: "New" });
     run({ Registration_ID: "20048" });
     run({ Course_ID: "20081_ZZZ 1" });
     expect(skips.records.map((r) => r.reason)).toEqual([
-      'Status "New" is excluded (EXCLUDED_STATUSES)',
-      "Drop row (INCLUDE_DROP_ROWS = false)",
       expect.stringContaining("Order not loaded"),
       expect.stringContaining("is Activated"),
       expect.stringContaining("20081_ZZZ 1"),
     ]);
     expect(skips.records[0].row).toMatchObject({ ID: "9", Status: "New" });
+  });
+
+  it("gives Drop and Adjustment rows their own line (architect, 2026-11-02)", () => {
+    expect(INCLUDE_DROP_ROWS).toBe(true);
+    expect(INCLUDE_ADJUSTMENT_ROWS).toBe(true);
+    const skips = newSkips();
+    const base = {
+      Registration_ID: "20046",
+      Student_ID: "1360759",
+      Course_ID: "20081_DAR 200",
+    };
+    const add = mapToOrderItem(
+      row({ ...base, ID: "200058", Add_Drop: "Add", Tuition: "200" }),
+      caches(),
+      skips,
+      logger,
+    );
+    const drop = mapToOrderItem(
+      row({ ...base, ID: "200059", Add_Drop: "DROP", Tuition: "-200" }),
+      caches(),
+      skips,
+      logger,
+    );
+    const adjustment = mapToOrderItem(
+      row({ ...base, ID: "200060", Add_Drop: "AJST", Tuition: "-50" }),
+      caches(),
+      skips,
+      logger,
+    );
+    // Three separate lines on the same Order, each keyed by its own Enrollment.ID.
+    expect([add, drop, adjustment].map((r) => r?.External_ID_4D__c)).toEqual([
+      "ENR-200058",
+      "ENR-200059",
+      "ENR-200060",
+    ]);
+    expect([add, drop, adjustment].map((r) => r?.UnitPrice)).toEqual([
+      200, -200, -50,
+    ]);
+    expect(drop?.["Order.External_ID_4D__c"]).toBe("REG-20046");
+    expect(skips.records).toHaveLength(0);
+  });
+
+  it("gives every Status its own line, incl. New and DupEnrollment (architect, 2026-11-02)", () => {
+    expect(EXCLUDED_STATUSES.size).toBe(0);
+    const skips = newSkips();
+    const base = { Registration_ID: "20046", Course_ID: "20081_DAR 200" };
+    const statuses = ["Enrolled", "New", "DupEnrollment", "Course cancel"];
+    const recs = statuses.map((status, i) =>
+      mapToOrderItem(
+        row({ ...base, ID: `30000${i}`, Status: status }),
+        caches(),
+        skips,
+        logger,
+      ),
+    );
+    expect(recs.map((r) => r?.External_ID_4D__c)).toEqual([
+      "ENR-300000",
+      "ENR-300001",
+      "ENR-300002",
+      "ENR-300003",
+    ]);
+    expect(
+      recs.every((r) => r?.["Order.External_ID_4D__c"] === "REG-20046"),
+    ).toBe(true);
+    expect(skips.excludedStatus).toBe(0);
+    expect(skips.records).toHaveLength(0);
   });
 
   it("normalizes Add_Drop values", () => {

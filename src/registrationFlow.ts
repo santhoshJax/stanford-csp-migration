@@ -289,9 +289,10 @@
  *   - Final state of historical Orders: Draft or Activated.
  *   - Enrollments whose Registration falls outside the 2-year Order window
  *     are skipped by Registration Item Import ("Order not loaded").
- *   - Registration Item defaults (constants in registrationItemFlow.ts):
- *     only Add_Drop = Add gets a line; Drop / AJST and Status New /
- *     DupEnrollment are skipped; UnitPrice = Tuition, not Extension.
+ *   - Registration Item rules (registrationItemFlow.ts) — all decided by the
+ *     architect 2026-11-02: UnitPrice = Tuition, not Extension; every
+ *     enrollment row under a registration gets its own line item (Add, Drop,
+ *     AJST, and every Status incl. New / DupEnrollment).
  *   - Check_No → Order.Check_Number__c is typed "Number"; non-numeric
  *     values are skipped with a warning. DEFERRED (2026-10-01) — architect
  *     indicated historically all payments were by credit card, so this is

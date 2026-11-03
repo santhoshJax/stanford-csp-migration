@@ -39,15 +39,23 @@
  *     Order). Everything else is skipped and counted, not left to fail one by
  *     one in the Bulk job.
  *
- * WHICH ENROLLMENT ROWS GET A LINE — defaults chosen 2026-11-02, each is a
- * decision for the architect and each is a constant below, not silent:
- *   - Status "New" (abandoned cart, per the Enrollment tab) and "DupEnrollment"
- *     (duplicate row) are skipped.
- *   - Add_Drop = Add gets a line. Drop and Adjustment rows (refund/adjustment
- *     records 4D adds beside the original) are skipped by default so tuition
- *     is not double-counted: INCLUDE_DROP_ROWS / INCLUDE_ADJUSTMENT_ROWS.
- *   - UnitPrice = Tuition (workbook). Fee, Extension (net) and TA_Discount
- *     have no line and are not mapped.
+ * WHICH ENROLLMENT ROWS GET A LINE — each rule is a constant below, not silent:
+ *   - EVERY enrollment row under a registration gets a line, whatever its
+ *     Status — CONFIRMED by the architect (2026-11-02): "bring all enrollment
+ *     rows under each registration". Status "New" and "DupEnrollment" are no
+ *     longer skipped (EXCLUDED_STATUSES is empty).
+ *   - Add, Drop and Adjustment (AJST) rows EACH get their own line —
+ *     CONFIRMED by the architect (Trevor, 2026-11-02): "They'll need to have
+ *     a line item and show up as extra rows. CSP has already agreed to the
+ *     extra rows living in salesforce for the migration."
+ *     (INCLUDE_DROP_ROWS / INCLUDE_ADJUSTMENT_ROWS = true.) The line's
+ *     UnitPrice is the row's Tuition as-is; whether 4D stores Tuition on a
+ *     Drop/AJST row as negative or repeats the positive price is not yet
+ *     checked against real Enrollment rows — if positive, Order totals will
+ *     overstate the charge.
+ *   - UnitPrice = Tuition — CONFIRMED by the architect (2026-11-02): "Use the
+ *     tuition". Fee, Extension (net) and TA_Discount have no line and are not
+ *     mapped. Salesforce totals the Order from its line items.
  *   - Orders are the 2-year scope (Registration_Date), so enrollments of older
  *     registrations are skipped as "Order not loaded".
  *
@@ -94,12 +102,23 @@ const TEST_MODE = true;
 const TEST_LIMIT = 50;
 const TEST_SKIP = 0;
 
-/** Drop rows are refund records 4D creates beside the original Add row. */
-export const INCLUDE_DROP_ROWS = false;
-/** Adjustment (AJST) rows are late refunds / tuition changes. */
-export const INCLUDE_ADJUSTMENT_ROWS = false;
-/** Enrollment.Status values that never get a line (lower case). */
-export const EXCLUDED_STATUSES = new Set(["new", "dupenrollment"]);
+/**
+ * Drop rows are refund records 4D creates beside the original Add row.
+ * true = they get their own line (architect, 2026-11-02).
+ */
+export const INCLUDE_DROP_ROWS = true;
+/**
+ * Adjustment (AJST) rows are late refunds / tuition changes.
+ * true = they get their own line (architect, 2026-11-02).
+ */
+export const INCLUDE_ADJUSTMENT_ROWS = true;
+/**
+ * Enrollment.Status values that never get a line (lower case). EMPTY by
+ * architect decision (2026-11-02): every enrollment row under a registration
+ * gets a line, including Status "New" and "DupEnrollment". Kept as a set so a
+ * status can be excluded again without touching the mapper.
+ */
+export const EXCLUDED_STATUSES = new Set<string>();
 
 export interface RawEnrollmentRow {
   ID?: string;
@@ -396,7 +415,7 @@ export const registrationItemImport = flow({
       .join(", ");
     logger.info(
       `[${FLOW_NAME}] Window ${windowNumber} mapped — rows=${rowsInWindow}, orderItems=${items.length}, skipped: ` +
-        `noRegistrationId=${skips.noRegistrationId}, status New/DupEnrollment=${skips.excludedStatus}, ` +
+        `noRegistrationId=${skips.noRegistrationId}, excludedStatus=${skips.excludedStatus}, ` +
         `dropRows=${skips.dropRows}, adjustmentRows=${skips.adjustmentRows}, ` +
         `orderNotLoaded=${skips.orderNotLoaded}, orderNotDraft=${skips.orderNotDraft}, ` +
         `noCourseId=${skips.noCourseId}, badTuition=${skips.badTuition}, ` +

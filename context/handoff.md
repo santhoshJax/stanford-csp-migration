@@ -41,76 +41,69 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-11-02
-**Status:** at risk — Code complete with REG- prefixes; architect decision on Order marking still blocks full run
+### Engagement state — 2026-11-03
+**Status:** at risk — Course Products removal planned; architect decisions still blocking build. Session documented current Product/PricebookEntry writes across…
 
 **Done this session**
-- Verified all four places now use REG- prefix for registration orders/cards/payments
-- Confirmed no raw registration keys remain in source code
-- Validated 146 tests pass, code compiles cleanly
+- Documented all Product2 fields written by course flows vs. Purchase Inventory
+- Documented all PricebookEntry fields and update logic for both flows
+- Clarified org automation dependency once course Products removed
 
 **Open items**
+- Architect decision: Registration Item lookup strategy (Course Offering vs. Product External_ID)
+- Architect decision: keep or delete unused Product/PricebookEntry code after removal
 - Architect decision: Order.Type__c field vs. record type to mark Registration vs. Purchase orders
 - Architect decision: Payments table as sole payment source or other sources exist
 - Architect decision: historical Orders end state (Draft or Activated)
+- Verify Tuition sign on Drop/AJST rows in real Enrollment file (positive vs. negative)
 - Verify UAT org: Student__r.Student_ID_4D__c, Course_Offering__r.External_ID_4D__c field names, price books active
 - Review and merge PR #1 to main
-- Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP before full run
-- Run sf deploy validate against target org
-- Run Deploy session to ship code to target org
 
 **Decisions**
 - REG- prefix applied to registration orders, cards, payment groups, payments
 - ENR- prefix for registration line items; PIT- for purchase line items
 - registrationExtId() shared function ensures consistent key generation
 - Registration flow two-round: Draft load, then OrderItem load, then Activation
-- Skip Drop, AJST, New, DupEnrollment rows in OrderItem load
+- Drop and AJST enrollment rows each generate separate line items
+- Line item price sourced from Tuition field, not Extension
+- All enrollment rows (Add, Drop, AJST, New, DupEnrollment, Course cancel) generate line items
 - Product2 upsert keyed on External_ID_4D__c = Course.ID
-- Index version incremented to 2
-- UAT has no registration orders yet—no re-keying needed
 
 **Blockers**
-- Order marking strategy (Order.Type__c vs. record type) blocks full run—REG-/PUR- prefix currently the only differentiator
+- Order marking strategy (Order.Type__c vs. record type) blocks full run
 - Architect confirmation needed on payment source scope and historical order end state
+- Registration Item course Product lookup strategy must be decided before course Product removal
 
 **Next**
-- Architect confirms Order marking decision (field vs. record type), payment source scope, historical order status
+- Architect decides: Registration Item lookup on Course Offering or Product External_ID
+- Architect decides: delete or keep unused Product/PricebookEntry code
+- Architect decides: build with diff review or build and push directly
+- Obtain real Drop/AJST Enrollment rows from 4D to verify Tuition sign
 - Verify UAT org: price books active, External_ID_4D__c field exists on PricebookEntry
-- Review and merge PR #1 to main
-- Turn off TEST_MODE, TEST_LIMIT, TEST_SKIP in code
-- Run Deploy session: validate then deploy to target org
 
-**Checked live on 2026-11-02:** nothing — the status above is as recorded, not re-checked
-### Last session — 2026-11-02
+**Checked live on 2026-11-03:** nothing — the status above is as recorded, not re-checked
+### Last session — 2026-11-03
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Purchase-Orders |
-| Session | `f4cdddc2-dc81-4ddd-82f3-28dc8071f9d4` |
+| Name | Stanford-Data-Migration-CourseEnhancement-Products |
+| Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-The other session's change is on the branch, so there's nothing left for me to change on the purchase side.
+Two groups of flows write these objects: the three course flows and Purchase Inventory. Below is every field each one writes, taken from the latest code on `stanford-csp-orchestrate` (`247f2e0`). The course flows still create Products and price book entries, because the removal we planned last turn hasn't been built yet.
 
-**What's on `stanford-csp-orchestrate` now (head `c40191e`, my local copy is updated to match):**
-- Commit `2f98740`, "Prefix Registration external IDs with REG-", covers all four places I listed:
-  - `commerceShared.ts` now has the shared `REG-` prefix and the `registrationExtId()` helper that builds the key.
-  - `registrationFlow.ts` uses `REG-` for card, Order and Payment. PaymentGroup reuses the Order's key, so it gets `REG-` too.
-  - `registrationItemFlow.ts` finds each line item's Order by `REG-` + Registration ID.
-  - `paymentsFlow.ts` finds and checks PaymentGroups by `REG-` + Registration ID.
-- I searched the source and found nowhere that still builds or looks up a raw registration key.
+## Product2
 
-**External ID prefixes in the code now:**
-
-| Records | Prefix |
-|---|---|
-| Registration orders, cards, payment groups, payments | `REG-` |
-| Purchase orders, cards, payment groups, payments | `PUR-` |
-| Registration line items | `ENR-` |
-| Purchase line items | `PIT-` |
-| Payments flow records | `PAY-` |
-
-**A correction:** last turn I said registration orders were already loaded in
+| Field | Course flows (All / 2-Year / 5-Year) | Purchase Inventory |
+|---|---|---|
+| `External_ID_4D__c` (upsert key) | Course.ID, e.g. `20241_POL 68 H` | Purchase Inventory.ID, e.g. `3` |
+| `Name` | Course.Title with HTML removed, up to 255 characters. If the title is blank it uses Course.Code, then Course.ID | Item_Type |
+| `ProductCode` | Course.Code, e.g. `POL 68 H` (only if there is one) | Item_Type |
+| `Description` | Course.Description converted to plain text, `_4DNL_` turned into line breaks, cut to 4,000 characters (only if there is one) | Description, cut to 4,000 characters (only if there is one) |
+| `IsActive` | Always `false` | The 4D `Active` value |
+| `Course_Offering__c` | The Course Offering saved for the same row | — |
+| `QuantityUnitOfMeasure` | — | Unit_Description, only if it's a known picklist value. Anything else is skipped wit
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
