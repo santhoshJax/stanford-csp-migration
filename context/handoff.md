@@ -42,22 +42,22 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-04
-**Status:** at risk — Code pushed & PR #1 ready; validation deploy & UAT verification still pending before merge
+**Status:** at risk — Code vs. workbook: 3 mapping differences found. Architect updated sheet 2026-11-02; code unverified in UAT.
 
 **Done this session**
-- Confirmed adjustment mapping logic: Amount = Extension − Tuition, keyed ADJ-{Enrollment.ID}, loads as step 2 before activation
-- Verified branch head e4eaa6a includes adjustment code in registrationItemFlow.ts on stanford-csp-orchestrate
-- Confirmed PR #1 includes all adjustment changes, ready for review
+- Compared workbook (Registration, Enrollment, Payments, Purchase tabs) against code on stanford-csp-orchestrate branch
+- Identified 3 rows where sheet differs from built logic
+- Confirmed External_ID_4D__c field created in UAT org
 
 **Open items**
-- Run sf deploy validate against UAT org to confirm field requirements & catch schema mismatches
-- Verify in UAT: External_ID_4D__c exists on OrderItemAdjustmentLineItem, price books active, org automation sets four Product fields
-- Test Drop rows with positive adjustment amounts in UAT
-- Confirm org accepts adjustment with no OrderAdjustmentGroup record
-- Update Registration Item error message to point at org automation instead of course imports
+- Decide: use TA_Discount or Extension−Tuition for adjustment Amount (both equal in sample, but differ in principle)
+- Decide: take Discount Name from Enrollment.Discount_Type or keep fixed text (conflicts with Trevor's Order-level discount type statement)
+- Decide: link Payments.Purchase_ID via Conversion logic (sheet now says Conversion, code says Do Not Map)
+- Decide: find course product via Product2.Course_Offering__c (sheet option B) or External_ID_4D__c (current code)
+- Run sf deploy validate against UAT org to verify field requirements & schema
+- Test adjustment creation in UAT: no OrderAdjustmentGroup required, all required fields present
 - Open PR #1 for review & merge to main
 - Rebuild & import three course integrations into Prismatic
-- Run Deploy session to ship to production
 
 **Decisions**
 - Discount adjustment amount = Extension − Tuition (no separate sign rule per row type)
@@ -70,20 +70,18 @@
 - TA_Discount compared only for mismatch warning; not written to Salesforce
 
 **Blockers**
-- Validation deploy not yet run — code unverified against target org
-- External_ID_4D__c field must exist on OrderItemAdjustmentLineItem or upsert fails
-- No PR review completed — code cannot merge until reviewed
+- Workbook edit history unavailable — cannot confirm who changed what or when exactly
+- 3 mapping differences between code and workbook require architect confirmation before build
+- Validation deploy not yet run — code unverified against UAT org schema
 
 **Next**
-- Run sf deploy validate against UAT org to confirm field requirements & catch any org schema mismatches
-- Verify in UAT: External_ID_4D__c on OrderItemAdjustmentLineItem exists, price books active, org automation sets all four Product fields
-- Test Drop rows with positive adjustment amounts in UAT to confirm org accepts positive Amount
-- Update Registration Item error message in registrationItemFlow.ts (one-line text change)
-- Open PR #1 for review & merge to main
-- Rebuild three course integrations in Prismatic & import
-- Run Deploy session to ship to production
+- Confirm with architect (or Trevor): Amount = TA_Discount or Extension−Tuition; Name from Discount_Type or fixed text; Purchase_ID Conversion logic; product lookup via Course_Offering__c or External_ID_4D__c
+- Run sf deploy validate against UAT org
+- Test adjustment creation in UAT (no OrderAdjustmentGroup, required fields)
+- Update code if architect confirms changes, or close differences if workbook reverts to code logic
+- Open PR #1 for review & merge
 
-**Checked live on 2026-11-04:** the repository
+**Checked live on 2026-11-04:** the Salesforce org, Google Workspace, the repository
 ### Last session — 2026-11-04
 | | |
 |---|---|
@@ -93,28 +91,25 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-Yes, it's pushed. I read `src/registrationItemFlow.ts` from GitHub just now, and the adjustment code is on `stanford-csp-orchestrate`. The branch head is now `e4eaa6a`, because commits from later sessions sit on top of `6a4a78b`. PR #1 includes it. It hasn't been run against an org yet.
+I checked the workbook, but I can't tell you exactly what the architect changed. My tools don't show the sheet's edit history or who edited which cells. Here's what I could see:
 
-## How each adjustment row is mapped
+- **Last edit:** 2026-11-02 at 19:11 UTC, which was after the standup.
+- **Comments:** none on these tabs since June.
+- **Highlighted cells:** none on these tabs that look recent.
 
-Each enrollment row whose OrderItem loads can get one `OrderItemAdjustmentLineItem`:
+So I compared the Registration, Enrollment, Payments, Purchase, Purchase Item and Purchase Inventory tabs against the code on the branch. Three rows differ from what we built, and they're probably the recent updates.
 
-| Salesforce field | Value | Source / rule |
+## What differs from the code
+
+**1. Discount adjustment line (Registration tab, rows 67–69).** These rows look new, since nothing in the code or `ARCHITECTURE.md` mentions them.
+
+| Field | Workbook | Our code |
 |---|---|---|
-| `External_ID_4D__c` (upsert key) | `ADJ-{Enrollment.ID}` | Enrollment `ID`, e.g. `ADJ-948272` |
-| `OrderItemId` | Matched on `OrderItem.External_ID_4D__c = ENR-{Enrollment.ID}` | Salesforce finds the parent line by its external ID |
-| `Name` | `Discount — Enrollment {ID}` | Fixed text |
-| `Amount` | `Extension − Tuition`, rounded to cents | Enrollment `Extension` and `Tuition` |
+| `Name` | `Registration.Discount_Type` | Fixed text, `Discount — Enrollment {ID}` |
+| `Amount` | `Enrollment.TA_Discount`, mapped as is | `Extension − Tuition` |
+| Order Product | Lookup to the OrderItem being created | Same (`ENR-{id}`) |
 
-Example, enrollment 948272:
-- OrderItem `ENR-948272`: UnitPrice 250 (Tuition).
-- Adjustment `ADJ-948272`: Amount 200 − 250 = **−50**, so the line total is 200, which equals Extension.
-
-On a drop (948251) it's −524 − (−655) = **+131**.
-
-## Rules
-- **Amount is 0** (Extension equals Tuition): no adjustment is created.
-- **Extension is blank or 
+- **Amount:** in practice there's no difference. In your 19-row sample, TA_Discount equalled Extension − Tuition on every row, signs included. One option i
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
