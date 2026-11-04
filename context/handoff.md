@@ -42,12 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-04
-**Status:** at risk — Code vs. workbook: 3 mapping differences found. Architect updated sheet 2026-11-02; code unverified in UAT.
+**Status:** blocked — Quick status: I've checked the branch and found one new code change since my last review.
 
 **Done this session**
-- Compared workbook (Registration, Enrollment, Payments, Purchase tabs) against code on stanford-csp-orchestrate branch
-- Identified 3 rows where sheet differs from built logic
-- Confirmed External_ID_4D__c field created in UAT org
+- Quick status: I've checked the branch and found one new code change since my last review. Here's the full list of concerns. There are **4 things to change**, **6 decisions to make** and **4 things to check in UAT**. I haven't changed any c…
 
 **Open items**
 - Decide: use TA_Discount or Extension−Tuition for adjustment Amount (both equal in sample, but differ in principle)
@@ -81,7 +79,7 @@
 - Update code if architect confirms changes, or close differences if workbook reverts to code logic
 - Open PR #1 for review & merge
 
-**Checked live on 2026-11-04:** the Salesforce org, Google Workspace, the repository
+**Checked live on 2026-11-04:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-04
 | | |
 |---|---|
@@ -91,25 +89,16 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-I checked the workbook, but I can't tell you exactly what the architect changed. My tools don't show the sheet's edit history or who edited which cells. Here's what I could see:
+Quick status: I've checked the branch and found one new code change since my last review. Here's the full list of concerns.
 
-- **Last edit:** 2026-11-02 at 19:11 UTC, which was after the standup.
-- **Comments:** none on these tabs since June.
-- **Highlighted cells:** none on these tabs that look recent.
+There are **4 things to change**, **6 decisions to make** and **4 things to check in UAT**. I haven't changed any code. One finding is new since my last answer: commit `65ed324` (2026-11-04) removed product and price book entry creation from the course flows, so Salesforce org automation now creates them. That makes the first item below the most urgent.
 
-So I compared the Registration, Enrollment, Payments, Purchase, Purchase Item and Purchase Inventory tabs against the code on the branch. Three rows differ from what we built, and they're probably the recent updates.
+## 1. Changes I recommend (ready to build when you say so)
 
-## What differs from the code
-
-**1. Discount adjustment line (Registration tab, rows 67–69).** These rows look new, since nothing in the code or `ARCHITECTURE.md` mentions them.
-
-| Field | Workbook | Our code |
-|---|---|---|
-| `Name` | `Registration.Discount_Type` | Fixed text, `Discount — Enrollment {ID}` |
-| `Amount` | `Enrollment.TA_Discount`, mapped as is | `Extension − Tuition` |
-| Order Product | Lookup to the OrderItem being created | Same (`ENR-{id}`) |
-
-- **Amount:** in practice there's no difference. In your 19-row sample, TA_Discount equalled Extension − Tuition on every row, signs included. One option i
+**A. Find the course product through its Course Offering** (workbook rows 63 and 66)
+- **Now:** Registration Item looks for a price book entry where `Product2.External_ID_4D__c = Course_ID`. That only works if the org automation writes our ID onto the Product. The commit message says it does, but nobody has checked that in UAT.
+- **Change:** look it up through `Product2.Course_Offering__r.External_ID_4D__c = Course_ID`. That's what the sheet says, and it works whether or not the automation sets the ID.
+- **Related risk:** our earlier course runs already created Products and entries in UAT (`STD-…` / `<Course.ID>` keys). If the automation now adds its
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
