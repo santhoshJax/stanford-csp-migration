@@ -150,6 +150,8 @@ export interface OrderState {
   id: string;
   status: string;
   hasItems: boolean;
+  /** Order.TA_Discount_Type__c — used as the discount adjustment Name (2026-11-04). */
+  discountType: string | null;
 }
 
 const ORDER_QUERY_ID_CHUNK = 200;
@@ -178,11 +180,12 @@ export async function loadOrderStates(
       Id: string;
       Status: string;
       External_ID_4D__c: string;
+      TA_Discount_Type__c: string | null;
       OrderItems: { totalSize: number } | null;
     }>(
       base,
       token,
-      "SELECT Id, Status, External_ID_4D__c, (SELECT Id FROM OrderItems LIMIT 1) " +
+      "SELECT Id, Status, External_ID_4D__c, TA_Discount_Type__c, (SELECT Id FROM OrderItems LIMIT 1) " +
         `FROM Order WHERE External_ID_4D__c IN (${list})`,
     );
     for (const row of rows) {
@@ -190,6 +193,7 @@ export async function loadOrderStates(
         id: row.Id,
         status: row.Status,
         hasItems: (row.OrderItems?.totalSize ?? 0) > 0,
+        discountType: row.TA_Discount_Type__c ?? null,
       });
     }
   }
@@ -273,7 +277,11 @@ export function pricebooksInLoadOrder(
   resolved: ResolvedPriceBooks,
 ): ResolvedPricebook[] {
   const books: ResolvedPricebook[] = [
-    { id: resolved.standard.Id, name: resolved.standard.Name, isStandard: true },
+    {
+      id: resolved.standard.Id,
+      name: resolved.standard.Name,
+      isStandard: true,
+    },
   ];
   if (resolved.custom) {
     books.push({
@@ -319,9 +327,7 @@ export async function resolveConfiguredPricebooks(
  * Rule: the first CUSTOM price book in the "Price Books" list; the Standard
  * Price Book only when no custom book is configured.
  */
-export function orderPricebook(
-  books: ResolvedPricebook[],
-): ResolvedPricebook {
+export function orderPricebook(books: ResolvedPricebook[]): ResolvedPricebook {
   const custom = books.find((b) => !b.isStandard);
   return custom ?? books[0];
 }
@@ -609,4 +615,43 @@ export async function streamTsvWindow(
       error: (err: Error) => reject(err),
     });
   });
+}
+
+/**
+ * CC_Last_Four as 4-character text, keeping the leading zero ("0418", not
+ * 418). Decided 2026-11-04. A value that lost its zero upstream ("418") is
+ * padded back to 4 digits, since a card's last four is always 4 digits.
+ * Non-digits are ignored; blank or more than 4 digits → undefined (not sent).
+ *
+ * UAT CHECK: if CardPaymentMethod.CardLastFour is a Number field in the org,
+ * Salesforce stores 418 whatever we send — confirm the field type.
+ */
+export function formatCardLastFour(
+  raw: string | undefined,
+): string | undefined {
+  const digits = str(raw).replace(/\.0+$/, "").replace(/\D/g, "");
+  if (!digits || digits.length > 4) return undefined;
+  return digits.padStart(4, "0");
+}
+
+/**
+ * Negative CC_Amt → Refund, not a negative Payment (decided 2026-11-04).
+ * Takes the Payment record mapToPayment built and returns an Unreferenced
+ * Refund for the absolute amount, on the same Account and (once stitched)
+ * PaymentGroup. Unreferenced because the money returned was paid on a
+ * different registration/purchase row, so there is no Payment on this row to
+ * reference. Same External_ID_4D__c as the row (Refund is its own object).
+ */
+export function paymentToRefund(payment: SfRecord): SfRecord {
+  const refund: SfRecord = {
+    [EXT_ID_FIELD]: payment[EXT_ID_FIELD],
+    Type: "Unreferenced",
+    Status: "Processed",
+    ProcessingMode: "External",
+    Amount: Math.abs(Number(payment.Amount)),
+  };
+  for (const key of ["Account.Student_ID_4D__c", "EffectiveDate"]) {
+    if (payment[key] !== undefined) refund[key] = payment[key];
+  }
+  return refund;
 }

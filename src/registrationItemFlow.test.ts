@@ -230,8 +230,14 @@ describe("Registration order activation (shared with Purchase)", () => {
   ];
   it("round 1 sends Draft orders; round 2 activates only those with items", () => {
     const existing = new Map([
-      ["20046", { id: "801A", status: "Draft", hasItems: true }],
-      ["20047", { id: "801B", status: "Draft", hasItems: false }],
+      [
+        "20046",
+        { id: "801A", status: "Draft", hasItems: true, discountType: null },
+      ],
+      [
+        "20047",
+        { id: "801B", status: "Draft", hasItems: false, discountType: null },
+      ],
     ]);
     expect(planOrderActivation(orders, existing, false).toUpsert).toHaveLength(
       2,
@@ -301,7 +307,7 @@ describe("Discount adjustment line (option A: Amount = Extension − Tuition)", 
       expect(adj).toEqual({
         External_ID_4D__c: `ADJ-${id}`,
         "OrderItem.External_ID_4D__c": `ENR-${id}`,
-        Name: `Discount — Enrollment ${id}`,
+        Name: "Discount",
         Amount: amount,
       });
       // Line total (UnitPrice + adjustment) equals Extension.
@@ -331,6 +337,25 @@ describe("Discount adjustment line (option A: Amount = Extension − Tuition)", 
       mapToOrderItemAdjustment(row({ ID: "2", Extension: "" }), stats, logger),
     ).toBeNull();
     expect(stats.noExtension).toBe(1);
+  });
+
+  it("names the adjustment from the Order's TA_Discount_Type__c, else Discount", () => {
+    const r = row({
+      ID: "948272",
+      Tuition: "250",
+      Extension: "200",
+      TA_Discount: "-50",
+    });
+    expect(
+      mapToOrderItemAdjustment(r, newAdjustmentStats(), logger, "Teacher")
+        ?.Name,
+    ).toBe("Teacher");
+    expect(
+      mapToOrderItemAdjustment(r, newAdjustmentStats(), logger, "  ")?.Name,
+    ).toBe("Discount");
+    expect(
+      mapToOrderItemAdjustment(r, newAdjustmentStats(), logger, null)?.Name,
+    ).toBe("Discount");
   });
 
   it("loads Extension − Tuition but flags a TA_Discount mismatch", () => {

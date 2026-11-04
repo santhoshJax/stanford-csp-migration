@@ -218,6 +218,9 @@ export function newAdjustmentStats(): AdjustmentStats {
 
 const roundCents = (n: number): number => Math.round(n * 100) / 100;
 
+/** Adjustment Name when the Order has no TA_Discount_Type__c. */
+export const DEFAULT_ADJUSTMENT_NAME = "Discount";
+
 /**
  * The discount adjustment for one Enrollment row (option A):
  * Amount = Extension − Tuition, so the OrderItem's adjusted total equals
@@ -228,6 +231,8 @@ export function mapToOrderItemAdjustment(
   raw: RawEnrollmentRow,
   stats: AdjustmentStats,
   logger: { warn: (m: string) => void },
+  /** The parent Order's TA_Discount_Type__c (decided 2026-11-04). */
+  discountType?: string | null,
 ): SfRecord | null {
   const id = stripDotZero(raw.ID);
   const tuition = parseCurrency(raw.Tuition);
@@ -266,7 +271,9 @@ export function mapToOrderItemAdjustment(
     [EXT_ID_FIELD]: `${REGISTRATION_ITEM_ADJUSTMENT_EXT_PREFIX}${id}`,
     // Parent OrderItem, upserted in step 1 with key ENR-{Enrollment.ID}.
     "OrderItem.External_ID_4D__c": `${REGISTRATION_ITEM_EXT_PREFIX}${id}`,
-    Name: `Discount — Enrollment ${id}`,
+    // Name = the Order's discount type (workbook row 67: Registration.Discount_Type,
+    // which Registration Import writes to Order.TA_Discount_Type__c), else "Discount".
+    Name: str(discountType ?? undefined).trim() || DEFAULT_ADJUSTMENT_NAME,
     Amount: amount,
   };
 }
@@ -493,17 +500,26 @@ export const registrationItemImport = flow({
       registrationIds.map(registrationExtId),
       logger,
     );
+    const rawRegistrationId = (extId: string): string =>
+      extId.startsWith(REGISTRATION_EXT_PREFIX)
+        ? extId.slice(REGISTRATION_EXT_PREFIX.length)
+        : extId;
     const caches: RegistrationItemCaches = {
       pricebookEntryByCourseId,
       orderStatusByRegistrationId: new Map(
         [...orderStates].map(([extId, v]) => [
-          extId.startsWith(REGISTRATION_EXT_PREFIX)
-            ? extId.slice(REGISTRATION_EXT_PREFIX.length)
-            : extId,
+          rawRegistrationId(extId),
           v.status,
         ]),
       ),
     };
+    // Registration_ID → Order.TA_Discount_Type__c, for the adjustment Name.
+    const discountTypeByRegistrationId = new Map(
+      [...orderStates].map(([extId, v]) => [
+        rawRegistrationId(extId),
+        v.discountType,
+      ]),
+    );
 
     let items: SfRecord[] = [];
     const skips = newSkips();
@@ -514,7 +530,12 @@ export const registrationItemImport = flow({
       const item = mapToOrderItem(row, caches, skips, logger);
       if (!item) continue;
       items.push(item);
-      const adjustment = mapToOrderItemAdjustment(row, adjustmentStats, logger);
+      const adjustment = mapToOrderItemAdjustment(
+        row,
+        adjustmentStats,
+        logger,
+        discountTypeByRegistrationId.get(stripDotZero(row.Registration_ID)),
+      );
       if (adjustment) {
         adjustmentByItemKey.set(item[EXT_ID_FIELD] as string, adjustment);
       }

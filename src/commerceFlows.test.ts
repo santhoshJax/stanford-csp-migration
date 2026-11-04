@@ -9,6 +9,8 @@ import {
   pricebooksInLoadOrder,
   orderPricebook,
   registrationExtId,
+  formatCardLastFour,
+  paymentToRefund,
 } from "./commerceShared";
 import {
   mapToCardPaymentMethod as mapRegistrationCpm,
@@ -76,7 +78,10 @@ describe("Price Books config var (shared with the course flows)", () => {
     expect(books[1].isStandard).toBe(false);
   });
   it("adds the Standard Price Book even when the config leaves it out", () => {
-    const books = load(["StanfordContinuingStudies Price Book"], [standard, scs]);
+    const books = load(
+      ["StanfordContinuingStudies Price Book"],
+      [standard, scs],
+    );
     expect(books.map((b) => b.name)).toEqual([
       "Standard Price Book",
       "StanfordContinuingStudies Price Book",
@@ -141,11 +146,17 @@ describe("Purchase Inventory → Product2", () => {
     "First one is free, $10 charged for each additional",
     "per course",
   ])("writes the source unit %p", (unit) => {
-    const p = mapToProduct2({ ID: "3", Item_Type: "X", Unit_Description: unit }, logger);
+    const p = mapToProduct2(
+      { ID: "3", Item_Type: "X", Unit_Description: unit },
+      logger,
+    );
     expect(p?.QuantityUnitOfMeasure).toBe(unit);
   });
   it("leaves an unknown unit blank", () => {
-    const p = mapToProduct2({ ID: "4", Item_Type: "X", Unit_Description: "per page" }, logger);
+    const p = mapToProduct2(
+      { ID: "4", Item_Type: "X", Unit_Description: "per page" },
+      logger,
+    );
     expect(p).not.toHaveProperty("QuantityUnitOfMeasure");
   });
   it("skips a row with no Item_Type", () => {
@@ -192,7 +203,7 @@ describe("Purchase → Order / Payment / CardPaymentMethod", () => {
       External_ID_4D__c: "PUR-2",
       ExpiryMonth: 10,
       ExpiryYear: 20,
-      CardLastFour: 224,
+      CardLastFour: "0224",
     });
     expect(mapPurchasePayment(row, logger)).toMatchObject({
       External_ID_4D__c: "PUR-2",
@@ -401,15 +412,28 @@ describe("Purchase → Order activation (2 rounds)", () => {
     Pricebook2Id: "01s",
   });
   const existing = new Map([
-    ["PUR-2", { id: "801A", status: "Draft", hasItems: true }],
-    ["PUR-3", { id: "801B", status: "Draft", hasItems: false }],
-    ["PUR-4", { id: "801C", status: "Activated", hasItems: true }],
+    [
+      "PUR-2",
+      { id: "801A", status: "Draft", hasItems: true, discountType: null },
+    ],
+    [
+      "PUR-3",
+      { id: "801B", status: "Draft", hasItems: false, discountType: null },
+    ],
+    [
+      "PUR-4",
+      { id: "801C", status: "Activated", hasItems: true, discountType: null },
+    ],
   ]);
   const orders = ["1", "2", "3", "4"].map(order);
 
   it("round 1: new + Draft orders sent as Draft, Activated skipped", () => {
     const plan = planOrderActivation(orders, existing, false);
-    expect(plan.toUpsert.map((o) => o.External_ID_4D__c)).toEqual(["PUR-1", "PUR-2", "PUR-3"]);
+    expect(plan.toUpsert.map((o) => o.External_ID_4D__c)).toEqual([
+      "PUR-1",
+      "PUR-2",
+      "PUR-3",
+    ]);
     expect(plan.toUpsert.every((o) => o.Status === "Draft")).toBe(true);
     expect(plan.activating).toBe(0);
     expect([...plan.alreadyActivated.keys()]).toEqual(["PUR-4"]);
@@ -424,5 +448,53 @@ describe("Purchase → Order activation (2 rounds)", () => {
     expect(plan.activating).toBe(1);
     expect(plan.draftWithoutItems).toEqual(["PUR-3"]);
     expect(plan.alreadyActivated.get("PUR-4")).toBe("801C");
+  });
+});
+
+describe("Card last four (keeps the leading zero, 2026-11-04)", () => {
+  it("keeps or restores the zero and sends text", () => {
+    expect(formatCardLastFour("0418")).toBe("0418");
+    expect(formatCardLastFour("418")).toBe("0418");
+    expect(formatCardLastFour("418.0")).toBe("0418");
+    expect(formatCardLastFour("1111")).toBe("1111");
+    expect(formatCardLastFour("")).toBeUndefined();
+    expect(formatCardLastFour("12345")).toBeUndefined();
+  });
+  it("is used by the Registration card mapping", () => {
+    expect(
+      mapRegistrationCpm({ ID: "592436050", CC_Last_Four: "0418" }),
+    ).toMatchObject({ CardLastFour: "0418" });
+  });
+});
+
+describe("Negative CC_Amt → Refund (2026-11-04)", () => {
+  it("turns a negative Registration payment into an Unreferenced Refund", () => {
+    const payment = mapRegistrationPayment(
+      {
+        ID: "592436039",
+        Student_ID: "90962958",
+        CC_Amt: "-165",
+        CC_Transaction_ID_Date_Entered: "3/30/2026",
+      },
+      logger,
+    );
+    expect(payment?.Amount).toBe(-165);
+    expect(paymentToRefund(payment!)).toEqual({
+      External_ID_4D__c: "REG-592436039",
+      Type: "Unreferenced",
+      Status: "Processed",
+      ProcessingMode: "External",
+      Amount: 165,
+      "Account.Student_ID_4D__c": "90962958",
+      EffectiveDate: "2026-03-30",
+    });
+  });
+  it("does the same for a negative Purchase payment", () => {
+    const payment = mapPurchasePayment({ ID: "7", CC_Amt: "-20" }, logger);
+    expect(paymentToRefund(payment!)).toMatchObject({
+      External_ID_4D__c: "PUR-7",
+      Type: "Unreferenced",
+      Amount: 20,
+    });
   });
 });

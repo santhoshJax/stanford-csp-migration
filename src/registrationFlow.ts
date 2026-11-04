@@ -336,8 +336,10 @@ import {
 import { createPerObjectResultsSheet } from "./reportResults";
 import {
   PRICE_BOOKS_CONFIG_VAR,
+  formatCardLastFour,
   loadOrderStates,
   orderPricebook,
+  paymentToRefund,
   registrationExtId,
   resolveConfiguredPricebooks,
 } from "./commerceShared";
@@ -350,6 +352,7 @@ const SF_CARD_PAYMENT_METHOD = "CardPaymentMethod";
 const SF_ORDER = "Order";
 const SF_PAYMENT_GROUP = "PaymentGroup";
 const SF_PAYMENT = "Payment";
+const SF_REFUND = "Refund";
 // Rows per execution window (see "Windowed execution" note in the header
 // comment). Bounded well under BULK_BATCH_SIZE so each window submits
 // exactly one Bulk API batch per object.
@@ -675,7 +678,8 @@ export function mapToCardPaymentMethod(
     record.ExpiryYear = expiry.year;
   }
 
-  const lastFour = parseInteger(raw.CC_Last_Four);
+  // Text, so "0418" keeps its leading zero (2026-11-04).
+  const lastFour = formatCardLastFour(raw.CC_Last_Four);
   if (lastFour !== undefined) record.CardLastFour = lastFour;
 
   const firstName = str(raw.CC_Billing_First_Name);
@@ -836,6 +840,7 @@ const TEMP_STUDENT_ID_KEY = "_studentId4D";
 
 export function mapToPayment(
   raw: RawRegistrationRow,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept so callers and tests keep one signature
   logger: { warn: (m: string) => void },
 ): SfRecord | null {
   const id = str(raw.ID).trim();
@@ -850,19 +855,11 @@ export function mapToPayment(
   const amount = parseCurrency(raw.CC_Amt);
   if (amount === undefined || amount === 0) return null;
 
-  // CC_Amt < 0 — a card refund (1,191 "Drop w/Refund" rows). Still creating
-  // this as Type="Capture" with a negative Amount for now — NOT a confirmed
-  // decision. `sf sobject describe Payment` shows this org's Type picklist
-  // only has "Sale"/"Capture" available, no "Refund" value, so there's no
-  // clean way to represent a refund here yet. See OPEN ITEMS: needs an
-  // architect answer (new Type value needed, or skip refund rows entirely).
-  if (amount < 0) {
-    logger.warn(
-      `[Registration Import][Payment] Registration ${id} has a negative CC_Amt (${amount}) ` +
-        `— refund. Payment.Type picklist has no "Refund" option in this org; ` +
-        `creating as Type="Capture" with negative Amount pending architect guidance.`,
-    );
-  }
+  // CC_Amt < 0 — a card refund (1,191 "Drop w/Refund" rows) or a negative
+  // adjustment (e.g. 592436039, −165 Teacher discount). DECIDED 2026-11-04:
+  // these load as a Refund, not a negative Payment. The record is still built
+  // here with its negative Amount; onExecution turns it into an Unreferenced
+  // Refund for the absolute amount (paymentToRefund) before Phase 4.
 
   const record: SfRecord = {
     [EXT_ID_FIELD]: registrationExtId(id),
@@ -1268,6 +1265,20 @@ export const registrationImport = flow({
         `payments=${payments.length}`,
     );
 
+    // ── Negative CC_Amt → Refund, not a negative Payment (decided 2026-11-04) ──
+    const refunds: SfRecord[] = [];
+    payments = payments.filter((payment) => {
+      if (Number(payment.Amount) >= 0) return true;
+      delete payment[TEMP_STUDENT_ID_KEY];
+      refunds.push(paymentToRefund(payment));
+      return false;
+    });
+    if (refunds.length > 0) {
+      logger.info(
+        `[Registration Import] ${refunds.length} negative CC_Amt row(s) will load as Unreferenced Refunds`,
+      );
+    }
+
     // ── Stitch GroupPayee onto Payment records now that the email cache is ready ──
     let groupPayeeMissing = 0;
     for (const payment of payments) {
@@ -1295,6 +1306,7 @@ export const registrationImport = flow({
       );
       orders = orders.slice(TEST_SKIP, TEST_SKIP + TEST_LIMIT);
       payments = payments.slice(TEST_SKIP, TEST_SKIP + TEST_LIMIT);
+      refunds.splice(TEST_LIMIT);
       logger.info(
         `[Registration Import] TEST MODE: skipped first ${TEST_SKIP}, limited to next ${TEST_LIMIT} records per object, and won't invoke the next window.`,
       );
@@ -1480,6 +1492,31 @@ export const registrationImport = flow({
       paymentFailedCsv = r.failedCsv;
     }
 
+    // ── Phase 5: Refund (negative CC_Amt rows) ───────────────────────────────
+    let refundMissingGroup = 0;
+    for (const refund of refunds) {
+      const pgId = paymentGroupSfIds.get(refund[EXT_ID_FIELD] as string);
+      if (pgId) refund.PaymentGroupId = pgId;
+      else refundMissingGroup++;
+    }
+    if (refundMissingGroup > 0) {
+      logger.warn(
+        `[Registration Import][Refund] ${refundMissingGroup} record(s) missing PaymentGroupId — ` +
+          "their PaymentGroup (or its parent Order) did not succeed",
+      );
+    }
+    const refundResult =
+      refunds.length > 0
+        ? await upsertInBatches(
+            refunds,
+            SF_REFUND,
+            sfBase,
+            sfToken,
+            logger,
+            "[Registration Import][Refund]",
+          )
+        : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
+
     // ── Results sheet ─────────────────────────────────────────────────────────
     try {
       const sheet = await createPerObjectResultsSheet({
@@ -1505,6 +1542,11 @@ export const registrationImport = flow({
             successfulCsv: paymentSuccessfulCsv,
             failedCsv: paymentFailedCsv,
           },
+          {
+            objectName: SF_REFUND,
+            successfulCsv: refundResult.successfulCsv,
+            failedCsv: refundResult.failedCsv,
+          },
         ],
         accessToken: gdToken,
         folderId: failedFolderId,
@@ -1525,7 +1567,8 @@ export const registrationImport = flow({
         `already Activated: ${plan.alreadyActivated.size}, Draft w/o items: ${plan.draftWithoutItems.length}` +
         `\n  Order submitted:             ${plan.toUpsert.length}, processed: ${orderProcessed}, failed: ${orderFailed}` +
         `\n  PaymentGroup submitted:      ${paymentGroups.length}, processed: ${pgProcessed}, failed: ${pgFailed}` +
-        `\n  Payment submitted:           ${payments.length}, processed: ${paymentProcessed}, failed: ${paymentFailed}`,
+        `\n  Payment submitted:           ${payments.length}, processed: ${paymentProcessed}, failed: ${paymentFailed}` +
+        `\n  Refund submitted:            ${refunds.length}, processed: ${refundResult.processed}, failed: ${refundResult.failed}`,
     );
 
     // ── Invoke next window if more rows remain ───────────────────────────────
@@ -1577,6 +1620,9 @@ export const registrationImport = flow({
         payments: payments.length,
         paymentsProcessed: paymentProcessed,
         paymentsFailed: paymentFailed,
+        refunds: refunds.length,
+        refundsProcessed: refundResult.processed,
+        refundsFailed: refundResult.failed,
       },
     };
   },
