@@ -41,47 +41,50 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-11-03
-**Status:** at risk — Discount logic built & pushed (commit 6a4a78b); validation deploy & Registration Item lookup strategy still pending
+### Engagement state — 2026-11-04
+**Status:** at risk — Code committed & pushed (65ed324); validation deploy & UAT verification still pending before merge
 
 **Done this session**
-- Mapped Course.ID external ID usage across CourseOffering, Product2, PricebookEntry (Standard & custom)
+- Removed Product/PricebookEntry creation from All/2-Year/5-Year course flows (1,525 lines deleted)
+- Committed & pushed to stanford-csp-orchestrate branch (commit 65ed324)
+- Verified remote branch reflects removal; coursePricebook.ts & test files gone from src/
+- Type check clean; 124/129 tests pass (5 pre-existing Student Import failures)
 
 **Open items**
 - Run sf deploy validate against UAT org to confirm field requirements
 - Verify in UAT org: External_ID_4D__c on OrderItemAdjustmentLineItem, price books active
 - Test Drop rows with positive adjustment amounts in UAT
-- Confirm Registration Item lookup: use Product2.Course_Offering__r.External_ID_4D__c or rely on org automation to copy Course Offering 4D ID to Product
-- Decide: keep or delete unused Product/PricebookEntry code after removal from course flows
-- Verify file encoding (UTF-8 re-export) handles garbled Notes values
-- Confirm STAP registration-level discount already included in TA_Discount
-- Confirm no adjustment group record needed (B2C-to-Order Management mapping)
+- Confirm org automation updates earlier Products/PricebookEntries rather than creating duplicates
+- Verify Registration Item lookup finds prices via Product2.External_ID_4D__c before Registration Item runs
+- Rebuild & import three course integrations into Prismatic
+- Review & merge PR #1 to main
+- Run Deploy session to ship code to production
 
 **Decisions**
 - Discount adjustment amount = Extension − Tuition (no separate sign rule per row type)
 - Adjustment keyed ADJ-{Enrollment.ID}, attached to line via ENR-{id}
 - Adjustment loads as second step in Registration Item Import, before activation
 - No adjustment created if Extension − Tuition = 0
-- Mismatch rows (Extension − Tuition ≠ TA_Discount) load with warning logged
 - REG- prefix for registration orders; ENR- for registration line items; PIT- for purchase line items
 - All enrollment rows (Add, Drop, AJST, New, DupEnrollment, Course cancel) generate line items
 - Line item price sourced from Tuition field, not Extension
+- Product/PricebookEntry creation removed from course flows; Purchase & Registration flows retain price book logic
 
 **Blockers**
-- External_ID_4D__c field must exist on OrderItemAdjustmentLineItem or load fails
 - Validation deploy not yet run — code unverified against target org
-- Registration Item lookup strategy unresolved: Product2.External_ID_4D__c vs. Product2.Course_Offering__r.External_ID_4D__c
+- External_ID_4D__c field must exist on OrderItemAdjustmentLineItem or load fails
+- No PR to main yet — code cannot merge until reviewed
 
 **Next**
-- Run sf deploy validate against UAT org to confirm field requirements
-- Verify in UAT org: External_ID_4D__c on OrderItemAdjustmentLineItem, price books active
+- Run sf deploy validate against UAT org to confirm field requirements & catch any org schema mismatches
+- Verify in UAT: External_ID_4D__c on OrderItemAdjustmentLineItem exists, price books active, automation updates earlier Products
 - Test Drop rows with positive adjustment amounts in UAT
-- Resolve Registration Item lookup: confirm org automation or update query to use Course_Offering__r.External_ID_4D__c
-- Review & merge PR #1 to main
-- Run Deploy session to ship code to production
+- Open PR #1 for review & merge to main
+- Rebuild three course integrations in Prismatic & import
+- Run Deploy session to ship to production
 
-**Checked live on 2026-11-03:** the repository
-### Last session — 2026-11-03
+**Checked live on 2026-11-04:** the repository
+### Last session — 2026-11-04
 | | |
 |---|---|
 | Type | BUILD |
@@ -90,22 +93,20 @@
 | Name | Stanford-Data-Migration-CourseEnhancement-Products |
 | Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
 **In its own words (excerpt):**
-In the Course import flow (All, 2-Year and 5-Year), the Course Offering's key `External_ID_4D__c` = **Course.ID** (for example `20241_POL 68 H`). That same value is reused on two more objects.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch stanford-csp-orchestrate)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## Objects that carry the Course Offering's 4D ID
+I've committed and pushed the removal. Commit `65ed324` is on `stanford-csp-orchestrate` on GitHub. I checked that the remote branch now points at that commit, and that `coursePricebook.ts` and the two removed test files are gone from `src/` there. There's no PR to `main`.
 
-| Object | Field | Value saved | Example |
-|---|---|---|---|
-| **CourseOffering** (the original) | `External_ID_4D__c` | Course.ID | `20241_POL 68 H` |
-| **Product2** | `External_ID_4D__c` | Course.ID, the same value | `20241_POL 68 H` |
-| **PricebookEntry**, custom book | `External_ID_4D__c` | Course.ID, the same value | `20241_POL 68 H` |
-| **PricebookEntry**, Standard book | `External_ID_4D__c` | `STD-` + Course.ID | `STD-20241_POL 68 H` |
-
-The Product also links to its offering through `Product2.Course_Offering__c`. That field holds the Course Offering's Salesforce record Id, not the 4D ID.
-
-## Objects that use a different key
-- **Learning** and **LearningCourse** don't use Course.ID. Their `External_ID_4D__c` is the **base course code with the section suffix removed**, for example `POL 68`, so all the sections of a course share one Learning Course.
-- The Course Offering points back to its Learning Course through that base code (`Learnin
+**What was pushed:** the same 11 changes from the diff you reviewed (1,525 lines removed, 29 added).
+- The All, 2-Year and 5-Year course flows now load only Learning Course, Course Offering and the other records they loaded before. They no longer create Products or price book entries.
+- The `Price Books` config var and the price book lookup helpers stay in place, because the Purchase and Registration flows use them.
+- Before committing,
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
