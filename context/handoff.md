@@ -42,22 +42,22 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-04
-**Status:** at risk — Code committed & pushed (65ed324); validation deploy & UAT verification still pending before merge
+**Status:** at risk — Code pushed & PR #1 ready; validation deploy & UAT verification still pending before merge
 
 **Done this session**
-- Verified Purchase and Registration flows compile and pass all 52 tests after removal
-- Confirmed no code loss — deleted helpers unused by Purchase/Registration flows
-- Identified Registration Item dependency on org automation for four Product fields
+- Confirmed adjustment mapping logic: Amount = Extension − Tuition, keyed ADJ-{Enrollment.ID}, loads as step 2 before activation
+- Verified branch head e4eaa6a includes adjustment code in registrationItemFlow.ts on stanford-csp-orchestrate
+- Confirmed PR #1 includes all adjustment changes, ready for review
 
 **Open items**
-- Run sf deploy validate against UAT org to confirm field requirements
-- Verify in UAT org: External_ID_4D__c on OrderItemAdjustmentLineItem, price books active
+- Run sf deploy validate against UAT org to confirm field requirements & catch schema mismatches
+- Verify in UAT: External_ID_4D__c exists on OrderItemAdjustmentLineItem, price books active, org automation sets four Product fields
 - Test Drop rows with positive adjustment amounts in UAT
-- Confirm org automation updates earlier Products/PricebookEntries rather than creating duplicates
-- Verify Registration Item lookup finds prices via Product2.External_ID_4D__c before Registration Item runs
+- Confirm org accepts adjustment with no OrderAdjustmentGroup record
 - Update Registration Item error message to point at org automation instead of course imports
+- Open PR #1 for review & merge to main
 - Rebuild & import three course integrations into Prismatic
-- Open PR #1 for review & merge to main, then run Deploy session to ship to production
+- Run Deploy session to ship to production
 
 **Decisions**
 - Discount adjustment amount = Extension − Tuition (no separate sign rule per row type)
@@ -67,48 +67,54 @@
 - REG- prefix for registration orders; ENR- for registration line items; PIT- for purchase line items
 - All enrollment rows (Add, Drop, AJST, New, DupEnrollment, Course cancel) generate line items
 - Line item price sourced from Tuition field, not Extension
-- Product/PricebookEntry creation removed from course flows; Purchase & Registration flows retain price book logic
+- TA_Discount compared only for mismatch warning; not written to Salesforce
 
 **Blockers**
 - Validation deploy not yet run — code unverified against target org
-- External_ID_4D__c field must exist on OrderItemAdjustmentLineItem or load fails
-- No PR to main yet — code cannot merge until reviewed
+- External_ID_4D__c field must exist on OrderItemAdjustmentLineItem or upsert fails
+- No PR review completed — code cannot merge until reviewed
 
 **Next**
 - Run sf deploy validate against UAT org to confirm field requirements & catch any org schema mismatches
-- Verify in UAT: External_ID_4D__c on OrderItemAdjustmentLineItem exists, price books active, automation sets all four Product fields (External_ID_4D__c, Course_Offering__c, active entry in StanfordContinuingStudies book)
-- Test Drop rows with positive adjustment amounts in UAT
-- Update Registration Item error message (one-line text change in registrationItemFlow.ts)
+- Verify in UAT: External_ID_4D__c on OrderItemAdjustmentLineItem exists, price books active, org automation sets all four Product fields
+- Test Drop rows with positive adjustment amounts in UAT to confirm org accepts positive Amount
+- Update Registration Item error message in registrationItemFlow.ts (one-line text change)
 - Open PR #1 for review & merge to main
 - Rebuild three course integrations in Prismatic & import
 - Run Deploy session to ship to production
 
-**Checked live on 2026-11-04:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-11-04:** the repository
 ### Last session — 2026-11-04
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-CourseEnhancement-Products |
-| Session | `fb62e2a5-4dd6-4b7d-bb02-3ebab9e5ae57` |
+| Name | Stanford-Data-Migration-Registration-Enhancements- Build |
+| Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-Nothing in the Purchase or Registration flows breaks because of the removal. The code compiles and their tests pass. But Registration Item now depends on your org automation setting four specific things on each course Product, and one of its error messages is now out of date.
+Yes, it's pushed. I read `src/registrationItemFlow.ts` from GitHub just now, and the adjustment code is on `stanford-csp-orchestrate`. The branch head is now `e4eaa6a`, because commits from later sessions sit on top of `6a4a78b`. PR #1 includes it. It hasn't been run against an org yet.
 
-## Review: Purchase and Registration flows after `65ed324`
+## How each adjustment row is mapped
 
-**What I checked:** the branch head (`ffd2196`, which adds only a handoff note on top of `65ed324`). The type check is clean, and all 52 Purchase and Registration tests pass (`commerceFlows.test.ts`, `registrationItemFlow.test.ts`).
+Each enrollment row whose OrderItem loads can get one `OrderItemAdjustmentLineItem`:
 
-**No code was lost:**
-- None of these flows used the helpers I deleted. Nothing in `src/` still refers to them.
-- The two helpers they do use (`parsePriceBookNames`, `resolvePriceBooks`) and the `Price Books` config var are unchanged. The config default is still `Standard Price Book,StanfordContinuingStudies Price Book`.
-- The only change in these flow files was a comment in `registrationItemFlow.ts`.
-
-| Flow | Affected? | Why |
+| Salesforce field | Value | Source / rule |
 |---|---|---|
-| Purchase Inventory | No | It creates its own inventory Products and price book entries |
-| Purchase | No | It only reads the price book for the Order |
-| Purchase Item | No change
+| `External_ID_4D__c` (upsert key) | `ADJ-{Enrollment.ID}` | Enrollment `ID`, e.g. `ADJ-948272` |
+| `OrderItemId` | Matched on `OrderItem.External_ID_4D__c = ENR-{Enrollment.ID}` | Salesforce finds the parent line by its external ID |
+| `Name` | `Discount — Enrollment {ID}` | Fixed text |
+| `Amount` | `Extension − Tuition`, rounded to cents | Enrollment `Extension` and `Tuition` |
+
+Example, enrollment 948272:
+- OrderItem `ENR-948272`: UnitPrice 250 (Tuition).
+- Adjustment `ADJ-948272`: Amount 200 − 250 = **−50**, so the line total is 200, which equals Extension.
+
+On a drop (948251) it's −524 − (−655) = **+131**.
+
+## Rules
+- **Amount is 0** (Extension equals Tuition): no adjustment is created.
+- **Extension is blank or 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
