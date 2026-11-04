@@ -42,20 +42,23 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-04
-**Status:** blocked — Quick status: I've checked the branch and found one new code change since my last review.
+**Status:** at risk — Three changes built & pushed (card format, adjustment name, negative CC→refund). Code unvalidated against UAT org; payment dedup & purchase…
 
 **Done this session**
-- Quick status: I've checked the branch and found one new code change since my last review. Here's the full list of concerns. There are **4 things to change**, **6 decisions to make** and **4 things to check in UAT**. I haven't changed any c…
+- Built 1D: CardLastFour keeps leading zero (text format, padded if needed)
+- Built 2.2: Adjustment Name sourced from Order.TA_Discount_Type__c with fallback
+- Built 2.6: Negative CC_Amt becomes Refund (Type=Unreferenced, Status=Processed)
+- Committed to stanford-csp-orchestrate branch (commit daeda90), pushed to GitHub
+- Type check passes; 129 tests pass (5 known Student-flow failures remain)
 
 **Open items**
-- Decide: use TA_Discount or Extension−Tuition for adjustment Amount (both equal in sample, but differ in principle)
-- Decide: take Discount Name from Enrollment.Discount_Type or keep fixed text (conflicts with Trevor's Order-level discount type statement)
-- Decide: link Payments.Purchase_ID via Conversion logic (sheet now says Conversion, code says Do Not Map)
-- Decide: find course product via Product2.Course_Offering__c (sheet option B) or External_ID_4D__c (current code)
-- Run sf deploy validate against UAT org to verify field requirements & schema
-- Test adjustment creation in UAT: no OrderAdjustmentGroup required, all required fields present
-- Open PR #1 for review & merge to main
-- Rebuild & import three course integrations into Prismatic
+- Run sf deploy validate against UAT org — code unverified against schema
+- Confirm Refund.Type picklist includes 'Unreferenced' in UAT org
+- Confirm CardPaymentMethod.CardLastFour field type (Number vs Text) in UAT
+- Verify one course has exactly one Product & one price book entry (1A validation)
+- Decide: build B+C (payment dedup for Registration, Purchase_ID linking) or defer
+- Open/refresh PR #1 for review & merge to main
+- Deploy to org (separate session after merge)
 
 **Decisions**
 - Discount adjustment amount = Extension − Tuition (no separate sign rule per row type)
@@ -68,18 +71,19 @@
 - TA_Discount compared only for mismatch warning; not written to Salesforce
 
 **Blockers**
-- Workbook edit history unavailable — cannot confirm who changed what or when exactly
-- 3 mapping differences between code and workbook require architect confirmation before build
-- Validation deploy not yet run — code unverified against UAT org schema
+- Code unvalidated against UAT org schema — sf deploy validate not yet run
+- CardLastFour field type unknown — cannot confirm if text format will persist
+- Refund.Type='Unreferenced' not confirmed in UAT picklist
 
 **Next**
-- Confirm with architect (or Trevor): Amount = TA_Discount or Extension−Tuition; Name from Discount_Type or fixed text; Purchase_ID Conversion logic; product lookup via Course_Offering__c or External_ID_4D__c
-- Run sf deploy validate against UAT org
-- Test adjustment creation in UAT (no OrderAdjustmentGroup, required fields)
-- Update code if architect confirms changes, or close differences if workbook reverts to code logic
-- Open PR #1 for review & merge
+- Run sf deploy validate against UAT org to verify field requirements & schema
+- Check UAT Object Manager: CardPaymentMethod.CardLastFour type, Refund.Type picklist values
+- Verify one course has exactly one Product & one price book entry (confirms 1A logic)
+- Architect decision: build payment dedup (B) + Purchase_ID linking (C), or defer to later phase
+- Open/refresh PR #1, request review, merge to main
+- Schedule Deploy session to ship to UAT org
 
-**Checked live on 2026-11-04:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-11-04:** the web, the repository
 ### Last session — 2026-11-04
 | | |
 |---|---|
@@ -89,16 +93,20 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-Quick status: I've checked the branch and found one new code change since my last review. Here's the full list of concerns.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch stanford-csp-orchestrate)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-There are **4 things to change**, **6 decisions to make** and **4 things to check in UAT**. I haven't changed any code. One finding is new since my last answer: commit `65ed324` (2026-11-04) removed product and price book entry creation from the course flows, so Salesforce org automation now creates them. That makes the first item below the most urgent.
+I've made the three changes you approved (1D, 2.2 and 2.6) and pushed them to `stanford-csp-orchestrate` as commit `daeda90`. The remote branch points at it, and PR #1 includes it. The type check passes and 129 tests pass. The 5 failures are the same known Student-flow tests. Nothing has been run against an org.
 
-## 1. Changes I recommend (ready to build when you say so)
+## What I built
 
-**A. Find the course product through its Course Offering** (workbook rows 63 and 66)
-- **Now:** Registration Item looks for a price book entry where `Product2.External_ID_4D__c = Course_ID`. That only works if the org automation writes our ID onto the Product. The commit message says it does, but nobody has checked that in UAT.
-- **Change:** look it up through `Product2.Course_Offering__r.External_ID_4D__c = Course_ID`. That's what the sheet says, and it works whether or not the automation sets the ID.
-- **Related risk:** our earlier course runs already created Products and entries in UAT (`STD-…` / `<Course.ID>` keys). If the automation now adds its
+**1D: card last four keeps its leading zero.** `0418` is now sent as text `"0418"`. If the file has already lost the zero (`418`), it's padded back to `0418`. This applies to Registration and Purchase.
+- **Check in UAT:** I couldn't confirm the type of `CardPaymentMethod.CardLastFour`, because no org is attached and the Salesforce docs pages wouldn't load. If it's a Number field, 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
