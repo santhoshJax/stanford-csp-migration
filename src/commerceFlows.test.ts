@@ -9,7 +9,6 @@ import {
   pricebooksInLoadOrder,
   orderPricebook,
   registrationExtId,
-  formatCardLastFour,
   paymentToRefund,
 } from "./commerceShared";
 import {
@@ -203,7 +202,7 @@ describe("Purchase → Order / Payment / CardPaymentMethod", () => {
       External_ID_4D__c: "PUR-2",
       ExpiryMonth: 10,
       ExpiryYear: 20,
-      CardLastFour: "0224",
+      CardLastFour: 224,
     });
     expect(mapPurchasePayment(row, logger)).toMatchObject({
       External_ID_4D__c: "PUR-2",
@@ -451,19 +450,11 @@ describe("Purchase → Order activation (2 rounds)", () => {
   });
 });
 
-describe("Card last four (keeps the leading zero, 2026-11-04)", () => {
-  it("keeps or restores the zero and sends text", () => {
-    expect(formatCardLastFour("0418")).toBe("0418");
-    expect(formatCardLastFour("418")).toBe("0418");
-    expect(formatCardLastFour("418.0")).toBe("0418");
-    expect(formatCardLastFour("1111")).toBe("1111");
-    expect(formatCardLastFour("")).toBeUndefined();
-    expect(formatCardLastFour("12345")).toBeUndefined();
-  });
-  it("is used by the Registration card mapping", () => {
+describe("Card last four (Number(4,0) in the org, 2026-11-04)", () => {
+  it("is sent as a number, so a leading zero is not kept", () => {
     expect(
       mapRegistrationCpm({ ID: "592436050", CC_Last_Four: "0418" }),
-    ).toMatchObject({ CardLastFour: "0418" });
+    ).toMatchObject({ CardLastFour: 418 });
   });
 });
 

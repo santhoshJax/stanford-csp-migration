@@ -618,23 +618,6 @@ export async function streamTsvWindow(
 }
 
 /**
- * CC_Last_Four as 4-character text, keeping the leading zero ("0418", not
- * 418). Decided 2026-11-04. A value that lost its zero upstream ("418") is
- * padded back to 4 digits, since a card's last four is always 4 digits.
- * Non-digits are ignored; blank or more than 4 digits → undefined (not sent).
- *
- * UAT CHECK: if CardPaymentMethod.CardLastFour is a Number field in the org,
- * Salesforce stores 418 whatever we send — confirm the field type.
- */
-export function formatCardLastFour(
-  raw: string | undefined,
-): string | undefined {
-  const digits = str(raw).replace(/\.0+$/, "").replace(/\D/g, "");
-  if (!digits || digits.length > 4) return undefined;
-  return digits.padStart(4, "0");
-}
-
-/**
  * Negative CC_Amt → Refund, not a negative Payment (decided 2026-11-04).
  * Takes the Payment record mapToPayment built and returns an Unreferenced
  * Refund for the absolute amount, on the same Account and (once stitched)

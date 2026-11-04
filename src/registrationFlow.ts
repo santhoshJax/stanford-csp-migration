@@ -336,7 +336,6 @@ import {
 import { createPerObjectResultsSheet } from "./reportResults";
 import {
   PRICE_BOOKS_CONFIG_VAR,
-  formatCardLastFour,
   loadOrderStates,
   orderPricebook,
   paymentToRefund,
@@ -678,8 +677,9 @@ export function mapToCardPaymentMethod(
     record.ExpiryYear = expiry.year;
   }
 
-  // Text, so "0418" keeps its leading zero (2026-11-04).
-  const lastFour = formatCardLastFour(raw.CC_Last_Four);
+  // CardLastFour is Number(4,0) in the org (confirmed 2026-11-04), so a
+  // leading zero cannot be stored: "0418" is saved as 418.
+  const lastFour = parseInteger(raw.CC_Last_Four);
   if (lastFour !== undefined) record.CardLastFour = lastFour;
 
   const firstName = str(raw.CC_Billing_First_Name);
