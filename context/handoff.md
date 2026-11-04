@@ -42,48 +42,44 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-04
-**Status:** at risk — Three changes built & pushed (card format, adjustment name, negative CC→refund). Code unvalidated against UAT org; payment dedup & purchase…
+**Status:** at risk — Card format reverted to number; 2 of 3 changes remain. Code unvalidated against UAT org schema.
 
 **Done this session**
-- Built 1D: CardLastFour keeps leading zero (text format, padded if needed)
-- Built 2.2: Adjustment Name sourced from Order.TA_Discount_Type__c with fallback
-- Built 2.6: Negative CC_Amt becomes Refund (Type=Unreferenced, Status=Processed)
-- Committed to stanford-csp-orchestrate branch (commit daeda90), pushed to GitHub
-- Type check passes; 129 tests pass (5 known Student-flow failures remain)
+- Reverted CardLastFour to Number format (removed text padding helper)
+- Updated ARCHITECTURE.md to document Number(4,0) field behavior
+- Committed revert to stanford-csp-orchestrate (commit abf834a), pushed to GitHub
+- Type check passes; 128 tests pass (5 known Student-flow failures remain)
 
 **Open items**
-- Run sf deploy validate against UAT org — code unverified against schema
+- Run sf deploy validate against UAT org — code unvalidated against schema
 - Confirm Refund.Type picklist includes 'Unreferenced' in UAT org
-- Confirm CardPaymentMethod.CardLastFour field type (Number vs Text) in UAT
 - Verify one course has exactly one Product & one price book entry (1A validation)
 - Decide: build B+C (payment dedup for Registration, Purchase_ID linking) or defer
 - Open/refresh PR #1 for review & merge to main
 - Deploy to org (separate session after merge)
 
 **Decisions**
+- CardLastFour sent as Number(4,0); leading zero cannot be stored (0418 → 418)
+- Removed formatCardLastFour text-padding helper and related tests
+- Adjustment Name sourced from Order.TA_Discount_Type__c with fallback
+- Negative CC_Amt becomes Refund (Type=Unreferenced, Status=Processed)
+- Payments Import flow left unchanged; not run during loads per architect guidance
 - Discount adjustment amount = Extension − Tuition (no separate sign rule per row type)
-- Adjustment keyed ADJ-{Enrollment.ID}, attached to line via ENR-{id}
-- Adjustment loads as second step in Registration Item Import, before activation
-- No adjustment created if Extension − Tuition = 0
-- REG- prefix for registration orders; ENR- for registration line items; PIT- for purchase line items
 - All enrollment rows (Add, Drop, AJST, New, DupEnrollment, Course cancel) generate line items
-- Line item price sourced from Tuition field, not Extension
-- TA_Discount compared only for mismatch warning; not written to Salesforce
 
 **Blockers**
 - Code unvalidated against UAT org schema — sf deploy validate not yet run
-- CardLastFour field type unknown — cannot confirm if text format will persist
 - Refund.Type='Unreferenced' not confirmed in UAT picklist
 
 **Next**
 - Run sf deploy validate against UAT org to verify field requirements & schema
-- Check UAT Object Manager: CardPaymentMethod.CardLastFour type, Refund.Type picklist values
+- Check UAT Object Manager: Refund.Type picklist values
 - Verify one course has exactly one Product & one price book entry (confirms 1A logic)
-- Architect decision: build payment dedup (B) + Purchase_ID linking (C), or defer to later phase
+- Architect decision: build payment dedup (B) + Purchase_ID linking (C), or defer
 - Open/refresh PR #1, request review, merge to main
 - Schedule Deploy session to ship to UAT org
 
-**Checked live on 2026-11-04:** the web, the repository
+**Checked live on 2026-11-04:** the repository
 ### Last session — 2026-11-04
 | | |
 |---|---|
@@ -101,12 +97,12 @@
 Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-I've made the three changes you approved (1D, 2.2 and 2.6) and pushed them to `stanford-csp-orchestrate` as commit `daeda90`. The remote branch points at it, and PR #1 includes it. The type check passes and 129 tests pass. The 5 failures are the same known Student-flow tests. Nothing has been run against an org.
+I've reverted the card last-four change and pushed it to `stanford-csp-orchestrate` as commit `abf834a`. The remote branch points at that commit, so PR #1 includes it. The type check passes and 128 tests pass. The only failures are the 5 known Student-flow tests. Nothing has been run against an org.
 
-## What I built
-
-**1D: card last four keeps its leading zero.** `0418` is now sent as text `"0418"`. If the file has already lost the zero (`418`), it's padded back to `0418`. This applies to Registration and Purchase.
-- **Check in UAT:** I couldn't confirm the type of `CardPaymentMethod.CardLastFour`, because no org is attached and the Salesforce docs pages wouldn't load. If it's a Number field, 
+## What changed
+- **Card last four is sent as a number again.** Registration and Purchase both read `CC_Last_Four` as a number, so `0418` goes to Salesforce as `418`. A Number(4, 0) field stores it that way regardless of what we send.
+- **I removed the text-and-padding helper** (`formatCardLastFour`) and its tests. One test now checks that `0418` is sent as `418`.
+- **`ARCHITECTURE.md`** now records that `Card
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
