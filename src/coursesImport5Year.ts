@@ -13,9 +13,6 @@
  *
  * Each row triggers sequential Salesforce REST API calls in dependency order:
  *   Learning → LearningCourse → Instructor → CourseOffering
- *   → Product2 (one per CourseOffering, workbook Course rows 127-131)
- *   → PricebookEntry (Standard + the custom book in "Price Books"; batched
- *     after the row loop — see coursePricebook.ts)
  *   → CourseOfferingSchedule → COP (Instructor / Associate)
  *
  * Not written by this flow (fields outside the 32): Location, department
@@ -53,16 +50,7 @@ import {
   extractSectionSuffix,
   formatFromSuffix,
   stripHtmlForTextField,
-  buildCourseProductPayload,
-  parseListPrice,
 } from "./courseUtils";
-import {
-  loadPriceBooks,
-  saveCoursePricebookEntries,
-  summarisePricebookEntries,
-  pricebookEntryResultFields,
-  type CourseProductForPricing,
-} from "./coursePricebook";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const MAX_ROWS = 100;
@@ -687,24 +675,6 @@ export const coursesImport5Year = flow({
     const sfToken = getAccessToken(sfConn);
     const sfBase = getSfInstanceUrl(sfConn);
 
-    // ── Price books (shared "Price Books" config var) ─────────────────────────
-    // Checked before any row is written: the run stops here if a listed book
-    // is missing or inactive, or more than one custom book is listed. The
-    // Standard Price Book is always added (custom entries need it).
-    const priceBooks = await loadPriceBooks(
-      sfBase,
-      sfToken,
-      configVars["Price Books"] as unknown as string | undefined,
-      logger,
-      "[Course32]",
-    );
-    // Products saved in this window, priced after the row loop.
-    const pricingQueue: (CourseProductForPricing & {
-      code: string;
-      title: string;
-      quarter: string;
-    })[] = [];
-
     // ── Existing catalog records (owned by Tier 1 / newer rows) ───────────────
     logger.info("[Course32] Building lookup caches…");
     const existingLearningCache = await buildFieldCache(
@@ -853,7 +823,6 @@ export const coursesImport5Year = flow({
       learning: { ok: 0, skipped: 0, err: 0 },
       learningCourse: { ok: 0, skipped: 0, err: 0 },
       courseOffering: { ok: 0, err: 0 },
-      product: { ok: 0, err: 0 },
       schedule: { ok: 0, skipped: 0, err: 0 },
       copInstructor: { ok: 0, skipped: 0, err: 0 },
       copAssociate: { ok: 0, skipped: 0, err: 0 },
@@ -1177,50 +1146,6 @@ export const coursesImport5Year = flow({
         continue;
       }
 
-      // Product2 — one per CourseOffering (workbook Course tab rows 127-131).
-      // Only reached when the CourseOffering saved, so no orphan Products.
-      const productPayload = buildCourseProductPayload({
-        sourceId,
-        code,
-        title,
-        description: row.Description,
-        courseOfferingId,
-      });
-      try {
-        const r = await sfUpsert(
-          sfBase,
-          sfToken,
-          "Product2",
-          "External_ID_4D__c",
-          sourceId,
-          productPayload,
-        );
-        counts.product.ok++;
-        // List Price = Course.Tuition (blank or 0 → 0), refreshed every run.
-        pricingQueue.push({
-          sourceId,
-          productId: r.id,
-          unitPrice: parseListPrice(row.Tuition),
-          code,
-          title,
-          quarter,
-        });
-        ok("Product2", r.id, r.created, {
-          External_ID_4D__c: sourceId,
-          ...productPayload,
-        });
-      } catch (err) {
-        counts.product.err++;
-        const msg = sfErrMsg(err);
-        logger.error(
-          `[Course32] Row ${startRow + i} (${sourceId}) Product2: ${msg}`,
-        );
-        fail("Product2", msg, {
-          External_ID_4D__c: sourceId,
-          ...productPayload,
-        });
-      }
-
       // 5-7. Post-offering operations — all independent once courseOfferingId is set.
       // Run Schedule, COP-Instructor, COP-Associate in parallel.
       const instructorRows =
@@ -1517,48 +1442,11 @@ export const coursesImport5Year = flow({
       await Promise.all(postOfferingTasks.map((t) => t()));
     }
 
-    // ── PricebookEntry — Standard first, then the custom book ────────────────
-    const pricingMeta = new Map(pricingQueue.map((p) => [p.sourceId, p]));
-    const pbeResults = await saveCoursePricebookEntries(
-      sfBase,
-      sfToken,
-      priceBooks,
-      pricingQueue,
-    );
-    for (const r of pbeResults) {
-      const meta = pricingMeta.get(r.sourceId);
-      const base = {
-        Source_ID: r.sourceId,
-        Code: meta?.code ?? "",
-        Title: meta?.title ?? "",
-        Quarter: meta?.quarter ?? "",
-        Object: "PricebookEntry",
-        fields: pricebookEntryResultFields(r),
-      };
-      if (r.outcome === "created" || r.outcome === "updated") {
-        successRows.push({
-          ...base,
-          sf__Id: r.sfId ?? "",
-          sf__Created: String(r.outcome === "created"),
-        });
-      } else {
-        if (r.outcome === "failed") {
-          logger.error(
-            `[Course32] ${r.sourceId} PricebookEntry (${r.bookName}): ${r.error}`,
-          );
-        }
-        errorRows.push({ ...base, sf__Error: r.error ?? r.outcome });
-      }
-    }
-    const pbeSummary = summarisePricebookEntries(pbeResults);
-
     // ── Results sheet ─────────────────────────────────────────────────────────
     const RESULT_OBJECTS = [
       "Learning",
       "LearningCourse",
       "CourseOffering",
-      "Product2",
-      "PricebookEntry",
       "CourseOfferingSchedule",
       "COP-Instructor",
       "COP-Associate",
@@ -1638,8 +1526,6 @@ export const coursesImport5Year = flow({
         `\n  Learning:       ${counts.learning.ok} ok, ${counts.learning.skipped} skip (exists), ${counts.learning.err} err` +
         `\n  LearningCourse: ${counts.learningCourse.ok} ok, ${counts.learningCourse.skipped} skip (exists), ${counts.learningCourse.err} err` +
         `\n  CourseOffering: ${counts.courseOffering.ok} ok, ${counts.courseOffering.err} err` +
-        `\n  Product2:       ${counts.product.ok} ok, ${counts.product.err} err` +
-        `\n  PricebookEntry: ${pbeSummary.text}` +
         `\n  Schedule:       ${counts.schedule.ok} ok, ${counts.schedule.skipped} skip, ${counts.schedule.err} err` +
         `\n  COP-Instructor: ${counts.copInstructor.ok} ok, ${counts.copInstructor.skipped} skip, ${counts.copInstructor.err} err` +
         `\n  COP-Associate:  ${counts.copAssociate.ok} ok, ${counts.copAssociate.skipped} skip, ${counts.copAssociate.err} err`,

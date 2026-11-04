@@ -176,7 +176,7 @@ export const configPages = {
         dataType: "string",
         default: "Standard Price Book,StanfordContinuingStudies Price Book",
         description:
-          "Comma-separated Pricebook2 names, shared by the course and purchase flows. Course Import - All, 2 Year and 5 Year add every course Product to these books with List Price = Course Tuition (blank or 0 becomes 0). Purchase Inventory Import adds every inventory Product to them with List Price = Unit_Price, and Purchase Orders and their line items use the custom book (Standard only when no custom book is listed). The Standard Price Book is always included, even if it is not listed, because Salesforce needs a Standard entry before a custom one. List at most one custom price book. Every listed book must exist and be active, or the run stops before writing anything. Requires PricebookEntry.External_ID_4D__c (Text, External ID, Unique).",
+          "Comma-separated Pricebook2 names, shared by the purchase and registration flows. Purchase Inventory Import adds every inventory Product to these books with List Price = Unit_Price. Purchase and Registration Orders and their line items use the custom book (Standard only when no custom book is listed). Course Products and their price book entries are created by Salesforce org automation from each Course Offering, not by the course import flows. The Standard Price Book is always included, even if it is not listed, because Salesforce needs a Standard entry before a custom one. List at most one custom price book. Every listed book must exist and be active, or the run stops before writing anything.",
       }),
       "Course Instructor File ID": configVar({
         stableKey: "c8d9e0f1-8888-4c1d-5e6f-11223344ccdd",

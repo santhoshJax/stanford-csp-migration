@@ -328,166 +328,17 @@ export function extractSectionSuffix(code: string): string | null {
   return null;
 }
 
-// ── Product2 per CourseOffering ───────────────────────────────────────────────
-
-/** Standard Product2.Description is a 4,000-character Text Area. */
-export const PRODUCT_DESCRIPTION_MAX = 4000;
-
-/** Named HTML entities seen in 4D course descriptions. */
-const HTML_ENTITIES: Record<string, string> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: " ",
-};
-
-/**
- * Converts a 4D HTML course description into readable plain text for a
- * plain Text Area field such as Product2.Description.
- * - <br>, and the end of a paragraph, div, heading or list, become line breaks
- * - <li> becomes a "• " bullet
- * - every other tag is removed
- * - entities (&amp; &#39; &#x2019; ...) are decoded once
- * - runs of spaces and blank lines are collapsed
- */
-export function htmlToPlainText(v: string | undefined | null): string {
-  if (!v) return "";
-  let text = v
-    .replace(/_4DNL_/g, "\n")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|h[1-6]|ul|ol|tr)\s*>/gi, "\n")
-    .replace(/<li[^>]*>/gi, "\n• ")
-    .replace(/<\/li\s*>/gi, "")
-    .replace(/<[^>]*>/g, "");
-  // Decode entities in a single pass so "&amp;lt;" becomes "&lt;", not "<".
-  text = text.replace(
-    /&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,
-    (match, entity: string) => {
-      const lower = entity.toLowerCase();
-      if (lower.startsWith("#x"))
-        return String.fromCodePoint(parseInt(lower.slice(2), 16));
-      if (lower.startsWith("#"))
-        return String.fromCodePoint(parseInt(lower.slice(1), 10));
-      return HTML_ENTITIES[lower] ?? match;
-    },
-  );
-  return text
-    .replace(/\r\n?/g, "\n")
-    .replace(/[ \t\u00a0]+/g, " ")
-    .replace(/ *\n */g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-/**
- * Length of a value as Salesforce counts it against a Text Area limit.
- * Salesforce escapes & < > " ' into entities and stores line breaks as CRLF,
- * so a value of 3,990 JavaScript characters can still be rejected with
- * STRING_TOO_LONG (seen on the 2-Year run of 2026-10-27, rows 75, 80, 81, 91).
- */
-export function salesforceTextLength(v: string): number {
-  let length = 0;
-  for (const ch of v) {
-    if (ch === "&")
-      length += 5; // &amp;
-    else if (ch === "<" || ch === ">")
-      length += 4; // &lt; &gt;
-    else if (ch === '"' || ch === "'")
-      length += 6; // &quot; &#39;
-    else if (ch === "\n")
-      length += 2; // CRLF
-    else length += Buffer.byteLength(ch, "utf8"); // Salesforce counts non-ASCII by UTF-8 byte size, e.g. curly quotes/em-dash = 3
-  }
-  return length;
-}
-
-/** Cuts a value so that salesforceTextLength() fits within maxLength. */
-export function capForSalesforceText(v: string, maxLength: number): string {
-  if (salesforceTextLength(v) <= maxLength) return v;
-  let used = 0;
-  let end = 0;
-  for (const ch of v) {
-    const size = salesforceTextLength(ch);
-    if (used + size > maxLength) break;
-    used += size;
-    end += ch.length;
-  }
-  return v.slice(0, end).trimEnd();
-}
-/** Standard Product2.Name is a 255-character Text field. */
-export const PRODUCT_NAME_MAX = 255;
-
-export interface CourseProductInput {
-  /** Course.ID — also the CourseOffering's External_ID_4D__c. */
-  sourceId: string;
-  /** Course.Code, e.g. "OWC 303 A". */
-  code: string;
-  /** Course.Title with _4DNL_ tokens already replaced. */
-  title: string;
-  /** Raw Course.Description. */
-  description: string | undefined | null;
-  /** Salesforce Id of the CourseOffering saved for this row. */
-  courseOfferingId: string;
-}
-
-/**
- * Builds the Product2 payload for one Course row (mapping workbook, Course tab
- * rows 127-131, Oct 2026). One Product2 per CourseOffering.
- *   Course.Title       → Name (HTML stripped, max 255; falls back to Code / ID)
- *   Course.ID          → Course_Offering__c (lookup to the CourseOffering saved
- *                         for the same row — passed in as its Salesforce Id)
- *   Course.Description → Description (HTML → plain text, _4DNL_ → newline,
- *                         capped at 4,000 as Salesforce counts characters)
- *   Course.Code        → ProductCode (full code as-is, e.g. "OWC 303 A")
- *   (constant)         → IsActive = false
- *
- * The record itself is upserted on Product2.External_ID_4D__c = Course.ID
- * (e.g. "20081_WSP 138"). Course IDs are "<quarter>_<code>" text values, so
- * they cannot collide with the small numeric Purchase Inventory IDs that the
- * Purchase Inventory flow writes to the same field.
- */
-export function buildCourseProductPayload(
-  input: CourseProductInput,
-): Record<string, unknown> {
-  const code = input.code.trim();
-  const name =
-    stripHtmlForTextField(input.title, PRODUCT_NAME_MAX) ||
-    (code || input.sourceId).slice(0, PRODUCT_NAME_MAX);
-  const payload: Record<string, unknown> = {
-    Name: name,
-    IsActive: false,
-    Course_Offering__c: input.courseOfferingId,
-  };
-  if (code) payload.ProductCode = code;
-  const description = capForSalesforceText(
-    htmlToPlainText(input.description),
-    PRODUCT_DESCRIPTION_MAX,
-  );
-  if (description) payload.Description = description;
-  return payload;
-}
-
-// ── PricebookEntry per course Product2 ────────────────────────────────────────
+// ── Shared "Price Books" config var ───────────────────────────────────────────
 //
-// Decisions (Oct 2026):
-//   - One config var, "Price Books", a comma list of Pricebook2 names shared by
-//     Course Import - All / 2-Year / 5-Year.
+// Parsing and validation of the "Price Books" config var, used by Purchase
+// Inventory / Purchase / Purchase Item / Registration / Registration Item
+// (see commerceShared.ts). The course import flows no longer create Product2 or
+// PricebookEntry records — Salesforce org automation creates them from each
+// CourseOffering (decided 2026-11-04).
 //   - The Standard Price Book is always included, even when it is not listed,
 //     because Salesforce rejects a custom-book entry until the Product has a
 //     Standard entry.
-//   - At most ONE custom book: the keys below only give two distinct values.
-//   - UnitPrice = Course.Tuition; blank or 0 → 0 (a free course still gets an
-//     entry). Refreshed on every run. Entries are IsActive = true.
-//   - No enrollment filter: every Product that saves gets its entries.
-
-/** Default value of the "Price Books" config var. */
-export const DEFAULT_PRICE_BOOKS =
-  "Standard Price Book,StanfordContinuingStudies Price Book";
-
-/** Prefix on PricebookEntry.External_ID_4D__c for Standard Price Book entries. */
-export const STANDARD_ENTRY_KEY_PREFIX = "STD-";
+//   - At most ONE custom book: Orders use a single order price book.
 
 /**
  * Splits the "Price Books" config var into distinct, trimmed names. Matching
@@ -571,7 +422,7 @@ export function resolvePriceBooks(
     throw new Error(
       `[Price Books] Only one custom price book is supported, but ${customs.length} are listed: ` +
         `${customs.map((c) => `"${c.Name}"`).join(", ")}. ` +
-        "Entry keys are Course.ID for the custom book and STD-<Course.ID> for Standard, so a second custom book would overwrite the first.",
+        "Orders use a single order price book, so list only one custom book.",
     );
   }
   const warnings: string[] = [];
@@ -591,26 +442,4 @@ export function resolvePriceBooks(
     standardAdded: !standardListed,
     warnings,
   };
-}
-
-/**
- * Course.Tuition → PricebookEntry.UnitPrice. Unlike parseFloatVal, 0 is kept
- * as 0, and a blank or unreadable value also becomes 0. "$1,250.00" → 1250.
- */
-export function parseListPrice(v: string | undefined | null): number {
-  const s = String(v ?? "")
-    .replace(/[$,\s]/g, "")
-    .trim();
-  if (!s) return 0;
-  const n = Number(s);
-  return Number.isFinite(n) ? n : 0;
-}
-
-/** PricebookEntry.External_ID_4D__c for one Product in one book. */
-export function pricebookEntryKey(
-  sourceId: string,
-  isStandard: boolean,
-): string {
-  const id = sourceId.trim();
-  return isStandard ? `${STANDARD_ENTRY_KEY_PREFIX}${id}` : id;
 }

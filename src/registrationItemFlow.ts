@@ -8,7 +8,8 @@
  * Registration_ID.
  *
  * ORDER OF RUNS (same two-round model as Purchase):
- *   1. Course imports  — Product2 + PricebookEntry per course
+ *   1. Course imports  — CourseOffering per course (Salesforce org automation
+ *                        then creates its Product2 + PricebookEntry)
  *   2. Registration Import, "Activate Registration Orders" = false
  *                      — Orders created Draft, Pricebook2Id = order price book
  *   3. Registration Item Import (this flow) — OrderItems on the Draft Orders

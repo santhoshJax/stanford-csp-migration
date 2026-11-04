@@ -247,10 +247,11 @@ export async function getStandardPricebookId(
 // ── Configurable price books (shared "Price Books" config var) ──────────────
 //
 // The "Price Books" config var lives on the Course Configuration page and is
-// shared by the course flows and Purchase Inventory / Purchase / Purchase Item
-// Import, so course and inventory Products land in the same books. Parsing and
-// validation are the course flows' own (courseUtils.parsePriceBookNames /
-// resolvePriceBooks), so both streams fail the same way on a bad name: a name
+// shared by Purchase Inventory / Purchase / Purchase Item / Registration /
+// Registration Item Import. (Course Products and their entries are created by
+// Salesforce org automation, not by these flows.) Parsing and validation live
+// in courseUtils.parsePriceBookNames / resolvePriceBooks, so every flow fails
+// the same way on a bad name: a name
 // that matches no Pricebook2, an inactive book, or more than one custom book
 // stops the run before any row is written. Standard is always added first.
 
