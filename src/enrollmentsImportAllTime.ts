@@ -62,7 +62,8 @@ const SF_OBJECT = "CourseOfferingParticipant";
 const EXT_ID_FIELD = "External_ID_4D__c";
 // Brand new, never-run-at-scale flow — default to a safe small test first.
 // Flip to false only after confirming the CourseOfferingId risk above.
-const TEST_MODE = true;
+// Confirmed Oct 2026: "Course Import - All" has been run.
+const TEST_MODE = false;
 const TEST_LIMIT = 1000;
 
 // ── Raw row type ──────────────────────────────────────────────────────────────
@@ -317,12 +318,9 @@ async function buildDedupMap(
 
         if (!headersSeen) {
           headersSeen = true;
-          const headers = raw.map((h) =>
-            h
-              .replace(/^﻿/, "")
-              .replace(/\r/g, "")
-              .trim(),
-          );
+          const stripBom = (s: string) =>
+            s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
+          const headers = raw.map((h) => stripBom(h).replace(/\r/g, "").trim());
           for (const col of NEEDED_COLUMNS) {
             const idx = headers.indexOf(col);
             if (idx !== -1) columnIndex[col] = idx;
@@ -477,8 +475,7 @@ export const enrollmentsImportAllTime = flow({
     const sfConn = configVars["Salesforce Connection"] as unknown as Connection;
     const fileId = configVars["Enrollment File ID"] as unknown as string;
     const failedFolderId = configVars["Failed Records Folder ID"] as
-      | string
-      | undefined;
+      string | undefined;
 
     if (!fileId) throw new Error("Enrollment File ID config var is empty.");
 

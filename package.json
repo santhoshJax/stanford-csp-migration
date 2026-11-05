@@ -20,6 +20,7 @@
     "@component-manifests/salesforce": "^2026.7.6-t-21.38.20",
     "@prismatic-io/spectral": "^10.24.0",
     "axios": "^1.15.0",
+    "exceljs": "^4.4.0",
     "papaparse": "^5.5.3"
   },
   "devDependencies": {
