@@ -42,22 +42,24 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-05
-**Status:** at risk — 8 decisions from 2026-11-05 meeting reviewed; 4 match code, 4 don't. Refund step ready to remove; 5 questions for Trevor block STAP/drop/lo…
+**Status:** at risk — Fee line feature built & pushed; 5 blockers remain: Trevor's answers, schema validation, picklist check, Refund removal, STAP/Drop/lookup w…
 
 **Done this session**
-- Reviewed all 8 decisions from 2026-11-05 Gemini meeting notes against current code
-- Identified 4 code mismatches: Drop Order activation, Refund records, STAP lines, Prior_Registration_ID lookup, enrollment credits
-- Confirmed Refund removal is clear enough to build now
+- Built $35 registration fee as separate line item (FEE-{ID})
+- Committed to stanford-csp-orchestrate branch (commit 5698075)
+- Pushed to GitHub; PR #1 includes fee feature
+- 135 tests pass including 3 new ones with sample registrations
+- Type check passes
 
 **Open items**
-- Remove Refund step (negative CC_Amt) from Registration and Purchase — ready to build
-- Drop Order lines: create from registration row or activate empty Order? (decision 1, 2, 5)
-- STAP line structure: separate product or adjustment? Which product? (decision 5)
-- STAP amount: use Discount_Amt or STAP_Applied? (decision 5)
-- Prior_Registration_ID lookup field name and target object (decision 6)
-- Enrollment credits: source column and product/name for line item (decision 8)
-- Run sf deploy validate against UAT org — code unvalidated against schema
-- Confirm 6 discount types in UAT picklist; decide handling strategy
+- Remove Refund step from Registration and Purchase flows
+- Drop Order activation: create lines from registration or activate empty Order?
+- STAP line structure: separate product or adjustment? Which product?
+- STAP amount: use Discount_Amt or STAP_Applied?
+- Prior_Registration_ID: lookup field name and target object
+- Enrollment credits: source column and product/name for line item
+- Run sf deploy validate against UAT org schema
+- Confirm 6 discount types exist in UAT picklist; decide handling
 
 **Decisions**
 - CardLastFour sent as Number(4,0); leading zero cannot be stored
@@ -66,21 +68,25 @@
 - Adjustment Name sourced from Order.TA_Discount_Type__c with fallback
 - All enrollment rows (Add, Drop, AJST, New, DupEnrollment, Course cancel) generate line items
 - Payments Import flow left unchanged per architect guidance
-- Refund records will be removed from migration (decision 4 from 2026-11-05 meeting)
+- Refund records will be removed from migration
+- Fee line created in first Registration Import run (Draft stage only)
 
 **Blockers**
 - Code unvalidated against UAT org schema — sf deploy validate not yet run
-- Discount type picklist mismatch: 6 values in code but not confirmed in UAT
-- 5 questions to Trevor block STAP, drop Order, and Prior_Registration_ID work
+- 5 questions to Trevor block STAP, Drop Order, Prior_Registration_ID, enrollment credits work
+- Discount type picklist mismatch: 6 values in code, not confirmed in UAT
+- Registration Fee product must exist in UAT before first run
 
 **Next**
-- Remove Refund step from Registration and Purchase; push to stanford-csp-orchestrate
 - Post 5 questions to Trevor in chat (Drop Order lines, STAP structure/amount, Prior_Registration_ID field, enrollment credits source)
-- Run sf deploy validate against UAT org once Trevor answers questions
+- Create Registration Fee product in UAT with active price book entry
+- Run sf deploy validate against UAT org once Trevor answers
 - Check UAT picklist values for Refund.Type and TA_Discount_Type__c
-- Build STAP, drop Order, and lookup work after Trevor's answers
+- Remove Refund step from flows and push to stanford-csp-orchestrate
+- Build STAP, Drop Order, and lookup work after Trevor's answers
+- Open PR #1 → review → merge to main → run Deploy session
 
-**Checked live on 2026-11-05:** Google Workspace, the Salesforce org, the repository
+**Checked live on 2026-11-05:** the repository
 ### Last session — 2026-11-05
 | | |
 |---|---|
@@ -90,16 +96,22 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-I read the Gemini meeting notes in full. I couldn't review the recording itself: it's a 288 MB video, and I have no tool that can transcribe it. The Google Doc also contains only Gemini's summary and screenshots, not a word-for-word transcript. So everything below comes from Gemini's notes, which may be inaccurate (the notes say so themselves). Where the notes are vague, I've said so.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch stanford-csp-orchestrate)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## Decisions from the 2026-11-05 meeting
+The $35 registration fee now loads as its own line item on the Order. I pushed this to `stanford-csp-orchestrate` as commit `5698075`; the remote branch points at it, so PR #1 includes it. It hasn't been run against an org.
 
-| # | Decision | Does the code match? |
-|---|---|---|
-| 1 | **Adds and drops stay as two separate Orders.** One Order has the add line, the other has the drop line. They are never merged. | Partly. We already load them as separate Orders. |
-| 2 | **Drop Orders are activated like any other Order, not left as Draft.** Trevor didn't want empty Draft Orders. | **No.** A drop registration with no enrollment rows (e.g. 592436118) gets no line items, so it stays Draft today. |
-| 3 | **The original Order doesn't change when a course is dropped.** An UnEnrolled enrollment keeps its full price, e.g. $610 stays on 592434586. | Yes. Every enrollment row already becomes a line item. |
-| 4 | **No Refund records in the migration.** Trevor showed that in Salesforce a refund 
+## How each registration now loads
+Each registration still becomes one Order, keyed `REG-{ID}`. Its lines are:
+- **One line per enrollment** (from Registration Item Import): price = Tuition, plus the discount adjustment, so each line comes to its Extension.
+- **New: one fee line**, keyed `FEE-{Registration ID}`. It's created in the first Registration Import run, when Orders are still Draft:
+  - Price = `Reg_Fee`, quantity 1, type "Order Product".
+  - It's attached to the Order through 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
