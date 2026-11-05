@@ -41,46 +41,48 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-11-04
-**Status:** at risk — Card format reverted to number; 2 of 3 changes remain. Code unvalidated against UAT org schema.
+### Engagement state — 2026-11-05
+**Status:** at risk — Card fixes pushed (commit d217411); 132 tests pass. Code still unvalidated against UAT org. Discount type picklist mismatch blocks loads.
 
 **Done this session**
-- Reverted CardLastFour to Number format (removed text padding helper)
-- Updated ARCHITECTURE.md to document Number(4,0) field behavior
-- Committed revert to stanford-csp-orchestrate (commit abf834a), pushed to GitHub
-- Type check passes; 128 tests pass (5 known Student-flow failures remain)
+- Card brand mapping: MC→Master Card, AmEx→American Express (case/space insensitive)
+- Expiry year: 2-digit years now add 2000 (e.g. 03→2030)
+- Added tests for sample 592436117 (Visa), MC, AmEx, Discover
+- Updated ARCHITECTURE.md with card brand & expiry logic
+- Committed & pushed to stanford-csp-orchestrate (commit d217411)
 
 **Open items**
 - Run sf deploy validate against UAT org — code unvalidated against schema
-- Confirm Refund.Type picklist includes 'Unreferenced' in UAT org
+- Confirm 6 discount types (MLA, SAA onetime, Teacher, Medical Center, Faculty, World Affairs Council) in UAT picklist
+- Decide discount type handling: check UAT, leave blank in code, or request admin add values
 - Verify one course has exactly one Product & one price book entry (1A validation)
-- Decide: build B+C (payment dedup for Registration, Purchase_ID linking) or defer
+- Decide: build B+C (payment dedup, Purchase_ID linking) or defer
 - Open/refresh PR #1 for review & merge to main
 - Deploy to org (separate session after merge)
 
 **Decisions**
 - CardLastFour sent as Number(4,0); leading zero cannot be stored (0418 → 418)
-- Removed formatCardLastFour text-padding helper and related tests
+- Card brand mapping: MC/MasterCard→Master Card, AmEx/AMEX→American Express
+- 2-digit expiry year adds 2000; 4-digit year used as-is
 - Adjustment Name sourced from Order.TA_Discount_Type__c with fallback
 - Negative CC_Amt becomes Refund (Type=Unreferenced, Status=Processed)
 - Payments Import flow left unchanged; not run during loads per architect guidance
-- Discount adjustment amount = Extension − Tuition (no separate sign rule per row type)
 - All enrollment rows (Add, Drop, AJST, New, DupEnrollment, Course cancel) generate line items
 
 **Blockers**
 - Code unvalidated against UAT org schema — sf deploy validate not yet run
-- Refund.Type='Unreferenced' not confirmed in UAT picklist
+- Discount type picklist mismatch: 6 values (MLA, SAA onetime, Teacher, Medical Center, Faculty, World Affairs Council) in code but not confirmed in UAT; blocks Order rows with those types
 
 **Next**
+- Check UAT Object Manager: Refund.Type picklist & TA_Discount_Type__c picklist values (especially the 6 new ones)
+- Decide discount type handling based on UAT check result
 - Run sf deploy validate against UAT org to verify field requirements & schema
-- Check UAT Object Manager: Refund.Type picklist values
-- Verify one course has exactly one Product & one price book entry (confirms 1A logic)
+- Verify one course has exactly one Product & one price book entry
 - Architect decision: build payment dedup (B) + Purchase_ID linking (C), or defer
 - Open/refresh PR #1, request review, merge to main
-- Schedule Deploy session to ship to UAT org
 
-**Checked live on 2026-11-04:** the repository
-### Last session — 2026-11-04
+**Checked live on 2026-11-05:** the repository
+### Last session — 2026-11-05
 | | |
 |---|---|
 | Type | BUILD |
@@ -97,12 +99,11 @@
 Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-I've reverted the card last-four change and pushed it to `stanford-csp-orchestrate` as commit `abf834a`. The remote branch points at that commit, so PR #1 includes it. The type check passes and 128 tests pass. The only failures are the 5 known Student-flow tests. Nothing has been run against an org.
+I've pushed the card fixes to `stanford-csp-orchestrate` as commit `d217411`, and the remote branch now points at that commit, so PR #1 includes it. The type check passes, and 132 tests pass; the 5 failures are the same known Student-flow tests. Nothing has been run against an org.
 
 ## What changed
-- **Card last four is sent as a number again.** Registration and Purchase both read `CC_Last_Four` as a number, so `0418` goes to Salesforce as `418`. A Number(4, 0) field stores it that way regardless of what we send.
-- **I removed the text-and-padding helper** (`formatCardLastFour`) and its tests. One test now checks that `0418` is sent as `418`.
-- **`ARCHITECTURE.md`** now records that `Card
+- **Card brand:** `MC` now loads as **Master Card** and `AmEx` as **American Express**. The match ignores case and spaces, so `MasterCard` and `AMEX` work too. Visa, Diners Club, JCB and Maestro load as they are. Any other value, such as `Discover`, leaves the card brand blank on that card and is logged once per window, so the card itself still loads. Registration and Purchase use the same code for this.
+- **Exp
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
