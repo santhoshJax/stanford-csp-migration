@@ -79,9 +79,16 @@ export function parseInteger(raw: string | undefined): number | undefined {
 }
 
 /**
- * CC_Exp_Date — packed "M" + "YY" digits, e.g. "610" = month 6 / year 10,
- * "1020" = month 10 / year 20. Last two digits are the year.
+ * CC_Exp_Date — packed "M" + "YY" digits, e.g. "610" = month 6 / year 2010,
+ * "0330" = month 3 / year 2030. Last two digits are the year.
+ *
+ * CardPaymentMethod.ExpiryYear is a plain 4-digit Number field in
+ * Stanford_UAT (confirmed 2026-11-05), so the 2-digit year is expanded to
+ * 20YY before writing — otherwise "0330" would be stored as year 30. Every
+ * card in the 2-year scope expires in the 2000s, so +2000 is safe.
  */
+export const EXPIRY_CENTURY = 2000;
+
 export function parseExpiry(
   raw: string | undefined,
 ): { month: number; year: number } | undefined {
@@ -90,7 +97,51 @@ export function parseExpiry(
   const year = parseInt(digits.slice(-2), 10);
   const month = parseInt(digits.slice(0, -2), 10);
   if (isNaN(month) || isNaN(year) || month < 1 || month > 12) return undefined;
-  return { month, year };
+  return { month, year: EXPIRY_CENTURY + year };
+}
+
+/**
+ * CardPaymentMethod.CardType is a restricted picklist. Values confirmed in
+ * Stanford_UAT on 2026-11-05: Visa, Master Card, American Express,
+ * Diners Club, JCB, Maestro (note the spaces). 4D stores short forms
+ * ("MC", "AmEx"), so they are translated here. Keyed lower case with
+ * spaces removed, so "MasterCard", "Master Card" and "MC" all match.
+ */
+export const CARD_TYPE_MAP = new Map<string, string>([
+  ["visa", "Visa"],
+  ["mc", "Master Card"],
+  ["mastercard", "Master Card"],
+  ["amex", "American Express"],
+  ["americanexpress", "American Express"],
+  ["diners", "Diners Club"],
+  ["dinersclub", "Diners Club"],
+  ["jcb", "JCB"],
+  ["maestro", "Maestro"],
+]);
+
+/** Logs the CC_Card_Type values that had no CardType picklist match. */
+export const logUnknownCardTypes = (
+  flowLabel: string,
+  unknown: Map<string, number>,
+  logger: { warn: (m: string) => void },
+): void => {
+  if (unknown.size === 0) return;
+  const list = [...unknown.entries()].map(([k, v]) => `"${k}"×${v}`).join(", ");
+  logger.warn(
+    `[${flowLabel}][CardPaymentMethod] CC_Card_Type value(s) not in the CardType picklist — ` +
+      `CardType left blank: ${list}`,
+  );
+};
+
+/**
+ * 4D CC_Card_Type → CardType picklist value, or undefined when blank or not
+ * an option in the org (e.g. "Discover"). An unknown value is left blank by
+ * the caller and logged, so it cannot reject the whole CardPaymentMethod.
+ */
+export function mapCardType(raw: string | undefined): string | undefined {
+  const key = str(raw).trim().toLowerCase().replace(/[\s.]/g, "");
+  if (!key) return undefined;
+  return CARD_TYPE_MAP.get(key);
 }
 
 /** 4D YYYYMMDDHHMMSS → ISO DateTime (no UTC offset applied — same as Waiver flow). */

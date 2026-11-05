@@ -5,6 +5,7 @@
 import {
   parseDateTime4D,
   parseExpiry,
+  mapCardType,
   COMMERCE_TWO_YEAR_CUTOFF,
   pricebooksInLoadOrder,
   orderPricebook,
@@ -36,10 +37,22 @@ const logger = { warn: jest.fn() };
 
 describe("commerceShared", () => {
   it("unpacks CC_Exp_Date", () => {
-    expect(parseExpiry("610")).toEqual({ month: 6, year: 10 });
-    expect(parseExpiry("1020")).toEqual({ month: 10, year: 20 });
+    expect(parseExpiry("610")).toEqual({ month: 6, year: 2010 });
+    expect(parseExpiry("1020")).toEqual({ month: 10, year: 2020 });
+    // Sample registration 592436117: "0330" → March 2030, not year 30.
+    expect(parseExpiry("0330")).toEqual({ month: 3, year: 2030 });
     expect(parseExpiry("1")).toBeUndefined();
     expect(parseExpiry("1320")).toBeUndefined();
+  });
+  it("translates CC_Card_Type to the CardType picklist", () => {
+    expect(mapCardType("Visa")).toBe("Visa");
+    expect(mapCardType("MC")).toBe("Master Card");
+    expect(mapCardType("MasterCard")).toBe("Master Card");
+    expect(mapCardType("AmEx")).toBe("American Express");
+    expect(mapCardType("AMEX")).toBe("American Express");
+    expect(mapCardType("American Express")).toBe("American Express");
+    expect(mapCardType("Discover")).toBeUndefined();
+    expect(mapCardType("")).toBeUndefined();
   });
   it("parses 4D YYYYMMDDHHMMSS", () => {
     expect(parseDateTime4D("20250102030405")).toBe("2025-01-02T03:04:05.000Z");
@@ -201,7 +214,7 @@ describe("Purchase → Order / Payment / CardPaymentMethod", () => {
     expect(mapToCardPaymentMethod(row)).toMatchObject({
       External_ID_4D__c: "PUR-2",
       ExpiryMonth: 10,
-      ExpiryYear: 20,
+      ExpiryYear: 2020,
       CardLastFour: 224,
     });
     expect(mapPurchasePayment(row, logger)).toMatchObject({
@@ -210,6 +223,15 @@ describe("Purchase → Order / Payment / CardPaymentMethod", () => {
       Amount: 200,
     });
     expect(mapPurchasePayment({ ...row, CC_Amt: "0" }, logger)).toBeNull();
+  });
+  it("translates MC and leaves an unknown card brand blank, counting it", () => {
+    expect(mapToCardPaymentMethod({ ...row, CC_Card_Type: "MC" })).toMatchObject({
+      CardType: "Master Card",
+    });
+    const unknown = new Map<string, number>();
+    const cpm = mapToCardPaymentMethod({ ...row, CC_Card_Type: "Discover" }, unknown);
+    expect(cpm).not.toHaveProperty("CardType");
+    expect(unknown.get("Discover")).toBe(1);
   });
 });
 
@@ -455,6 +477,28 @@ describe("Card last four (Number(4,0) in the org, 2026-11-04)", () => {
     expect(
       mapRegistrationCpm({ ID: "592436050", CC_Last_Four: "0418" }),
     ).toMatchObject({ CardLastFour: 418 });
+  });
+});
+
+describe("Card brand + expiry year (UAT picklist, 2026-11-05)", () => {
+  it("maps sample registration 592436117 (Visa, 0330)", () => {
+    expect(
+      mapRegistrationCpm({
+        ID: "592436117",
+        CC_Card_Type: "Visa",
+        CC_Exp_Date: "0330",
+        CC_Last_Four: "6346",
+      }),
+    ).toMatchObject({ CardType: "Visa", ExpiryMonth: 3, ExpiryYear: 2030, CardLastFour: 6346 });
+  });
+  it("translates AmEx and counts an unknown brand", () => {
+    expect(
+      mapRegistrationCpm({ ID: "1", CC_Card_Type: "AmEx", CC_Last_Four: "1" }),
+    ).toMatchObject({ CardType: "American Express" });
+    const unknown = new Map<string, number>();
+    const cpm = mapRegistrationCpm({ ID: "2", CC_Card_Type: "Discover", CC_Last_Four: "1" }, unknown);
+    expect(cpm).not.toHaveProperty("CardType");
+    expect(unknown.get("Discover")).toBe(1);
   });
 });
 

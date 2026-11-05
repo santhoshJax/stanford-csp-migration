@@ -91,6 +91,8 @@ import {
   resolveConfiguredPricebooks,
   invokeNextWindow,
   parseCurrency,
+  logUnknownCardTypes,
+  mapCardType,
   parseExpiry,
   parseSuccessfulSfIds,
   readWindowCursor,
@@ -254,7 +256,10 @@ function billingAddressFields(raw: RawPurchaseRow) {
   return { street, city, countryCode, stateCode, zip };
 }
 
-export function mapToCardPaymentMethod(raw: RawPurchaseRow): SfRecord | null {
+export function mapToCardPaymentMethod(
+  raw: RawPurchaseRow,
+  unknownCardTypes: Map<string, number> = new Map(),
+): SfRecord | null {
   const id = str(raw.ID).trim();
   if (!id) return null;
 
@@ -282,8 +287,11 @@ export function mapToCardPaymentMethod(raw: RawPurchaseRow): SfRecord | null {
   if (stateCode) record.PaymentMethodStateCode = stateCode;
   if (zip) record.PaymentMethodPostalCode = zip;
 
-  const cardType = str(raw.CC_Card_Type);
+  // CardType is a restricted picklist — translate 4D short forms (MC, AmEx).
+  const rawCardType = str(raw.CC_Card_Type).trim();
+  const cardType = mapCardType(rawCardType);
   if (cardType) record.CardType = cardType;
+  else if (rawCardType) unknownCardTypes.set(rawCardType, (unknownCardTypes.get(rawCardType) ?? 0) + 1);
 
   const expiry = parseExpiry(raw.CC_Exp_Date);
   if (expiry) {
@@ -417,6 +425,7 @@ export const purchaseImport = flow({
 
     // ── Pre-flight caches + stream this window, in parallel ──────────────────
     let cardPaymentMethods: SfRecord[] = [];
+    const unknownCardTypes = new Map<string, number>();
     let orders: SfRecord[] = [];
     let payments: SfRecord[] = [];
     let filteredOut = 0;
@@ -458,7 +467,7 @@ export const purchaseImport = flow({
             filteredOut++;
             return;
           }
-          const cpm = mapToCardPaymentMethod(row);
+          const cpm = mapToCardPaymentMethod(row, unknownCardTypes);
           if (cpm) cardPaymentMethods.push(cpm);
           const order = mapToOrder(row, orderBook.id);
           if (order) orders.push(order);
@@ -468,6 +477,7 @@ export const purchaseImport = flow({
       ),
     ]);
     const { rowsInWindow, hasMore, nextByteOffset, parsedHeaders } = window;
+    logUnknownCardTypes("Purchase Import", unknownCardTypes, logger);
 
     logger.info(
       `[Purchase Import] Window ${windowNumber} stream complete — rows=${rowsInWindow}, ` +

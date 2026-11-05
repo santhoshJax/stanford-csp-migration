@@ -335,6 +335,9 @@ import {
 } from "./utils";
 import { createPerObjectResultsSheet } from "./reportResults";
 import {
+  logUnknownCardTypes,
+  mapCardType,
+  parseExpiry,
   PRICE_BOOKS_CONFIG_VAR,
   loadOrderStates,
   orderPricebook,
@@ -509,22 +512,6 @@ function parseInteger(raw: string | undefined): number | undefined {
   return isNaN(n) ? undefined : n;
 }
 
-/**
- * CC_Exp_Date — packed "M" + "YY" digits with no separator, e.g. "610" =
- * month 6 / year 10, "1210" = month 12 / year 10. Per workbook: last two
- * digits are always the year, everything before that is the month.
- */
-function parseExpiry(
-  raw: string | undefined,
-): { month: number; year: number } | undefined {
-  const digits = str(raw).replace(/\D/g, "");
-  if (digits.length < 2) return undefined;
-  const year = parseInt(digits.slice(-2), 10);
-  const month = parseInt(digits.slice(0, -2), 10);
-  if (isNaN(month) || isNaN(year) || month < 1 || month > 12) return undefined;
-  return { month, year };
-}
-
 // ── Salesforce query helper ───────────────────────────────────────────────────
 
 // Hard cap on each query page so a stalled connection surfaces as a clear
@@ -624,6 +611,7 @@ function billingAddressFields(raw: RawRegistrationRow): {
 
 export function mapToCardPaymentMethod(
   raw: RawRegistrationRow,
+  unknownCardTypes: Map<string, number> = new Map(),
 ): SfRecord | null {
   const id = str(raw.ID).trim();
   if (!id) return null;
@@ -668,8 +656,11 @@ export function mapToCardPaymentMethod(
   if (stateCode) record.PaymentMethodStateCode = stateCode;
   if (zip) record.PaymentMethodPostalCode = zip;
 
-  const cardType = str(raw.CC_Card_Type);
-  if (cardType) record.CardType = cardType; // Direct Map per workbook
+  // CardType is a restricted picklist — translate 4D short forms (MC, AmEx).
+  const rawCardType = str(raw.CC_Card_Type).trim();
+  const cardType = mapCardType(rawCardType);
+  if (cardType) record.CardType = cardType;
+  else if (rawCardType) unknownCardTypes.set(rawCardType, (unknownCardTypes.get(rawCardType) ?? 0) + 1);
 
   const expiry = parseExpiry(raw.CC_Exp_Date);
   if (expiry) {
@@ -961,6 +952,7 @@ async function streamAndMapWindow(
     // passed down from the previous window via the self-invoke payload.
     let headers: string[] = knownHeaders.length > 0 ? [...knownHeaders] : [];
     const cardPaymentMethods: SfRecord[] = [];
+    const unknownCardTypes = new Map<string, number>();
     const orders: SfRecord[] = [];
     const payments: SfRecord[] = [];
     let rowsInWindow = 0;
@@ -1032,7 +1024,7 @@ async function streamAndMapWindow(
           return;
         }
 
-        const cpm = mapToCardPaymentMethod(row);
+        const cpm = mapToCardPaymentMethod(row, unknownCardTypes);
         if (cpm) cardPaymentMethods.push(cpm);
 
         const order = mapToOrder(row, logger, pricebookId);
@@ -1044,7 +1036,8 @@ async function streamAndMapWindow(
         lastCompletedCursor = rowEndByte;
       },
 
-      complete: () =>
+      complete: () => {
+        logUnknownCardTypes("Registration Import", unknownCardTypes, logger);
         resolve({
           cardPaymentMethods,
           orders,
@@ -1054,7 +1047,8 @@ async function streamAndMapWindow(
           hasMore: aborted,
           nextByteOffset: lastCompletedCursor,
           parsedHeaders: headers,
-        }),
+        });
+      },
       error: (err: Error) => reject(err),
     });
   });
