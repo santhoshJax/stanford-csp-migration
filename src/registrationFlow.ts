@@ -342,6 +342,7 @@ import {
   loadOrderStates,
   orderPricebook,
   paymentToRefund,
+  REGISTRATION_EXT_PREFIX,
   registrationExtId,
   resolveConfiguredPricebooks,
 } from "./commerceShared";
@@ -822,6 +823,49 @@ export function mapToOrder(
   // for it.
 
   return record;
+}
+
+// ── Registration fee line (decided 2026-11-05) ───────────────────────────────
+// Reg_Fee becomes its own OrderItem on the registration's Order, next to the
+// enrollment (tuition) lines from Registration Item Import, so the Order
+// total includes the fee: e.g. 592434586 = $610 course + $35 fee = $645.
+// The fee product is found by Product2.Name (config var below) in the order
+// price book, the same way Purchase Item resolves products.
+const SF_ORDER_ITEM = "OrderItem";
+/** Text config var: Product2.Name of the registration fee product. */
+export const REGISTRATION_FEE_PRODUCT_CONFIG_VAR = "Registration Fee Product";
+export const DEFAULT_REGISTRATION_FEE_PRODUCT = "Registration Fee";
+/** OrderItem key prefix for the fee line: FEE-{Registration.ID}. */
+export const REGISTRATION_FEE_EXT_PREFIX = "FEE-";
+
+/**
+ * Builds the fee OrderItem for one mapped Order, or null when there is no
+ * fee (Reg_Fee blank or 0). Pure — tested directly. A negative fee (drop
+ * registrations) is loaded as-is, like a negative tuition line.
+ */
+export function mapToRegistrationFeeItem(
+  order: SfRecord,
+  pricebookEntryId: string,
+): SfRecord | null {
+  const fee = order.Registration_Fee__c;
+  if (typeof fee !== "number" || fee === 0) return null;
+  const orderExtId = order[EXT_ID_FIELD] as string;
+  const registrationId = orderExtId.startsWith(REGISTRATION_EXT_PREFIX)
+    ? orderExtId.slice(REGISTRATION_EXT_PREFIX.length)
+    : orderExtId;
+  const item: SfRecord = {
+    [EXT_ID_FIELD]: `${REGISTRATION_FEE_EXT_PREFIX}${registrationId}`,
+    "Order.External_ID_4D__c": orderExtId,
+    PricebookEntryId: pricebookEntryId,
+    UnitPrice: fee,
+    Quantity: 1,
+    Type: "Order Product",
+  };
+  const studentId = order["Account.Student_ID_4D__c"];
+  if (typeof studentId === "string" && studentId) {
+    item["Student__r.Student_ID_4D__c"] = studentId;
+  }
+  return item;
 }
 
 // Temp key stashed on mapped Payment records to carry the raw Student_ID
@@ -1386,6 +1430,63 @@ export const registrationImport = flow({
       orderFailedCsv = r.failedCsv;
     }
 
+    // ── Phase 2b: Registration fee OrderItem (round 1 only) ──────────────────
+    // One FEE-{id} line per Order that just loaded as Draft and has a
+    // non-zero Reg_Fee. Skipped in round 2: line items cannot be added to an
+    // Activated Order, and round 1 already created them.
+    const feeProductName =
+      String(
+        configVars[REGISTRATION_FEE_PRODUCT_CONFIG_VAR] ?? "",
+      ).trim() || DEFAULT_REGISTRATION_FEE_PRODUCT;
+    const feeItems: SfRecord[] = [];
+    let feeResult = { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
+    if (!activateOrders) {
+      const loadedOrderExtIds = new Set(
+        parseSuccessfulSfIds(orderSuccessfulCsv, EXT_ID_FIELD).keys(),
+      );
+      const withFee = orders.filter(
+        (o) =>
+          loadedOrderExtIds.has(o[EXT_ID_FIELD] as string) &&
+          typeof o.Registration_Fee__c === "number" &&
+          o.Registration_Fee__c !== 0,
+      );
+      if (withFee.length > 0) {
+        const escapedName = feeProductName
+          .replace(/\\/g, "\\\\")
+          .replace(/'/g, "\\'");
+        const feeEntries = await sfQueryAll<{ Id: string }>(
+          sfBase,
+          sfToken,
+          `SELECT Id FROM PricebookEntry WHERE Pricebook2Id = '${orderBook.id}' ` +
+            `AND IsActive = true AND Product2.Name = '${escapedName}' LIMIT 1`,
+        );
+        const feeEntryId = feeEntries[0]?.Id;
+        if (!feeEntryId) {
+          logger.warn(
+            `[Registration Import][Fee] No active PricebookEntry for Product2.Name "${feeProductName}" in ` +
+              `"${orderBook.name}" — ${withFee.length} fee line(s) NOT created. Create the product and its ` +
+              `entry (or set the ${REGISTRATION_FEE_PRODUCT_CONFIG_VAR} config var), then re-run round 1.`,
+          );
+        } else {
+          for (const order of withFee) {
+            const item = mapToRegistrationFeeItem(order, feeEntryId);
+            if (item) feeItems.push(item);
+          }
+          logger.info(
+            `[Registration Import] Upserting ${feeItems.length} registration fee OrderItem(s) ("${feeProductName}")…`,
+          );
+          feeResult = await upsertInBatches(
+            feeItems,
+            SF_ORDER_ITEM,
+            sfBase,
+            sfToken,
+            logger,
+            "[Registration Import][Fee OrderItem]",
+          );
+        }
+      }
+    }
+
     // ── Phase 3: PaymentGroup ─────────────────────────────────────────────────
     // One per successfully-upserted Order: SourceObjectId = that Order's real
     // Salesforce Id (pulled from Order's successfulResults, not re-queried).
@@ -1527,6 +1628,11 @@ export const registrationImport = flow({
             failedCsv: orderFailedCsv,
           },
           {
+            objectName: `${SF_ORDER_ITEM} (Registration Fee)`,
+            successfulCsv: feeResult.successfulCsv,
+            failedCsv: feeResult.failedCsv,
+          },
+          {
             objectName: SF_PAYMENT_GROUP,
             successfulCsv: pgSuccessfulCsv,
             failedCsv: pgFailedCsv,
@@ -1560,6 +1666,7 @@ export const registrationImport = flow({
         `\n  Order mapped:                ${orders.length}, sent: ${plan.toUpsert.length}, activating: ${plan.activating}, ` +
         `already Activated: ${plan.alreadyActivated.size}, Draft w/o items: ${plan.draftWithoutItems.length}` +
         `\n  Order submitted:             ${plan.toUpsert.length}, processed: ${orderProcessed}, failed: ${orderFailed}` +
+        `\n  Fee OrderItem submitted:     ${feeItems.length}, processed: ${feeResult.processed}, failed: ${feeResult.failed}` +
         `\n  PaymentGroup submitted:      ${paymentGroups.length}, processed: ${pgProcessed}, failed: ${pgFailed}` +
         `\n  Payment submitted:           ${payments.length}, processed: ${paymentProcessed}, failed: ${paymentFailed}` +
         `\n  Refund submitted:            ${refunds.length}, processed: ${refundResult.processed}, failed: ${refundResult.failed}`,
@@ -1608,6 +1715,9 @@ export const registrationImport = flow({
         ordersDraftWithoutItems: plan.draftWithoutItems.length,
         ordersProcessed: orderProcessed,
         ordersFailed: orderFailed,
+        feeOrderItems: feeItems.length,
+        feeOrderItemsProcessed: feeResult.processed,
+        feeOrderItemsFailed: feeResult.failed,
         paymentGroups: paymentGroups.length,
         paymentGroupsProcessed: pgProcessed,
         paymentGroupsFailed: pgFailed,

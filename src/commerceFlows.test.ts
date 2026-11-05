@@ -15,6 +15,7 @@ import {
 import {
   mapToCardPaymentMethod as mapRegistrationCpm,
   mapToOrder as mapRegistrationOrder,
+  mapToRegistrationFeeItem,
   mapToPayment as mapRegistrationPayment,
 } from "./registrationFlow";
 import { parsePriceBookNames, resolvePriceBooks } from "./courseUtils";
@@ -531,5 +532,42 @@ describe("Negative CC_Amt → Refund (2026-11-04)", () => {
       Type: "Unreferenced",
       Amount: 20,
     });
+  });
+});
+
+describe("Registration Import — registration fee OrderItem", () => {
+  const log = { warn: jest.fn() };
+  const reg = (o: Record<string, string>) =>
+    mapRegistrationOrder(
+      {
+        Student_ID: "91062806",
+        Registration_Date: "3/16/2026",
+        ...o,
+      },
+      log,
+      "01sORDERBOOK",
+    )!;
+
+  it("adds a $35 fee line to registration 592434586 (610 course + 35 fee = 645)", () => {
+    const order = reg({ ID: "592434586", Reg_Fee: "35", Courses_Subtotal: "610" });
+    expect(mapToRegistrationFeeItem(order, "01uFEE")).toEqual({
+      External_ID_4D__c: "FEE-592434586",
+      "Order.External_ID_4D__c": "REG-592434586",
+      PricebookEntryId: "01uFEE",
+      UnitPrice: 35,
+      Quantity: 1,
+      Type: "Order Product",
+      "Student__r.Student_ID_4D__c": "91062806",
+    });
+  });
+
+  it("creates no fee line when Reg_Fee is 0 or blank (drop 592436118)", () => {
+    expect(mapToRegistrationFeeItem(reg({ ID: "592436118", Reg_Fee: "0" }), "01uFEE")).toBeNull();
+    expect(mapToRegistrationFeeItem(reg({ ID: "592436119", Reg_Fee: "" }), "01uFEE")).toBeNull();
+  });
+
+  it("keeps a negative fee as-is", () => {
+    const item = mapToRegistrationFeeItem(reg({ ID: "7", Reg_Fee: "-35" }), "01uFEE");
+    expect(item?.UnitPrice).toBe(-35);
   });
 });

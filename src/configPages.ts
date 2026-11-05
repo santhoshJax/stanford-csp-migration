@@ -323,6 +323,16 @@ export const configPages = {
           "Order with at least one line item is changed to Activated. Orders without " +
           "line items stay Draft.",
       }),
+      "Registration Fee Product": configVar({
+        stableKey: "rfee2026-1105-4c03-8c20-1b2c3d4e5f13",
+        dataType: "string",
+        default: "Registration Fee",
+        description:
+          "Product2.Name of the registration fee product. Round 1 of Registration " +
+          "Import adds one OrderItem (FEE-{Registration ID}, UnitPrice = Reg_Fee) to each " +
+          "Draft registration Order with a non-zero fee. The product needs an active " +
+          "PricebookEntry in the order price book (first custom book in Price Books).",
+      }),
       "Purchase Inventory File ID": configVar({
         stableKey: "pinv2026-1014-4b01-8c20-1b2c3d4e5f01",
         dataType: "string",
