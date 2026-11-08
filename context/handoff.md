@@ -42,47 +42,48 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-08
-**Status:** at risk — Fee feature built & pushed; architect answers settle 4 questions but reverse payments decision—needs A/B choice before code changes
+**Status:** at risk — Payments Import now sole source; code pushed & tested. Validation & UAT setup still needed before deploy.
 
 **Done this session**
-- Received architect answers to 8 questions
-- Confirmed: Unreferenced Refunds correct, discount picklist values, TotalAmount logic, 2-year cutoff
+- Implemented architect decision: Payments Import is now only payment source
+- Registration and Purchase flows no longer create Payment/Refund records
+- Payments Import handles registration-tied, purchase-tied, and standalone payments
+- Code committed to stanford-csp-orchestrate (93cb337) and pushed to GitHub
+- Type check and 140 unit tests pass
 
 **Open items**
-- Architect decision: Payments table as only source (A) or both sources with dedup (B)?
-- Name other 4D payment tables if architect picks option A
+- Architect: name other 4D payment tables if they exist beyond the one Payments file
 - Confirm 'Stanford Medical Center' vs 'Stanford Healthcare' picklist value
-- Confirm 2-year cutoff (2024-10-06) with Julia or Trevor before full load
 - Admin adds 6 discount types to Order.TA_Discount_Type__c in UAT
 - Create Registration Fee product in UAT with active price book entry
 - Run sf deploy validate against UAT org schema
-- Remove Refund step from flows only if payments decision is finalized
+- Confirm 2-year cutoff (2024-10-06) with Julia or Trevor
+- Turn off TEST_MODE in all commerce flows before deploy
+- Review and merge PR #1 to main
 
 **Decisions**
-- CardLastFour sent as Number(4,0); leading zero cannot be stored
-- Card brand mapping: MC/MasterCard→Master Card, AmEx/AMEX→American Express
-- 2-digit expiry year adds 2000; 4-digit year used as-is
-- Adjustment Name sourced from Order.TA_Discount_Type__c with fallback
-- All enrollment rows generate line items
-- Payments Import flow: decision pending (A or B)
-- Unreferenced Refunds from negative CC_Amt are correct; Refund step stays until payments decision made
-- Fee line created in first Registration Import run (Draft stage only)
+- Payments Import is sole payment source; Registration/Purchase no longer create Payment/Refund
+- Payments with Purchase_ID attach to purchase payment group; registration ID takes precedence if both present
+- Old Payment/Refund code kept behind ORDER_FLOWS_CREATE_PAYMENTS switch for potential reversal
+- CardLastFour as Number(4,0); card brand mapping; 2-digit expiry year adds 2000
+- All enrollment rows generate line items; Fee line created in first Registration Import (Draft only)
+- Unreferenced Refunds from negative CC_Amt are correct
 
 **Blockers**
-- Payments table loading strategy undefined—architect must choose A (Payments only) or B (both, no duplicates)
-- Code unvalidated against UAT org schema
+- Code not yet validated against UAT org schema
 - Registration Fee product must exist in UAT before first run
-- 6 discount picklist values not yet added to UAT; 'Stanford Medical Center' identity unconfirmed
+- 6 discount picklist values not yet added to UAT
+- 'Stanford Medical Center' identity unconfirmed
 
 **Next**
-- Draft question for architect: pick option A or B for payments; name other 4D payment tables if A
-- Once architect chooses: update Registration and Purchase flows per decision
-- Admin adds 6 discount types and Registration Fee product to UAT
+- Ask architect: are there other 4D payment tables beyond the one Payments file?
+- Admin: add 6 discount types and Registration Fee product to UAT
 - Run sf deploy validate against UAT org
 - Confirm 2-year cutoff with Julia or Trevor
-- Merge PR #1 to main and run Deploy session
+- Turn off TEST_MODE in commerce flows
+- Review PR #1, merge to main, run Deploy session
 
-**Checked live on 2026-11-08:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-11-08:** the repository
 ### Last session — 2026-11-08
 | | |
 |---|---|
@@ -92,16 +93,22 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-The architect's answers settle 4, 6, 7 and 8. Answer 5 reverses what we decided, and the code can't change until we agree how payments should load. I haven't changed anything yet. The remote branch is at `6802d78` and matches what we built.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch stanford-csp-orchestrate)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## What each answer means
+I've made the architect's change: Registration and Purchase no longer create any payment data, and Payments Import is now the only source. It's pushed to `stanford-csp-orchestrate` as commit `93cb337`. GitHub shows the branch at that commit, so PR #1 includes it. The type check passes and 140 tests pass; the 5 failures are the usual Student-flow tests. Nothing has been run against an org.
 
-| # | Answer | Effect on the code |
-|---|---|---|
-| 4 | An Unreferenced Refund is correct | **No change.** A negative CC_Amt already loads as an Unreferenced Refund attached to the payment group. This also overrides the "no refunds" line in the Gemini notes from 2026-11-05, so I won't remove the Refund step. |
-| 5 | "Shouldn't the payments table be loaded?" | **This reverses our decision.** On 2026-11-02 Trevor said to skip the Payments table, and we did. See below. |
-| 6 | Add the 6 values to the picklist | **No code change.** The code already sends MLA, SAA onetime, Teacher, Medical Center, Faculty and World Affairs Council. An admin needs to add them to `Order.TA_Discount_Type__c` in UAT before the first run. I can't do it, because no org is attached to this session. **Still not answered:** whether "Stanford Medical Center" is the same as "Stanford Healthcare". |
-| 7 | 2 years was the original agreement | **No chan
+## What changed
+
+**Registration and Purchase**
+- They still create the card record, the Order (Draft, then activated), the $35 fee line and the payment group.
+- They no longer create a Payment from `CC_Amt`, or a Refund from a negative `CC_Amt`. The run log says how many rows this skipped.
+- They no longer build the stud
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
