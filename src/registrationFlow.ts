@@ -342,6 +342,7 @@ import {
   loadOrderStates,
   orderPricebook,
   paymentToRefund,
+  ORDER_FLOWS_CREATE_PAYMENTS,
   REGISTRATION_EXT_PREFIX,
   registrationExtId,
   resolveConfiguredPricebooks,
@@ -661,7 +662,11 @@ export function mapToCardPaymentMethod(
   const rawCardType = str(raw.CC_Card_Type).trim();
   const cardType = mapCardType(rawCardType);
   if (cardType) record.CardType = cardType;
-  else if (rawCardType) unknownCardTypes.set(rawCardType, (unknownCardTypes.get(rawCardType) ?? 0) + 1);
+  else if (rawCardType)
+    unknownCardTypes.set(
+      rawCardType,
+      (unknownCardTypes.get(rawCardType) ?? 0) + 1,
+    );
 
   const expiry = parseExpiry(raw.CC_Exp_Date);
   if (expiry) {
@@ -1190,7 +1195,7 @@ export const registrationImport = flow({
   stableKey: "reg22334-4556-4778-9900-aabbccddeeff",
   description:
     "Streams the Registration TSV from Google Drive one window at a time " +
-    "and bulk-upserts CardPaymentMethod, Order, PaymentGroup, and Payment " +
+    "and bulk-upserts CardPaymentMethod, Order and PaymentGroup (Payments come from Payments Import) " +
     "records via Bulk API 2.0. Orders are created Draft with the order " +
     "price book; run Registration Item Import, then set Activate " +
     "Registration Orders = true and run this flow again to activate them. " +
@@ -1271,7 +1276,11 @@ export const registrationImport = flow({
         "cache and streaming this window of the Registration TSV in parallel…",
     );
     const [emailCache, windowResult] = await Promise.all([
-      buildStudentEmailCache(sfBase, sfToken, logger),
+      // The cache only feeds Payment.GroupPayee, so skip it when this flow
+      // does not create Payments (see ORDER_FLOWS_CREATE_PAYMENTS).
+      ORDER_FLOWS_CREATE_PAYMENTS
+        ? buildStudentEmailCache(sfBase, sfToken, logger)
+        : Promise.resolve(new Map<string, string>()),
       streamAndMapWindow(
         fileId,
         gdToken,
@@ -1302,6 +1311,17 @@ export const registrationImport = flow({
         `cardPaymentMethods=${cardPaymentMethods.length}, orders=${orders.length}, ` +
         `payments=${payments.length}`,
     );
+
+    // ── Payments come from Payments Import, not from CC_Amt (decided 2026-11-08) ──
+    if (!ORDER_FLOWS_CREATE_PAYMENTS) {
+      if (payments.length > 0) {
+        logger.info(
+          `[Registration Import] ${payments.length} CC_Amt payment/refund row(s) NOT created — ` +
+            "Payments Import is the only source of Payment and Refund records",
+        );
+      }
+      payments = [];
+    }
 
     // ── Negative CC_Amt → Refund, not a negative Payment (decided 2026-11-04) ──
     const refunds: SfRecord[] = [];
@@ -1435,11 +1455,15 @@ export const registrationImport = flow({
     // non-zero Reg_Fee. Skipped in round 2: line items cannot be added to an
     // Activated Order, and round 1 already created them.
     const feeProductName =
-      String(
-        configVars[REGISTRATION_FEE_PRODUCT_CONFIG_VAR] ?? "",
-      ).trim() || DEFAULT_REGISTRATION_FEE_PRODUCT;
+      String(configVars[REGISTRATION_FEE_PRODUCT_CONFIG_VAR] ?? "").trim() ||
+      DEFAULT_REGISTRATION_FEE_PRODUCT;
     const feeItems: SfRecord[] = [];
-    let feeResult = { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
+    let feeResult = {
+      processed: 0,
+      failed: 0,
+      successfulCsv: "",
+      failedCsv: "",
+    };
     if (!activateOrders) {
       const loadedOrderExtIds = new Set(
         parseSuccessfulSfIds(orderSuccessfulCsv, EXT_ID_FIELD).keys(),
@@ -1637,16 +1661,20 @@ export const registrationImport = flow({
             successfulCsv: pgSuccessfulCsv,
             failedCsv: pgFailedCsv,
           },
-          {
-            objectName: SF_PAYMENT,
-            successfulCsv: paymentSuccessfulCsv,
-            failedCsv: paymentFailedCsv,
-          },
-          {
-            objectName: SF_REFUND,
-            successfulCsv: refundResult.successfulCsv,
-            failedCsv: refundResult.failedCsv,
-          },
+          ...(ORDER_FLOWS_CREATE_PAYMENTS
+            ? [
+                {
+                  objectName: SF_PAYMENT,
+                  successfulCsv: paymentSuccessfulCsv,
+                  failedCsv: paymentFailedCsv,
+                },
+                {
+                  objectName: SF_REFUND,
+                  successfulCsv: refundResult.successfulCsv,
+                  failedCsv: refundResult.failedCsv,
+                },
+              ]
+            : []),
         ],
         accessToken: gdToken,
         folderId: failedFolderId,

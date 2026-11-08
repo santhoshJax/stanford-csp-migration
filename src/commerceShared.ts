@@ -40,6 +40,17 @@ export const EXT_ID_FIELD = "External_ID_4D__c";
  */
 export const REGISTRATION_EXT_PREFIX = "REG-";
 
+/**
+ * PAYMENT SOURCE — DECIDED 2026-11-08 (architect, on a call): Registration
+ * Import and Purchase Import do NOT create Payment or Refund records from
+ * CC_Amt. All payments and refunds come from the 4D Payments table through
+ * Payments Import, which attaches them to the PaymentGroup these two flows
+ * still create (REG-{id} / PUR-{id}). Keeping one source means no payment is
+ * counted twice. The Payment/Refund mapping code is kept behind this switch
+ * so the decision can be reversed without a rewrite; leave it false.
+ */
+export const ORDER_FLOWS_CREATE_PAYMENTS = false;
+
 /** "560585" → "REG-560585". The one rule every flow uses for Registration keys. */
 export function registrationExtId(id: string): string {
   return `${REGISTRATION_EXT_PREFIX}${id}`;

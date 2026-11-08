@@ -88,6 +88,7 @@ import {
   parseInteger,
   orderPricebook,
   paymentToRefund,
+  ORDER_FLOWS_CREATE_PAYMENTS,
   resolveConfiguredPricebooks,
   invokeNextWindow,
   parseCurrency,
@@ -291,7 +292,11 @@ export function mapToCardPaymentMethod(
   const rawCardType = str(raw.CC_Card_Type).trim();
   const cardType = mapCardType(rawCardType);
   if (cardType) record.CardType = cardType;
-  else if (rawCardType) unknownCardTypes.set(rawCardType, (unknownCardTypes.get(rawCardType) ?? 0) + 1);
+  else if (rawCardType)
+    unknownCardTypes.set(
+      rawCardType,
+      (unknownCardTypes.get(rawCardType) ?? 0) + 1,
+    );
 
   const expiry = parseExpiry(raw.CC_Exp_Date);
   if (expiry) {
@@ -393,7 +398,7 @@ export const purchaseImport = flow({
   stableKey: "purc2026-1014-4a02-9b10-0a1b2c3d4e02",
   description:
     "Streams the Purchase TSV from Google Drive one window at a time and " +
-    "bulk-upserts CardPaymentMethod, Order, PaymentGroup, and Payment " +
+    "bulk-upserts CardPaymentMethod, Order and PaymentGroup (Payments come from Payments Import) " +
     "records (External IDs prefixed PUR-). Must run after the Student flow " +
     "and before Purchase Item Import.",
 
@@ -453,7 +458,11 @@ export const purchaseImport = flow({
     );
 
     const [emailCache, existingOrders, window] = await Promise.all([
-      buildStudentEmailCache(sfBase, sfToken, logger),
+      // The cache only feeds Payment.GroupPayee, so skip it when this flow
+      // does not create Payments (see ORDER_FLOWS_CREATE_PAYMENTS).
+      ORDER_FLOWS_CREATE_PAYMENTS
+        ? buildStudentEmailCache(sfBase, sfToken, logger)
+        : Promise.resolve(new Map<string, string>()),
       loadExistingPurchaseOrders(sfBase, sfToken, logger),
       streamTsvWindow(
         fileId,
@@ -484,6 +493,17 @@ export const purchaseImport = flow({
         `filteredOut(2yr scope)=${filteredOut}, hasMore=${hasMore}, nextByte=${nextByteOffset}, ` +
         `cardPaymentMethods=${cardPaymentMethods.length}, orders=${orders.length}, payments=${payments.length}`,
     );
+
+    // ── Payments come from Payments Import, not from CC_Amt (decided 2026-11-08) ──
+    if (!ORDER_FLOWS_CREATE_PAYMENTS) {
+      if (payments.length > 0) {
+        logger.info(
+          `[Purchase Import] ${payments.length} CC_Amt payment/refund row(s) NOT created — ` +
+            "Payments Import is the only source of Payment and Refund records",
+        );
+      }
+      payments = [];
+    }
 
     // ── Negative CC_Amt → Refund, not a negative Payment (decided 2026-11-04) ──
     const refunds: SfRecord[] = [];
@@ -673,16 +693,20 @@ export const purchaseImport = flow({
             successfulCsv: pg.successfulCsv,
             failedCsv: pg.failedCsv,
           },
-          {
-            objectName: SF_PAYMENT,
-            successfulCsv: paymentResult.successfulCsv,
-            failedCsv: paymentResult.failedCsv,
-          },
-          {
-            objectName: SF_REFUND,
-            successfulCsv: refundResult.successfulCsv,
-            failedCsv: refundResult.failedCsv,
-          },
+          ...(ORDER_FLOWS_CREATE_PAYMENTS
+            ? [
+                {
+                  objectName: SF_PAYMENT,
+                  successfulCsv: paymentResult.successfulCsv,
+                  failedCsv: paymentResult.failedCsv,
+                },
+                {
+                  objectName: SF_REFUND,
+                  successfulCsv: refundResult.successfulCsv,
+                  failedCsv: refundResult.failedCsv,
+                },
+              ]
+            : []),
         ],
         accessToken: gdToken,
         folderId: failedFolderId,

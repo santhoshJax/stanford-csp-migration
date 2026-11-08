@@ -182,12 +182,12 @@ Group 6 — Standalone (can run any time after Group 1)
 
 Group 7 — Commerce (Student flow first; see 4.17 for the internal order)
   ├── Purchase Inventory Flow → Product2, PricebookEntry
-  ├── Registration Flow       → CardPaymentMethod, Order (Draft), OrderItem (Reg_Fee line), PaymentGroup, Payment
+  ├── Registration Flow       → CardPaymentMethod, Order (Draft), OrderItem (Reg_Fee line), PaymentGroup   (no Payment — see Payments Flow)
   ├── Registration Item Flow  → OrderItem, OrderItemAdjustmentLineItem (Enrollment tuition lines + discount; needs Course imports + Registration)
   │     └── then Registration Flow again with "Activate Registration Orders" = true
-  ├── Purchase Flow           → CardPaymentMethod, Order, PaymentGroup, Payment   (PUR- ids)
+  ├── Purchase Flow           → CardPaymentMethod, Order, PaymentGroup   (PUR- ids; no Payment)
   ├── Purchase Item Flow      → OrderItem        (needs Purchase Inventory + Purchase)
-  └── Payments Flow           → Payment, Refund  (needs Registration; PAY- ids)
+  └── Payments Flow           → Payment, Refund  (the ONLY payment source; needs Registration + Purchase; PAY- ids)
 ```
 
 ---
@@ -882,11 +882,11 @@ Upsert key: `External_ID_4D__c` = source row ID
 | Flow | Writes | External ID | Depends on |
 |---|---|---|---|
 | Purchase Inventory | Product2, PricebookEntry (Standard Price Book, insert-only) | `{id}` on Product2 | — |
-| Purchase | CardPaymentMethod, Order (Draft, Standard Price Book), PaymentGroup, Payment, Refund (negative CC_Amt) | `PUR-{id}` | Student |
+| Purchase | CardPaymentMethod, Order (Draft, Standard Price Book), PaymentGroup | `PUR-{id}` | Student |
 | Purchase Item | OrderItem | `PIT-{id}` (Order via `Order.External_ID_4D__c = PUR-{Purchase_ID}`; product via `Product2.Name` → PricebookEntry) | Purchase Inventory, Purchase |
-| Registration | CardPaymentMethod, Order (Draft, order price book), PaymentGroup, Payment, Refund (negative CC_Amt) | `REG-{id}` | Student, Course imports |
+| Registration | CardPaymentMethod, Order (Draft, order price book), PaymentGroup | `REG-{id}` | Student, Course imports |
 | Registration Item | OrderItem, then OrderItemAdjustmentLineItem (`src/registrationItemFlow.ts`; reads the Enrollment TSV) | `ENR-{Enrollment.ID}` on OrderItem; `ADJ-{Enrollment.ID}` on the adjustment (parent via `OrderItem.External_ID_4D__c = ENR-{id}`) (Order via `Order.External_ID_4D__c = REG-{Registration_ID}`; product via course `Product2.External_ID_4D__c = Course_ID` → PricebookEntry in the order price book) | Course imports, Registration |
-| Payments | Payment, Refund (Referenced) | `PAY-{id}` (PaymentGroup via `External_ID_4D__c = REG-{Registration_ID}`) | Student, Registration |
+| Payments | Payment, Refund (Referenced) | `PAY-{id}` (PaymentGroup via `External_ID_4D__c = REG-{Registration_ID}`, else `PUR-{Purchase_ID}`) | Student, Registration, Purchase |
 
 **Registration fee line (decided 2026-11-05):** round 1 of Registration Import adds one OrderItem per Draft Order with a non-zero `Reg_Fee`: key `FEE-{Registration.ID}`, Order via `REG-{id}`, UnitPrice = `Reg_Fee`, Quantity 1, Type "Order Product", Student via `Student_ID`. The product is found by `Product2.Name` (config var "Registration Fee Product", default "Registration Fee") with an active entry in the order price book; if none exists, no fee lines are created and a warning is logged. Round 2 never adds fee lines. Order total = enrollment lines (Tuition + adjustment = Extension) + fee, e.g. 592434586 = 610 + 35 = 645.
 
@@ -894,7 +894,9 @@ Upsert key: `External_ID_4D__c` = source row ID
 
 **Registration Item rules:** one OrderItem per enrollment row — `Add`, `Drop` and `Adjustment` (AJST) rows each get their own line (architect, 2026-11-02: "They'll need to have a line item and show up as extra rows. CSP has already agreed to the extra rows living in salesforce"; constants `INCLUDE_DROP_ROWS` / `INCLUDE_ADJUSTMENT_ROWS` = true). `UnitPrice` = `Tuition`, not `Extension` (architect, 2026-11-02). `Order.TotalAmount` is calculated by Salesforce from the line items and is a reconciliation check against the Payment total, not a mapping. Every enrollment row under a registration gets a line whatever its Status, including `New` / `DupEnrollment` (architect, 2026-11-02: "bring all enrollment rows under each registration"; `EXCLUDED_STATUSES` is empty). Rows are still skipped, and listed on the Skipped tab, only when they cannot be loaded: no Registration_ID, Order not loaded (outside the 2-year window), Order already Activated, no Course_ID / no course product, or unparseable Tuition. Tuition on Drop rows is **negative** (checked against the 2026-11-03 Enrollment sample, e.g. −655 / Extension −524).
 
-**Payments and cards on Registration and Purchase (decided 2026-11-04):** a row with a negative `CC_Amt` (a refund or a negative adjustment, e.g. 592436039 at −165) loads as an `Unreferenced` **Refund** for the absolute amount, on the same Account and PaymentGroup, keyed like the row (`REG-{id}` / `PUR-{id}`), instead of a negative Payment. `CardPaymentMethod.CardLastFour` is a standard Number(4, 0) field (confirmed in the org 2026-11-04), so it is sent as a number and a leading zero cannot be stored: `0418` is saved as `418`. `CardType` is a restricted picklist (UAT values 2026-11-05: Visa, Master Card, American Express, Diners Club, JCB, Maestro), so `CC_Card_Type` is translated by `mapCardType` in `commerceShared.ts` (`MC` → Master Card, `AmEx` → American Express, case- and space-insensitive); a value with no match (e.g. Discover) leaves `CardType` blank and is logged per window. `ExpiryYear` is a 4-digit Number field, so the 2-digit year in `CC_Exp_Date` is expanded to 20YY (`0330` → month 3, year 2030).
+**Payment source (decided 2026-11-08, architect on a call):** Registration and Purchase do **not** create Payment or Refund records from `CC_Amt`. Every Payment and Refund comes from the 4D Payments table through Payments Import, attached to the PaymentGroup of its Order (`REG-{Registration_ID}`, or `PUR-{Purchase_ID}` when there is no Registration_ID; a row with neither, e.g. a transcript fee, loads on the Account only). This keeps one source, so nothing is counted twice. The switch is `ORDER_FLOWS_CREATE_PAYMENTS = false` in `commerceShared.ts`; the earlier CC_Amt Payment / negative-CC_Amt Refund mapping (2026-11-04) is kept behind it but does not run.
+
+**Cards on Registration and Purchase:** `CardPaymentMethod.CardLastFour` is a standard Number(4, 0) field (confirmed in the org 2026-11-04), so it is sent as a number and a leading zero cannot be stored: `0418` is saved as `418`. `CardType` is a restricted picklist (UAT values 2026-11-05: Visa, Master Card, American Express, Diners Club, JCB, Maestro), so `CC_Card_Type` is translated by `mapCardType` in `commerceShared.ts` (`MC` → Master Card, `AmEx` → American Express, case- and space-insensitive); a value with no match (e.g. Discover) leaves `CardType` blank and is logged per window. `ExpiryYear` is a 4-digit Number field, so the 2-digit year in `CC_Exp_Date` is expanded to 20YY (`0330` → month 3, year 2030).
 
 **Discount adjustment line (architect design, standup 2026-11-03; option A):** each OrderItem whose `Extension` differs from its `Tuition` gets one `OrderItemAdjustmentLineItem` with `Amount = Extension − Tuition`, so the adjusted line total equals `Extension`. Add rows get a negative adjustment (Tuition 250, Extension 200 → −50); Drop rows a positive one (−365 → −292 → +73); no per-row-type sign rule. Amount 0 → no adjustment. In the 19-row sample `Extension − Tuition = TA_Discount` on every row; mismatches are loaded as `Extension − Tuition` and logged. Loaded as step 2 of each window, only for OrderItems that succeeded, so it lands before activation. No `OrderAdjustmentGroup` is created. The adjustment `Name` is the parent Order's `TA_Discount_Type__c` (workbook row 67, decided 2026-11-04), or `Discount` when it is blank. **Not yet run against an org:** `External_ID_4D__c` must exist on `OrderItemAdjustmentLineItem`, and the org must accept a positive Amount and an adjustment with no group.
 

@@ -11,6 +11,7 @@ import {
   orderPricebook,
   registrationExtId,
   paymentToRefund,
+  ORDER_FLOWS_CREATE_PAYMENTS,
 } from "./commerceShared";
 import {
   mapToCardPaymentMethod as mapRegistrationCpm,
@@ -226,11 +227,16 @@ describe("Purchase → Order / Payment / CardPaymentMethod", () => {
     expect(mapPurchasePayment({ ...row, CC_Amt: "0" }, logger)).toBeNull();
   });
   it("translates MC and leaves an unknown card brand blank, counting it", () => {
-    expect(mapToCardPaymentMethod({ ...row, CC_Card_Type: "MC" })).toMatchObject({
+    expect(
+      mapToCardPaymentMethod({ ...row, CC_Card_Type: "MC" }),
+    ).toMatchObject({
       CardType: "Master Card",
     });
     const unknown = new Map<string, number>();
-    const cpm = mapToCardPaymentMethod({ ...row, CC_Card_Type: "Discover" }, unknown);
+    const cpm = mapToCardPaymentMethod(
+      { ...row, CC_Card_Type: "Discover" },
+      unknown,
+    );
     expect(cpm).not.toHaveProperty("CardType");
     expect(unknown.get("Discover")).toBe(1);
   });
@@ -490,14 +496,22 @@ describe("Card brand + expiry year (UAT picklist, 2026-11-05)", () => {
         CC_Exp_Date: "0330",
         CC_Last_Four: "6346",
       }),
-    ).toMatchObject({ CardType: "Visa", ExpiryMonth: 3, ExpiryYear: 2030, CardLastFour: 6346 });
+    ).toMatchObject({
+      CardType: "Visa",
+      ExpiryMonth: 3,
+      ExpiryYear: 2030,
+      CardLastFour: 6346,
+    });
   });
   it("translates AmEx and counts an unknown brand", () => {
     expect(
       mapRegistrationCpm({ ID: "1", CC_Card_Type: "AmEx", CC_Last_Four: "1" }),
     ).toMatchObject({ CardType: "American Express" });
     const unknown = new Map<string, number>();
-    const cpm = mapRegistrationCpm({ ID: "2", CC_Card_Type: "Discover", CC_Last_Four: "1" }, unknown);
+    const cpm = mapRegistrationCpm(
+      { ID: "2", CC_Card_Type: "Discover", CC_Last_Four: "1" },
+      unknown,
+    );
     expect(cpm).not.toHaveProperty("CardType");
     expect(unknown.get("Discover")).toBe(1);
   });
@@ -549,7 +563,11 @@ describe("Registration Import — registration fee OrderItem", () => {
     )!;
 
   it("adds a $35 fee line to registration 592434586 (610 course + 35 fee = 645)", () => {
-    const order = reg({ ID: "592434586", Reg_Fee: "35", Courses_Subtotal: "610" });
+    const order = reg({
+      ID: "592434586",
+      Reg_Fee: "35",
+      Courses_Subtotal: "610",
+    });
     expect(mapToRegistrationFeeItem(order, "01uFEE")).toEqual({
       External_ID_4D__c: "FEE-592434586",
       "Order.External_ID_4D__c": "REG-592434586",
@@ -562,12 +580,89 @@ describe("Registration Import — registration fee OrderItem", () => {
   });
 
   it("creates no fee line when Reg_Fee is 0 or blank (drop 592436118)", () => {
-    expect(mapToRegistrationFeeItem(reg({ ID: "592436118", Reg_Fee: "0" }), "01uFEE")).toBeNull();
-    expect(mapToRegistrationFeeItem(reg({ ID: "592436119", Reg_Fee: "" }), "01uFEE")).toBeNull();
+    expect(
+      mapToRegistrationFeeItem(
+        reg({ ID: "592436118", Reg_Fee: "0" }),
+        "01uFEE",
+      ),
+    ).toBeNull();
+    expect(
+      mapToRegistrationFeeItem(reg({ ID: "592436119", Reg_Fee: "" }), "01uFEE"),
+    ).toBeNull();
   });
 
   it("keeps a negative fee as-is", () => {
-    const item = mapToRegistrationFeeItem(reg({ ID: "7", Reg_Fee: "-35" }), "01uFEE");
+    const item = mapToRegistrationFeeItem(
+      reg({ ID: "7", Reg_Fee: "-35" }),
+      "01uFEE",
+    );
     expect(item?.UnitPrice).toBe(-35);
+  });
+});
+
+describe("Payments source (decided 2026-11-08)", () => {
+  const base = {
+    ID: "77",
+    Student_ID: "90471855",
+    Registration_ID: "0",
+    Sales_Amount: "20",
+    Date_Time_New: "20260102030405",
+  };
+  it("Registration and Purchase do not create Payment or Refund records", () => {
+    expect(ORDER_FLOWS_CREATE_PAYMENTS).toBe(false);
+  });
+  it("links a Purchase_ID payment to the PUR- PaymentGroup", () => {
+    const s = newPaymentSkips();
+    const m = mapToPayment(
+      { ...base, Purchase_ID: "12" },
+      new Set(["PUR-12"]),
+      s,
+      logger,
+      "load",
+    );
+    expect(m?.payment).toMatchObject({
+      External_ID_4D__c: "PAY-77",
+      "PaymentGroup.External_ID_4D__c": "PUR-12",
+      Amount: 20,
+    });
+  });
+  it("skips a Purchase_ID payment whose PUR- PaymentGroup is not in the org", () => {
+    const s = newPaymentSkips();
+    expect(
+      mapToPayment(
+        { ...base, Purchase_ID: "13" },
+        new Set(["PUR-12"]),
+        s,
+        logger,
+        "load",
+      ),
+    ).toBeNull();
+    expect(s.purchasePaymentGroupMissing).toBe(1);
+  });
+  it("uses Registration_ID when a row has both ids", () => {
+    const s = newPaymentSkips();
+    const m = mapToPayment(
+      { ...base, Registration_ID: "560585", Purchase_ID: "12" },
+      new Set(["REG-560585", "PUR-12"]),
+      s,
+      logger,
+      "load",
+    );
+    expect(m?.payment["PaymentGroup.External_ID_4D__c"]).toBe("REG-560585");
+    expect(s.bothRegistrationAndPurchase).toBe(1);
+  });
+  it("loads a payment with no Registration or Purchase (e.g. transcript fee) on the Account only", () => {
+    const m = mapToPayment(
+      { ...base, Sales_Amount: "15" },
+      new Set(),
+      newPaymentSkips(),
+      logger,
+      "load",
+    );
+    expect(m?.payment).not.toHaveProperty("PaymentGroup.External_ID_4D__c");
+    expect(m?.payment).toMatchObject({
+      Amount: 15,
+      "Account.Student_ID_4D__c": "90471855",
+    });
   });
 });

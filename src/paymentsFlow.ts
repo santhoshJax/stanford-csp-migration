@@ -36,17 +36,19 @@
  *   external-ID relationship `PaymentGroup.External_ID_4D__c`. A Registration
  *   whose PaymentGroup does not exist (outside the 2-year scope, or failed) is
  *   SKIPPED and counted rather than failing one Bulk row per payment.
- *   Purchase_ID is "Do Not Map" in the workbook, so purchase-linked payments
- *   are NOT attached to their PUR- PaymentGroup.
+ *   Purchase_ID (workbook: "Conversion", 2026-11-02) links the same way:
+ *   PaymentGroup.External_ID_4D__c = "PUR-" + Purchase_ID, the group Purchase
+ *   Import creates per PUR- Order. A row with both ids uses Registration_ID
+ *   (counted). A row with neither (e.g. a transcript-only fee) loads with the
+ *   Account only.
  *
- * ⚠️  DOUBLE-COUNTING RISK (architect decision needed):
- *   Registration Import already creates a Capture/Processed Payment from each
- *   registration's CC_Amt. A Payments row with a Registration_ID very likely
- *   describes that same money, so loading both would record it twice.
- *   REGISTRATION_LINKED_PAYMENTS controls this: "load" (default — follows the
- *   workbook literally) or "skip" (load only payments NOT tied to a
- *   Registration). TEST_MODE is on, so nothing is committed at scale until this
- *   is decided.
+ * SINGLE SOURCE OF PAYMENTS — DECIDED 2026-11-08 (architect, on a call):
+ *   Registration Import and Purchase Import no longer create Payment or
+ *   Refund from CC_Amt (ORDER_FLOWS_CREATE_PAYMENTS = false in
+ *   commerceShared.ts). This flow is the only source, so every Payments row
+ *   loads, including those tied to a Registration — nothing is counted twice.
+ *   REGISTRATION_LINKED_PAYMENTS stays "load"; "skip" only makes sense if the
+ *   order flows ever create payments again.
  *
  * Field mapping — fields the review could NOT take at face value:
  *   - "4D_Payment_Sub_Type__c" and "4D_Freeze__c": a Salesforce custom field
@@ -68,7 +70,7 @@
  *     runs (that field also needs FLS on the migration permission set).
  *   - STAP: when Payment_Sub_Type = STAP, Sales_Amount is ALSO written to
  *     STAP_Amount__c (Amount still carries it).
- *   - Net_Amount, Purchase_ID: Do Not Map.
+ *   - Net_Amount: Do Not Map.
  */
 
 import { flow, type Connection } from "@prismatic-io/spectral";
@@ -84,12 +86,14 @@ import {
   parseSuccessfulSfIds,
   readWindowCursor,
   registrationExtId,
+  ORDER_FLOWS_CREATE_PAYMENTS,
   insertViaComposite,
   sfQueryAll,
   streamTsvWindow,
   stripDotZero,
   upsertInBatches,
 } from "./commerceShared";
+import { PURCHASE_EXT_PREFIX } from "./purchaseFlow";
 
 const SF_PAYMENT = "Payment";
 const SF_REFUND = "Refund";
@@ -102,7 +106,7 @@ const TEST_MODE = true;
 const TEST_LIMIT = 50;
 const TEST_SKIP = 0;
 
-/** See header — "load" follows the workbook, "skip" avoids double-counting Registration payments. */
+/** See header — "load": this flow is the only payment source (2026-11-08). */
 export const REGISTRATION_LINKED_PAYMENTS: "load" | "skip" = "load";
 
 /** Real API names pending confirmation (see header). undefined = not mapped. */
@@ -139,6 +143,8 @@ export interface PaymentSkips {
   outOfScope: number;
   zeroAmount: number;
   registrationPaymentGroupMissing: number;
+  purchasePaymentGroupMissing: number;
+  bothRegistrationAndPurchase: number;
   skippedRegistrationLinked: number;
   refundWithoutPayment: number;
 }
@@ -148,6 +154,8 @@ export function newPaymentSkips(): PaymentSkips {
     outOfScope: 0,
     zeroAmount: 0,
     registrationPaymentGroupMissing: 0,
+    purchasePaymentGroupMissing: 0,
+    bothRegistrationAndPurchase: 0,
     skippedRegistrationLinked: 0,
     refundWithoutPayment: 0,
   };
@@ -188,6 +196,19 @@ export function mapToPayment(
     }
   }
 
+  const purchaseId = stripDotZero(raw.Purchase_ID);
+  const hasPurchase = !!purchaseId && purchaseId !== "0";
+  // Registration wins when a row carries both ids (counted, not expected).
+  const linkPurchase = hasPurchase && !hasRegistration;
+  if (hasPurchase && hasRegistration) skips.bothRegistrationAndPurchase++;
+  if (
+    linkPurchase &&
+    !existingPaymentGroupExtIds.has(`${PURCHASE_EXT_PREFIX}${purchaseId}`)
+  ) {
+    skips.purchasePaymentGroupMissing++;
+    return null;
+  }
+
   const amount = parseCurrency(raw.Sales_Amount);
   const refund = parseCurrency(raw.Refund_Amount);
   if (amount === undefined || amount === 0) {
@@ -212,6 +233,9 @@ export function mapToPayment(
   if (hasRegistration) {
     record["PaymentGroup.External_ID_4D__c"] =
       registrationExtId(registrationId);
+  } else if (linkPurchase) {
+    record["PaymentGroup.External_ID_4D__c"] =
+      `${PURCHASE_EXT_PREFIX}${purchaseId}`;
   }
   const transcriptRequestId = stripDotZero(raw.Transcript_Request_ID);
   if (transcriptRequestId && transcriptRequestId !== "0") {
@@ -362,13 +386,18 @@ export const paymentsImport = flow({
       `[Payments Import] Window ${windowNumber} stream complete — rows=${rowsInWindow}, payments=${mapped.length}, ` +
         `skipped: outOfScope=${skips.outOfScope}, zeroAmount=${skips.zeroAmount}, ` +
         `registrationPaymentGroupMissing=${skips.registrationPaymentGroupMissing}, ` +
+        `purchasePaymentGroupMissing=${skips.purchasePaymentGroupMissing}, ` +
+        `bothRegistrationAndPurchase(linked to Registration)=${skips.bothRegistrationAndPurchase}, ` +
         `registrationLinkedSkippedByMode=${skips.skippedRegistrationLinked}, ` +
         `refundWithoutPayment=${skips.refundWithoutPayment}`,
     );
-    if (REGISTRATION_LINKED_PAYMENTS === "load") {
+    if (
+      REGISTRATION_LINKED_PAYMENTS === "load" &&
+      ORDER_FLOWS_CREATE_PAYMENTS
+    ) {
       logger.warn(
-        '[Payments Import] REGISTRATION_LINKED_PAYMENTS="load": payments tied to a Registration may duplicate the ' +
-          "Payment Registration Import already created from CC_Amt. Confirm with the architect before a full run.",
+        '[Payments Import] REGISTRATION_LINKED_PAYMENTS="load" while the order flows also create payments — ' +
+          "registration payments will be counted twice. Set one of them off before a full run.",
       );
     }
 

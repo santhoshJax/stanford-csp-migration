@@ -309,7 +309,7 @@ export const configPages = {
         dataType: "string",
         description:
           "Google Drive file ID of the TSV that contains Registration records. " +
-          "Migrates CardPaymentMethod, Order (Draft, with the order price book), PaymentGroup, and Payment records. " +
+          "Migrates CardPaymentMethod, Order (Draft, with the order price book), and PaymentGroup records (Payments come from Payments Import). " +
           "Must run after the Student flow and the Course imports.",
       }),
       "Activate Registration Orders": configVar({
@@ -347,7 +347,7 @@ export const configPages = {
         dataType: "string",
         description:
           "Google Drive file ID of the TSV that contains Purchase records. " +
-          "Migrates CardPaymentMethod, Order, PaymentGroup, and Payment records " +
+          "Migrates CardPaymentMethod, Order and PaymentGroup records (Payments come from Payments Import) " +
           "(External IDs prefixed PUR-). Must run after Student flow.",
       }),
       "Activate Purchase Orders": configVar({
