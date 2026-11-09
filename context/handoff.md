@@ -42,13 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-09
-**Status:** at risk — Balance & Stanford Healthcare fixed & pushed; 9 blockers remain before UAT validation
+**Status:** blocked — Yes.
 
 **Done this session**
-- Balance field: Registration now writes BalanceDue__c (matches Purchase)
-- Stanford Medical Center mapped to Stanford Healthcare in discount logic
-- 3 new tests added and passing (145 total pass, 5 expected Student-flow failures)
-- Changes committed to stanford-csp-orchestrate (commit d8e1901) and pushed to GitHub
+- Yes. The meeting did confirm the drop and STAP approach. The notes list these as **"Aligned"** decisions: | Decision in the notes | What it means for the build | |---|---| | Separate Orders for the add and the drop, never merged | Same as…
 
 **Open items**
 - Admin: add 5 discount values to Order.TA_Discount_Type__c in UAT (MLA, SAA onetime, Teacher, Faculty, World Affairs Council)
@@ -85,7 +82,7 @@
 - Turn off TEST_MODE in all commerce flows
 - Open PR #1 → review → merge to main → run Deploy session to ship to UAT
 
-**Checked live on 2026-11-09:** the repository
+**Checked live on 2026-11-09:** Google Workspace
 ### Last session — 2026-11-09
 | | |
 |---|---|
@@ -95,23 +92,20 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch stanford-csp-orchestrate)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Yes. The meeting did confirm the drop and STAP approach. The notes list these as **"Aligned"** decisions:
 
-Both changes are committed and pushed to `stanford-csp-orchestrate` as commit `d8e1901`. The branch on GitHub points at that commit, so PR #1 includes them. The type check passes and 145 tests pass; the 5 failures are the usual Student-flow tests. Nothing has been run against an org, and test mode is still on.
+| Decision in the notes | What it means for the build |
+|---|---|
+| Separate Orders for the add and the drop, never merged | Same as what we load now |
+| Drop Orders are activated "as normal registrations rather than drafts" | Drop Orders get a line and are activated |
+| STAP is a **negative line item** for the benefit amount (−$605, −$415) | Add a STAP line to the Order |
+| When a course is dropped, STAP comes back as a **positive** line (+$610) | Add a positive STAP line on the drop Order |
+| An Order lookup on the prior registration ID links the add and drop Orders | Fill `Prior_Registration__c` (you gave me the field name) |
+| An unenrolled course keeps its full price on the original Order ($610) | Already works this way |
 
-**What's in the commit:**
-- **Balance field:** Registration now writes `BalanceDue__c`, the same field Purchase uses. It no longer writes `Balance_Due__c`.
-- **Discount type:** `Medical Center` and `Stanford Medical Center` now load as **Stanford Healthcare**.
-- **Tests:** 3 new tests for these changes.
+So the direction is settled. What the notes don't give are three small build details. Trevor's examples and your sample data answer them, but nobody said them outright:
 
-**Still to do:**
-- **Discount values in UAT:** the admin needs to add these 5 values to `Order.T
+1. **Which column the STAP amount comes from.** He said the line should match "the granted benefit amount" and gave −$415 as an example. On 592436117 that's `Discount_Amt`; `STAP_Applie
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
