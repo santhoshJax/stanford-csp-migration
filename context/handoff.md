@@ -42,23 +42,20 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-09
-**Status:** at risk — Payments Import refined: orphan payments now load without Registration/Purchase/Transcript links. Code pushed, tests pass, UAT validation &…
+**Status:** at risk — Payments Import refined & pushed; 18 open questions block UAT validation & deploy
 
 **Done this session**
-- Refined Payments Import to load payments without Registration_ID/Purchase_ID/Transcript_Request_ID links if those records don't exist in Salesforce
-- Added run log counters: registrationNotInOrg, purchaseNotInOrg, transcriptRequestNotInOrg
-- Code committed to stanford-csp-orchestrate (df24360) and pushed to GitHub
-- Type check and 142 unit tests pass
+- Compiled 18 open questions from code comments and decisions into structured list for stakeholder review
 
 **Open items**
-- Architect: name other 4D payment tables if they exist beyond the one Payments file
+- Architect: confirm other 4D payment tables beyond Payments file
+- Admin: add 6 discount types to Order.TA_Discount_Type__c in UAT
+- Admin: create Registration Fee product in UAT with active price book entry
 - Confirm 'Stanford Medical Center' vs 'Stanford Healthcare' picklist value
-- Admin adds 6 discount types to Order.TA_Discount_Type__c in UAT
-- Create Registration Fee product in UAT with active price book entry
+- Confirm 2-year cutoff date (2024-10-06) with Julia or Trevor
+- Resolve 18 open questions from code (field names, lookup fields, cutoff logic, drop registrations, STAP handling, etc.)
 - Run sf deploy validate against UAT org schema
-- Confirm 2-year cutoff (2024-10-06) with Julia or Trevor
 - Turn off TEST_MODE in all commerce flows before deploy
-- Review and merge PR #1 to main
 
 **Decisions**
 - Payments Import is sole payment source; Registration/Purchase no longer create Payment/Refund
@@ -71,20 +68,22 @@
 - Unreferenced Refunds from negative CC_Amt are correct
 
 **Blockers**
+- 18 open questions from code require stakeholder answers before UAT validation can proceed
 - Code not yet validated against UAT org schema
 - Registration Fee product must exist in UAT before first run
 - 6 discount picklist values not yet added to UAT
 - 'Stanford Medical Center' identity unconfirmed
 
 **Next**
-- Ask architect: are there other 4D payment tables beyond the one Payments file?
+- Share 18-question list with Trevor/Julia for answers (offer spreadsheet format)
 - Admin: add 6 discount types and Registration Fee product to UAT
+- Architect: confirm other 4D payment tables
+- Confirm 2-year cutoff and resolve field-name questions (4D_Payment_Sub_Type__c, 4D_Freeze__c, Payment_Type)
 - Run sf deploy validate against UAT org
-- Confirm 2-year cutoff with Julia or Trevor
 - Turn off TEST_MODE in commerce flows
 - Review PR #1, merge to main, run Deploy session
 
-**Checked live on 2026-11-09:** the repository
+**Checked live on 2026-11-09:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-09
 | | |
 |---|---|
@@ -94,22 +93,16 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch stanford-csp-orchestrate)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Here are the open questions for each import, taken from the code on `stanford-csp-orchestrate` (head `df24360`) and this session's decisions. I've left out anything the architect or you have already settled.
 
-Payments Import now links each of Registration_ID, Purchase_ID and Transcript_Request_ID only when that record exists in Salesforce. If it doesn't, the payment still loads without that link. I pushed this to `stanford-csp-orchestrate` as commit `df24360`, and the branch on GitHub points at it, so PR #1 includes it. The type check passes and 142 tests pass. The 5 failures are the usual Student-flow tests. It hasn't been run against an org yet, and test mode is still on.
-
-## How a payment row loads now
-
-| Payment row has | Record is in Salesforce | Record isn't in Salesforce |
-|---|---|---|
-| Registration_ID | Linked to the `REG-` payment group | Loads **without the link** (before, it was skipped) |
-| Purcha
+## Registration Import
+1. **Discount values.** Has the admin added the 6 values to `Order.TA_Discount_Type__c` in UAT? They are MLA, SAA onetime, Teacher, Medical Center, Faculty and World Affairs Council.
+2. **"Stanford Medical Center".** Is this the same as **Stanford Healthcare**, or is it a separate value?
+3. **2-year cutoff.** The architect said "I believe 2 years". We still need a firm yes from Julia or Trevor on the exact date, **2024-10-06**.
+4. **Cash, check and SNAP registrations.** These rows have no card details, but a card payment record is still created for every registration. Should we skip the card record for them?
+5. **Balance field.** Registration writes `Balance_Due__c` and Purchase writes `BalanceDue__c`. Order seems to have both fields. Which one is correct?
+6. **EffectiveDate.** The workbook gives no source for this required field, so we use Registration_Date. Is that right?
+7. **Drop registrations** (sample 592434586 / 592436118). You asked me to set the
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
