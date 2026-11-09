@@ -42,13 +42,13 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-09
-**Status:** at risk — Build complete; code traced on samples. STAP double-discount & QA org confirmation still block final validation.
+**Status:** at risk — Build complete, API names documented. STAP double-discount & QA org confirmation still block final validation.
 
 **Done this session**
-- Traced all 4 registration flows (round 1, item import, round 2, payments) against code on sample rows
-- Confirmed run order and record structure for each scenario
-- Identified STAP double-discount risk: STAP line + enrollment adjustment both apply
-- Documented exact field mappings and product line creation logic
+- Updated walkthrough with Salesforce object and field API names from code at commit 4612381
+- Documented all objects, fields, and external IDs each import writes
+- Documented all lookups resolved by external ID
+- Documented all 5 registration scenarios with exact field mappings
 
 **Open items**
 - Admin: create STAP and Course Drop products in UAT with $0 price, active status
@@ -88,7 +88,7 @@
 - Turn off TEST_MODE in all commerce flows
 - Open/refresh PR #1 → review → merge to main → run Deploy session to ship to UAT
 
-**Checked live on 2026-11-09:** the repository
+**Checked live on 2026-11-09:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-09
 | | |
 |---|---|
@@ -98,19 +98,26 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-Below, each scenario uses one sample row. You'll see the source fields that matter and the exact Salesforce records the code builds from them. I got these by running the mapping code on branch `stanford-csp-orchestrate` (commit `4612381`) against each row, so these are actual outputs, not a description.
+I've updated the walkthrough with the Salesforce object and field API names. I took every name from the record-building code on `stanford-csp-orchestrate` at commit `4612381`. No org is attached to this session, so I couldn't check them against a live describe. The sample rows and amounts are the same as last time, and I didn't change any code.
 
-The Drive files are still too big for me to open (136 MB and 129 MB; my limit is 10 MB). So the rows come from samples the team pasted earlier. Wherever I had to fill in a value, the scenario says so. Salesforce IDs such as `01uFEE` are placeholders for IDs that would be looked up in the org.
+## Objects each import writes
 
-## Registration file: round 1
+| Import | Object (API name) | External ID (`External_ID_4D__c`) |
+|---|---|---|
+| Registration, round 1 | `CardPaymentMethod` | `REG-{Registration.ID}` |
+| | `Order` | `REG-{Registration.ID}` |
+| | `OrderItem` (fee line) | `FEE-{Registration.ID}` |
+| | `OrderItem` (STAP line) | `STAP-{Registration.ID}` |
+| | `PaymentGroup` | `REG-{Registration.ID}` |
+| Registration Item | `OrderItem` (course line) | `ENR-{Enrollment.ID}` |
+| | `OrderItemAdjustmentLineItem` | `ADJ-{Enrollment.ID}` |
+| Registration, round 2 | `OrderItem` (drop line) | `DROP-{Registration.ID}` |
+| | `Order` (Status update, `Prior_Registration__c` backfill) | `REG-{Registration.ID}` |
+| Payments | `Payment` | `PAY-{Payments.ID}` |
+| | `Refund` | `PAY-{Payments.ID}` |
+| | `RefundLinePayment` | none (insert only) |
 
-### Scenario 1: Normal paid registration with a card
-**Source row 592436117:** Student_ID 91055730 · Registration_Date 04/01/2026 · CC_Card_Type Visa · CC_Exp_Date 0330 · CC_Last_Four 6346 · Courses_Subtotal 415 · Reg_Fee 35 · Discount_Type STAP · Discount_Amt −415 · Balance_Due 0
-
-| Record created | Key fields |
-|---|---|
-| Card record `REG-592436117` | CardType Visa, ExpiryMonth 3, ExpiryYear 2030, CardLastFour 6346, Status Active, linked to student 91055730 |
-| Order `REG-592436117` | Status **Draft**, order price book, EffectiveDate and Registration_Date__c 
+Lookups the code resolves by ext
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
