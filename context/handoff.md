@@ -42,10 +42,11 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-09
-**Status:** at risk — Code ready for UAT setup; Purchase Inventory flow documented; 11 config items + Product2.External_ID_4D__c still needed
+**Status:** at risk — Code complete; UAT setup blocked on 11 config items + price book verification
 
 **Done this session**
-- Documented Purchase Inventory flow: reads catalogue, creates/updates products, adds prices to all price books
+- Confirmed StanfordContinuingStudies Price Book is the order price book in config
+- Clarified Purchase Inventory prices required in both Standard and custom price books
 
 **Open items**
 - Admin: create STAP product in UAT with $0 price, active status
@@ -64,18 +65,20 @@
 - Prior_Registration__c filled in round 1 if prior Order exists; round 2 backfills missing
 - BalanceDue__c is unified balance field across Registration and Purchase
 - Purchase Inventory prices only added if not already present; price updates require manual intervention
+- StanfordContinuingStudies Price Book is the order price book; all order line items must use prices from this book
 
 **Blockers**
 - STAP and Course Drop products not yet created in UAT
 - Required fields (Prior_Registration__c, BalanceDue__c, Transcript_Request__c, External_ID_4D__c) not yet verified/created in UAT
 - Product2.External_ID_4D__c not yet verified as External ID in UAT
+- StanfordContinuingStudies Price Book not verified to exist and be active in UAT
 - TEST_MODE still on in commerce flows
 
 **Next**
-- Admin: create STAP, Course Drop, and Registration Fee products in UAT with $0 price, active status
+- Admin: create STAP, Course Drop, and Registration Fee products in UAT with $0 price, active status in both Standard and StanfordContinuingStudies price books
+- Admin: verify StanfordContinuingStudies Price Book exists and is active in UAT
 - Admin: verify/create Order.Prior_Registration__c, Order.BalanceDue__c, Payment.Transcript_Request__c lookups
 - Admin: mark External_ID_4D__c as External ID on PaymentGroup, Refund, and Product2
-- Confirm STAP Product and Course Drop Product setting names in integration config
 - Run test import in UAT with test mode on to validate setup
 - Turn off TEST_MODE in commerce flows when ready for full load
 
@@ -89,25 +92,18 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-Purchase Inventory loads 4D's **catalogue of things a student can buy**, such as a transcript or a manuscript surcharge. It doesn't create any purchases. It sets up the products so the purchase lines have something to point at later. I read this in `src/purchaseInventoryFlow.ts` on `stanford-csp-orchestrate` at commit `4612381`.
+The other price book is **"StanfordContinuingStudies Price Book"**. I found it in the "Price Books" setting in `src/configPages.ts` on `stanford-csp-orchestrate`, where its default value is:
 
-## What it does, step by step
+`Standard Price Book,StanfordContinuingStudies Price Book`
 
-**1. It reads the Purchase Inventory file.** This is a small file of a few dozen rows. Each row is one item that can be sold.
+**What that means for Purchase Inventory:**
+- Each inventory product gets a price, `Unit_Price`, in both books. The Standard Price Book is done first, because Salesforce needs a standard price before it accepts a custom one.
+- The Standard Price Book is always included, even if someone removes it from the setting.
+- The setting can hold **only one custom price book**. Every book listed has to exist and be active in the org, or the run stops before it writes anything.
 
-**2. It creates or updates one Product (`Product2`) per row.**
+**Why the custom book matters:** it's the **order price book**. Registration and Purchase Orders are created in it, and every line item has to use a price from that same book. The code picks the first custom book in the setting, and only falls back to Standard when no custom book is listed. So the STAP, Course Drop and Registration Fee products also need an active price in **StanfordContinuingStudies Price Book**.
 
-| Source column | Salesforce field | Notes |
-|---|---|---|
-| `ID` | `External_ID_4D__c` | The raw ID (1–9), with no prefix. It can't clash with course IDs like `20081_DAR 200`. |
-| `Item_Type` | `Name` and `ProductCode` | e.g. "Transcript" |
-| `Description` | `Description` | |
-| `Unit_Description` | `QuantityUnitOfMeasure` | Only the 5 known picklist values are loaded, e.g. "Each" or "per 1,000 words". Any other value leaves the field blank and logs a warning. |
-| `Active` | `IsActive` | |
-
-A row with no `Item_Type` is skipped, because a product needs a name.
-
-**3. It gives each product a price (`PricebookEntry`) in every price book liste
+**Course products are different:** the course import flo
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
