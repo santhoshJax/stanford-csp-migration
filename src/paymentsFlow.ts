@@ -34,13 +34,21 @@
  *   creates one PaymentGroup per Order with External_ID_4D__c =
  *   "REG-" + Registration.ID, so this flow sets PaymentGroupId through the
  *   external-ID relationship `PaymentGroup.External_ID_4D__c`. A Registration
- *   whose PaymentGroup does not exist (outside the 2-year scope, or failed) is
- *   SKIPPED and counted rather than failing one Bulk row per payment.
+ *   whose PaymentGroup does not exist (outside the 2-year scope, or failed)
+ *   is LOADED WITHOUT THE LINK and counted (2026-11-09) — see below.
  *   Purchase_ID (workbook: "Conversion", 2026-11-02) links the same way:
  *   PaymentGroup.External_ID_4D__c = "PUR-" + Purchase_ID, the group Purchase
  *   Import creates per PUR- Order. A row with both ids uses Registration_ID
  *   (counted). A row with neither (e.g. a transcript-only fee) loads with the
  *   Account only.
+ *
+ * LINK IF IT EXISTS — DECIDED 2026-11-09: before the upload the flow loads the
+ *   existing PaymentGroup keys (REG-/PUR-) and CSP_Transcript_Request__c
+ *   External_ID_4D__c values. Each of Registration_ID, Purchase_ID and
+ *   Transcript_Request_ID is linked only when its record is in Salesforce;
+ *   otherwise the Payment still loads, without that link, and is counted
+ *   (Transcript_Request_IDs with no row in the Transcript Request file are
+ *   expected here). The Student (Account) link is still required.
  *
  * SINGLE SOURCE OF PAYMENTS — DECIDED 2026-11-08 (architect, on a call):
  *   Registration Import and Purchase Import no longer create Payment or
@@ -142,8 +150,12 @@ export interface RawPaymentRow {
 export interface PaymentSkips {
   outOfScope: number;
   zeroAmount: number;
+  /** Registration_ID given, but no REG- PaymentGroup — loaded without the link. */
   registrationPaymentGroupMissing: number;
+  /** Purchase_ID given, but no PUR- PaymentGroup — loaded without the link. */
   purchasePaymentGroupMissing: number;
+  /** Transcript_Request_ID given, but not in Salesforce — loaded without the link. */
+  transcriptRequestMissing: number;
   bothRegistrationAndPurchase: number;
   skippedRegistrationLinked: number;
   refundWithoutPayment: number;
@@ -155,6 +167,7 @@ export function newPaymentSkips(): PaymentSkips {
     zeroAmount: 0,
     registrationPaymentGroupMissing: 0,
     purchasePaymentGroupMissing: 0,
+    transcriptRequestMissing: 0,
     bothRegistrationAndPurchase: 0,
     skippedRegistrationLinked: 0,
     refundWithoutPayment: 0,
@@ -173,6 +186,12 @@ export function mapToPayment(
   skips: PaymentSkips,
   logger: { warn: (m: string) => void },
   registrationMode: "load" | "skip" = REGISTRATION_LINKED_PAYMENTS,
+  /**
+   * External_ID_4D__c of the CSP_Transcript_Request__c records in the org.
+   * When given, a Transcript_Request_ID not in the set is dropped (payment
+   * still loads). When omitted, the link is sent unchecked.
+   */
+  existingTranscriptRequestExtIds?: Set<string>,
 ): MappedPaymentRow | null {
   const id = str(raw.ID).trim();
   if (!id) return null;
@@ -190,23 +209,30 @@ export function mapToPayment(
       skips.skippedRegistrationLinked++;
       return null;
     }
-    if (!existingPaymentGroupExtIds.has(registrationExtId(registrationId))) {
-      skips.registrationPaymentGroupMissing++;
-      return null;
-    }
+  }
+  // LINK IF IT EXISTS (decided 2026-11-09): a Registration / Purchase /
+  // Transcript Request that is not in Salesforce no longer skips the payment.
+  // The Payment loads on the student's Account without that link, and the
+  // case is counted. Sending a link to a missing record would make Salesforce
+  // reject the whole row.
+  const linkRegistration =
+    hasRegistration &&
+    existingPaymentGroupExtIds.has(registrationExtId(registrationId));
+  if (hasRegistration && !linkRegistration) {
+    skips.registrationPaymentGroupMissing++;
   }
 
   const purchaseId = stripDotZero(raw.Purchase_ID);
   const hasPurchase = !!purchaseId && purchaseId !== "0";
   // Registration wins when a row carries both ids (counted, not expected).
-  const linkPurchase = hasPurchase && !hasRegistration;
+  // If the Registration's group is missing, fall back to the Purchase's.
   if (hasPurchase && hasRegistration) skips.bothRegistrationAndPurchase++;
-  if (
-    linkPurchase &&
-    !existingPaymentGroupExtIds.has(`${PURCHASE_EXT_PREFIX}${purchaseId}`)
-  ) {
+  const purchaseGroupExists =
+    hasPurchase &&
+    existingPaymentGroupExtIds.has(`${PURCHASE_EXT_PREFIX}${purchaseId}`);
+  const linkPurchase = !linkRegistration && purchaseGroupExists;
+  if (hasPurchase && !hasRegistration && !purchaseGroupExists) {
     skips.purchasePaymentGroupMissing++;
-    return null;
   }
 
   const amount = parseCurrency(raw.Sales_Amount);
@@ -230,7 +256,7 @@ export function mapToPayment(
   if (studentId && studentId !== "0") {
     record["Account.Student_ID_4D__c"] = studentId;
   }
-  if (hasRegistration) {
+  if (linkRegistration) {
     record["PaymentGroup.External_ID_4D__c"] =
       registrationExtId(registrationId);
   } else if (linkPurchase) {
@@ -239,7 +265,14 @@ export function mapToPayment(
   }
   const transcriptRequestId = stripDotZero(raw.Transcript_Request_ID);
   if (transcriptRequestId && transcriptRequestId !== "0") {
-    record["Transcript_Request__r.External_ID_4D__c"] = transcriptRequestId;
+    if (
+      existingTranscriptRequestExtIds &&
+      !existingTranscriptRequestExtIds.has(transcriptRequestId)
+    ) {
+      skips.transcriptRequestMissing++;
+    } else {
+      record["Transcript_Request__r.External_ID_4D__c"] = transcriptRequestId;
+    }
   }
 
   const source = str(raw.Payment_Source).trim();
@@ -366,6 +399,19 @@ export const paymentsImport = flow({
     logger.info(
       `[Payments Import] PaymentGroups in org: ${existingGroups.size}`,
     );
+    // Transcript Requests that exist (External_ID_4D__c = raw 4D ID).
+    const transcripts = await sfQueryAll<{ External_ID_4D__c: string }>(
+      sfBase,
+      sfToken,
+      "SELECT External_ID_4D__c FROM CSP_Transcript_Request__c WHERE External_ID_4D__c != null",
+      logger,
+    );
+    const existingTranscripts = new Set(
+      transcripts.map((t) => t.External_ID_4D__c),
+    );
+    logger.info(
+      `[Payments Import] Transcript Requests in org: ${existingTranscripts.size}`,
+    );
 
     let mapped: MappedPaymentRow[] = [];
     const skips = newPaymentSkips();
@@ -376,7 +422,14 @@ export const paymentsImport = flow({
       MAX_ROWS,
       knownHeaders,
       (row: RawPaymentRow) => {
-        const m = mapToPayment(row, existingGroups, skips, logger);
+        const m = mapToPayment(
+          row,
+          existingGroups,
+          skips,
+          logger,
+          REGISTRATION_LINKED_PAYMENTS,
+          existingTranscripts,
+        );
         if (m) mapped.push(m);
       },
     );
@@ -385,8 +438,9 @@ export const paymentsImport = flow({
     logger.info(
       `[Payments Import] Window ${windowNumber} stream complete — rows=${rowsInWindow}, payments=${mapped.length}, ` +
         `skipped: outOfScope=${skips.outOfScope}, zeroAmount=${skips.zeroAmount}, ` +
-        `registrationPaymentGroupMissing=${skips.registrationPaymentGroupMissing}, ` +
-        `purchasePaymentGroupMissing=${skips.purchasePaymentGroupMissing}, ` +
+        `loaded without link: registrationNotInOrg=${skips.registrationPaymentGroupMissing}, ` +
+        `purchaseNotInOrg=${skips.purchasePaymentGroupMissing}, ` +
+        `transcriptRequestNotInOrg=${skips.transcriptRequestMissing}; ` +
         `bothRegistrationAndPurchase(linked to Registration)=${skips.bothRegistrationAndPurchase}, ` +
         `registrationLinkedSkippedByMode=${skips.skippedRegistrationLinked}, ` +
         `refundWithoutPayment=${skips.refundWithoutPayment}`,

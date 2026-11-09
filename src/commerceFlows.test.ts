@@ -365,9 +365,8 @@ describe("Payments → Payment / Refund", () => {
   });
   it("does not match a PaymentGroup keyed with the raw (unprefixed) Registration id", () => {
     const s = newPaymentSkips();
-    expect(
-      mapToPayment(row, new Set(["560585"]), s, logger, "load"),
-    ).toBeNull();
+    const m = mapToPayment(row, new Set(["560585"]), s, logger, "load");
+    expect(m?.payment).not.toHaveProperty("PaymentGroup.External_ID_4D__c");
     expect(s.registrationPaymentGroupMissing).toBe(1);
   });
   it("applies scope, missing-group, and skip-mode rules", () => {
@@ -383,15 +382,22 @@ describe("Payments → Payment / Refund", () => {
     ).toBeNull();
     expect(s1.outOfScope).toBe(1);
     const s2 = newPaymentSkips();
-    expect(
-      mapToPayment(
-        { ...row, Registration_ID: "1" },
-        groups,
-        s2,
-        logger,
-        "load",
-      ),
-    ).toBeNull();
+    const unlinked = mapToPayment(
+      { ...row, Registration_ID: "1" },
+      groups,
+      s2,
+      logger,
+      "load",
+    );
+    // Registration not in Salesforce: payment still loads, without the link.
+    expect(unlinked?.payment).toMatchObject({
+      External_ID_4D__c: "PAY-1",
+      Amount: 510,
+      "Account.Student_ID_4D__c": "90471855",
+    });
+    expect(unlinked?.payment).not.toHaveProperty(
+      "PaymentGroup.External_ID_4D__c",
+    );
     expect(s2.registrationPaymentGroupMissing).toBe(1);
     const s3 = newPaymentSkips();
     expect(mapToPayment(row, groups, s3, logger, "skip")).toBeNull();
@@ -626,18 +632,59 @@ describe("Payments source (decided 2026-11-08)", () => {
       Amount: 20,
     });
   });
-  it("skips a Purchase_ID payment whose PUR- PaymentGroup is not in the org", () => {
+  it("loads a Purchase_ID payment without the link when its PUR- PaymentGroup is not in the org", () => {
     const s = newPaymentSkips();
-    expect(
-      mapToPayment(
-        { ...base, Purchase_ID: "13" },
-        new Set(["PUR-12"]),
-        s,
-        logger,
-        "load",
-      ),
-    ).toBeNull();
+    const m = mapToPayment(
+      { ...base, Purchase_ID: "13" },
+      new Set(["PUR-12"]),
+      s,
+      logger,
+      "load",
+    );
+    expect(m?.payment).toMatchObject({ External_ID_4D__c: "PAY-77", Amount: 20 });
+    expect(m?.payment).not.toHaveProperty("PaymentGroup.External_ID_4D__c");
     expect(s.purchasePaymentGroupMissing).toBe(1);
+  });
+  it("falls back to the Purchase when the Registration's group is missing", () => {
+    const m = mapToPayment(
+      { ...base, Registration_ID: "999", Purchase_ID: "12" },
+      new Set(["PUR-12"]),
+      newPaymentSkips(),
+      logger,
+      "load",
+    );
+    expect(m?.payment["PaymentGroup.External_ID_4D__c"]).toBe("PUR-12");
+  });
+  it("links a Transcript_Request_ID only when the request is in Salesforce", () => {
+    const transcripts = new Set(["5001"]);
+    const s = newPaymentSkips();
+    const linked = mapToPayment(
+      { ...base, Transcript_Request_ID: "5001" },
+      new Set(),
+      s,
+      logger,
+      "load",
+      transcripts,
+    );
+    expect(linked?.payment["Transcript_Request__r.External_ID_4D__c"]).toBe(
+      "5001",
+    );
+    const orphan = mapToPayment(
+      { ...base, Transcript_Request_ID: "5002", Sales_Amount: "15" },
+      new Set(),
+      s,
+      logger,
+      "load",
+      transcripts,
+    );
+    expect(orphan?.payment).toMatchObject({
+      Amount: 15,
+      "Account.Student_ID_4D__c": "90471855",
+    });
+    expect(orphan?.payment).not.toHaveProperty(
+      "Transcript_Request__r.External_ID_4D__c",
+    );
+    expect(s.transcriptRequestMissing).toBe(1);
   });
   it("uses Registration_ID when a row has both ids", () => {
     const s = newPaymentSkips();
