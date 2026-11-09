@@ -42,21 +42,19 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-09
-**Status:** at risk — Drop/STAP build complete & pushed; needs UAT setup, validation run & 3 confirmations before test
+**Status:** at risk — Build complete & pushed; awaiting UAT setup, schema validation & 3 confirmations before test
 
 **Done this session**
-- Built drop and STAP line logic; committed to stanford-csp-orchestrate branch
-- Confirmed Discount_Amt carries correct sign (negative on add, positive on drop)
-- Verified type check passes and 153 tests pass
+- Confirmed line item pricing logic: each line takes price from its own registration row (Reg_Fee, Discount_Amt, Courses_Subtotal, Tuition)
 
 **Open items**
-- Admin: create STAP and Course Drop products in UAT with active prices in order price book
+- Admin: create STAP and Course Drop products in UAT with $0 price, active status, in order price book
 - Admin: add 5 discount values to Order.TA_Discount_Type__c in UAT (MLA, SAA onetime, Teacher, Faculty, World Affairs Council)
-- Architect: confirm 592436118 has STAP discount type set (needed for drop STAP line to load)
+- Architect: confirm 592436118 has STAP discount type set
 - Architect: confirm Prior_Registration__c lookup field exists on Order
 - Confirm 2-year cutoff date (2024-10-06) with Julia or Trevor
 - Confirm if cash/check/SNAP registrations should skip card payment record creation
-- Confirm EffectiveDate source (Registration_Date assumed, needs validation)
+- Confirm EffectiveDate source (Registration_Date assumed)
 - Run sf deploy validate against UAT org schema before PR merge
 
 **Decisions**
@@ -66,22 +64,23 @@
 - Prior_Registration__c link filled in round 1 if prior Order exists; round 2 backfills missing links
 - Balance field: BalanceDue__c is correct (unified across Registration and Purchase)
 - Payments Import is sole payment source; Registration/Purchase no longer create Payment/Refund
+- Product price book entries use $0 price; UnitPrice overridden by file data on each line
 
 **Blockers**
 - STAP and Course Drop products not yet created in UAT
 - sf deploy validate not yet run against UAT org schema
 - TEST_MODE still on in commerce flows
-- 592436118 discount type unconfirmed (blocks validation of drop STAP line logic)
+- 592436118 discount type unconfirmed
 
 **Next**
-- Admin: create STAP and Course Drop products in UAT with active prices
+- Admin: create STAP and Course Drop products in UAT with $0 price, active status
 - Admin: add 5 discount picklist values to Order.TA_Discount_Type__c in UAT
 - Verify Prior_Registration__c lookup field exists on Order in UAT
 - Run sf deploy validate against UAT org schema
 - Turn off TEST_MODE in all commerce flows
 - Open/refresh PR #1 → review → merge to main → run Deploy session to ship to UAT
 
-**Checked live on 2026-11-09:** the repository
+**Checked live on 2026-11-09:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-09
 | | |
 |---|---|
@@ -91,22 +90,19 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch stanford-csp-orchestrate)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Yes, that's right. None of the three amounts is fixed in the code. Each line takes its price from that registration's own row in the file. I checked this in `registrationFlow.ts` at commit `4612381`.
 
-I've built the drop and STAP lines and pushed them to `stanford-csp-orchestrate` as commit `4612381`. The branch on GitHub points at that commit, so PR #1 includes it. The type check passes and 153 tests pass. The 5 failures are the usual Student-flow tests. Nothing has been run against an org yet, and test mode is still on.
+| Line | Where its price comes from | Example from your samples |
+|---|---|---|
+| Registration fee (`FEE-{id}`) | `Reg_Fee` on the registration row | $35 on 592434586. A blank or $0 fee gets no line, and a negative fee loads as it is. |
+| STAP (`STAP-{id}`) | `Discount_Amt` on the registration row, with its sign | −$415 on 592436117, −$645 on 592434586, +$610 on the drop 592436118 |
+| Course drop (`DROP-{id}`) | `Courses_Subtotal` on the registration row | −$610 on 592436118 |
+| Course (`ENR-{id}`) | `Tuition` on the enrollment row | $610 on 592434586 |
 
-## What Registration Import does now
-
-| Step | What it adds |
-|---|---|
-| Round 1 | **STAP line** (`STAP-{id}`) on Orders whose discount type is STAP Benefit. Price = `Discount_Amt` as it is in the file. |
-| Round 1 and 2 | **Link to the prior registration** through `Prior_Registration__c`, but only if that Order is already in Salesforce. If it isn't, the Order loads without the link 
+**How this works with the products:**
+- The Registration Fee, STAP and Course Drop products only label what kind of line it is. Salesforce needs a product with a price book entry for every line item.
+- Each line item sets its own `UnitPrice` from the file. That overrides the price on the product's price book entry, so the product's price is never used.
+- So when the admin creates these 3 products in UAT, the price they enter doesn't m
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
