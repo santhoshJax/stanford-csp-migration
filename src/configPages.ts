@@ -333,6 +333,26 @@ export const configPages = {
           "Draft registration Order with a non-zero fee. The product needs an active " +
           "PricebookEntry in the order price book (first custom book in Price Books).",
       }),
+      "STAP Product": configVar({
+        stableKey: "rstp2026-1109-4c04-8c20-1b2c3d4e5f14",
+        dataType: "string",
+        default: "STAP",
+        description:
+          "Product2.Name of the STAP benefit product. Round 1 of Registration Import adds one " +
+          "OrderItem (STAP-{Registration ID}, UnitPrice = Discount_Amt as signed in the file, e.g. " +
+          "-415, or +610 on a drop) to each Draft Order whose discount type is STAP Benefit. Needs an " +
+          "active PricebookEntry in the order price book.",
+      }),
+      "Course Drop Product": configVar({
+        stableKey: "rdrp2026-1109-4c05-8c20-1b2c3d4e5f15",
+        dataType: "string",
+        default: "Course Drop",
+        description:
+          "Product2.Name used for a drop line when the prior registration does not have exactly one " +
+          "matching course line. Round 2 of Registration Import adds DROP-{Registration ID} " +
+          "(UnitPrice = Courses_Subtotal) to drop Orders with no enrollment line, before activating them. " +
+          "Needs an active PricebookEntry in the order price book.",
+      }),
       "Purchase Inventory File ID": configVar({
         stableKey: "pinv2026-1014-4b01-8c20-1b2c3d4e5f01",
         dataType: "string",

@@ -18,6 +18,12 @@ import {
   mapToOrder as mapRegistrationOrder,
   mapToRegistrationFeeItem,
   mapToPayment as mapRegistrationPayment,
+  mapToStapItem,
+  mapToDropItem,
+  chooseDropLineEntry,
+  priorRegistrationOrderId,
+  stripOrderTempKeys,
+  TEMP_PRIOR_REGISTRATION_KEY,
 } from "./registrationFlow";
 import { parsePriceBookNames, resolvePriceBooks } from "./courseUtils";
 import { mapToProduct2 } from "./purchaseInventoryFlow";
@@ -603,6 +609,129 @@ describe("Registration Import — registration fee OrderItem", () => {
       "01uFEE",
     );
     expect(item?.UnitPrice).toBe(-35);
+  });
+});
+
+describe("Registration Import — prior registration, STAP and drop lines (2026-11-05 standup)", () => {
+  const log = { warn: jest.fn() };
+  const reg = (o: Record<string, string>) =>
+    mapRegistrationOrder(
+      { Student_ID: "91062806", Registration_Date: "3/16/2026", ...o },
+      log,
+      "01sORDERBOOK",
+    )!;
+  // Add 592434586 (STAP) and its drop 592436118, signs as in the file.
+  const add = () =>
+    reg({
+      ID: "592434586",
+      Courses_Subtotal: "610",
+      Reg_Fee: "35",
+      Discount_Amt: "-645",
+      Discount_Type: "STAP",
+    });
+  const drop = () =>
+    reg({
+      ID: "592436118",
+      Prior_Registration_ID: "592434586",
+      Courses_Subtotal: "-610",
+      Reg_Fee: "0",
+      Discount_Amt: "610",
+      Discount_Type: "STAP",
+    });
+
+  it("STAP line = Discount_Amt as signed: -645 on the add, +610 on the drop", () => {
+    expect(mapToStapItem(add(), "01uSTAP")).toEqual({
+      External_ID_4D__c: "STAP-592434586",
+      "Order.External_ID_4D__c": "REG-592434586",
+      PricebookEntryId: "01uSTAP",
+      UnitPrice: -645,
+      Quantity: 1,
+      Type: "Order Product",
+      "Student__r.Student_ID_4D__c": "91062806",
+    });
+    expect(mapToStapItem(drop(), "01uSTAP")?.UnitPrice).toBe(610);
+  });
+
+  it("STAP line uses -415 for 592436117 ($415 course + $35 fee - $415 = $35 paid)", () => {
+    const order = reg({
+      ID: "592436117",
+      Courses_Subtotal: "415",
+      Reg_Fee: "35",
+      Discount_Amt: "-415",
+      Discount_Type: "STAP",
+    });
+    expect(mapToStapItem(order, "01uSTAP")?.UnitPrice).toBe(-415);
+  });
+
+  it("no STAP line for other discount types or a zero amount", () => {
+    expect(
+      mapToStapItem(reg({ ID: "1", Discount_Amt: "-50", Discount_Type: "65+" }), "x"),
+    ).toBeNull();
+    expect(
+      mapToStapItem(reg({ ID: "2", Discount_Amt: "0", Discount_Type: "STAP" }), "x"),
+    ).toBeNull();
+  });
+
+  it("carries Prior_Registration_ID as a temp key that never uploads", () => {
+    const order = drop();
+    expect(order[TEMP_PRIOR_REGISTRATION_KEY]).toBe("592434586");
+    expect(stripOrderTempKeys(order)).not.toHaveProperty(TEMP_PRIOR_REGISTRATION_KEY);
+    expect(add()).not.toHaveProperty(TEMP_PRIOR_REGISTRATION_KEY);
+    expect(reg({ ID: "3", Prior_Registration_ID: "0" })).not.toHaveProperty(
+      TEMP_PRIOR_REGISTRATION_KEY,
+    );
+  });
+
+  it("links the prior Order only when it is in Salesforce", () => {
+    const inOrg = new Map([["REG-592434586", "801PRIOR"]]);
+    expect(priorRegistrationOrderId(drop(), inOrg)).toBe("801PRIOR");
+    expect(priorRegistrationOrderId(drop(), new Map())).toBeUndefined();
+    expect(priorRegistrationOrderId(add(), inOrg)).toBeUndefined();
+  });
+
+  it("drop line = Courses_Subtotal (-610) with the prior course's product", () => {
+    const chosen = chooseDropLineEntry(-610, [
+      { pricebookEntryId: "01uCOM02", unitPrice: 610, courseOfferingId: "a0CCOM" },
+    ]);
+    expect(mapToDropItem(drop(), chosen!.pricebookEntryId, chosen!.courseOfferingId)).toEqual({
+      External_ID_4D__c: "DROP-592436118",
+      "Order.External_ID_4D__c": "REG-592436118",
+      PricebookEntryId: "01uCOM02",
+      UnitPrice: -610,
+      Quantity: 1,
+      Type: "Order Product",
+      "Student__r.Student_ID_4D__c": "91062806",
+      Course_Offering__c: "a0CCOM",
+    });
+    expect(mapToDropItem(add(), "x")).toBeNull(); // not a drop
+  });
+
+  it("picks the prior course by price, else falls back", () => {
+    const lines = [
+      { pricebookEntryId: "A", unitPrice: 610 },
+      { pricebookEntryId: "B", unitPrice: 300 },
+    ];
+    expect(chooseDropLineEntry(-610, lines)?.pricebookEntryId).toBe("A");
+    expect(chooseDropLineEntry(-999, lines)).toBeNull();
+    expect(chooseDropLineEntry(-610, [])).toBeNull();
+    expect(
+      chooseDropLineEntry(-610, [
+        { pricebookEntryId: "A", unitPrice: 610 },
+        { pricebookEntryId: "A", unitPrice: 610 },
+      ])?.pricebookEntryId,
+    ).toBe("A");
+  });
+
+  it("sample Orders total as Trevor described", () => {
+    const sum = (xs: (number | undefined)[]) => xs.reduce<number>((a, b) => a + (b ?? 0), 0);
+    // 592434586: course 610 (ENR- line) + fee 35 + STAP -645 = 0
+    expect(
+      sum([610, mapToRegistrationFeeItem(add(), "f")?.UnitPrice as number, mapToStapItem(add(), "s")?.UnitPrice as number]),
+    ).toBe(0);
+    // 592436118: drop -610 + STAP +610 = 0
+    expect(
+      sum([mapToDropItem(drop(), "d")?.UnitPrice as number, mapToStapItem(drop(), "s")?.UnitPrice as number]),
+    ).toBe(0);
   });
 });
 
