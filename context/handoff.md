@@ -41,15 +41,14 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-11-08
-**Status:** at risk — Payments Import now sole source; code pushed & tested. Validation & UAT setup still needed before deploy.
+### Engagement state — 2026-11-09
+**Status:** at risk — Payments Import refined: orphan payments now load without Registration/Purchase/Transcript links. Code pushed, tests pass, UAT validation &…
 
 **Done this session**
-- Implemented architect decision: Payments Import is now only payment source
-- Registration and Purchase flows no longer create Payment/Refund records
-- Payments Import handles registration-tied, purchase-tied, and standalone payments
-- Code committed to stanford-csp-orchestrate (93cb337) and pushed to GitHub
-- Type check and 140 unit tests pass
+- Refined Payments Import to load payments without Registration_ID/Purchase_ID/Transcript_Request_ID links if those records don't exist in Salesforce
+- Added run log counters: registrationNotInOrg, purchaseNotInOrg, transcriptRequestNotInOrg
+- Code committed to stanford-csp-orchestrate (df24360) and pushed to GitHub
+- Type check and 142 unit tests pass
 
 **Open items**
 - Architect: name other 4D payment tables if they exist beyond the one Payments file
@@ -64,6 +63,8 @@
 **Decisions**
 - Payments Import is sole payment source; Registration/Purchase no longer create Payment/Refund
 - Payments with Purchase_ID attach to purchase payment group; registration ID takes precedence if both present
+- Orphan payments (missing Registration/Purchase/Transcript records) now load without those links instead of being skipped
+- Student_ID link remains required; payments without matching student still rejected by Salesforce
 - Old Payment/Refund code kept behind ORDER_FLOWS_CREATE_PAYMENTS switch for potential reversal
 - CardLastFour as Number(4,0); card brand mapping; 2-digit expiry year adds 2000
 - All enrollment rows generate line items; Fee line created in first Registration Import (Draft only)
@@ -83,8 +84,8 @@
 - Turn off TEST_MODE in commerce flows
 - Review PR #1, merge to main, run Deploy session
 
-**Checked live on 2026-11-08:** the repository
-### Last session — 2026-11-08
+**Checked live on 2026-11-09:** the repository
+### Last session — 2026-11-09
 | | |
 |---|---|
 | Type | BUILD |
@@ -101,14 +102,14 @@
 Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-I've made the architect's change: Registration and Purchase no longer create any payment data, and Payments Import is now the only source. It's pushed to `stanford-csp-orchestrate` as commit `93cb337`. GitHub shows the branch at that commit, so PR #1 includes it. The type check passes and 140 tests pass; the 5 failures are the usual Student-flow tests. Nothing has been run against an org.
+Payments Import now links each of Registration_ID, Purchase_ID and Transcript_Request_ID only when that record exists in Salesforce. If it doesn't, the payment still loads without that link. I pushed this to `stanford-csp-orchestrate` as commit `df24360`, and the branch on GitHub points at it, so PR #1 includes it. The type check passes and 142 tests pass. The 5 failures are the usual Student-flow tests. It hasn't been run against an org yet, and test mode is still on.
 
-## What changed
+## How a payment row loads now
 
-**Registration and Purchase**
-- They still create the card record, the Order (Draft, then activated), the $35 fee line and the payment group.
-- They no longer create a Payment from `CC_Amt`, or a Refund from a negative `CC_Amt`. The run log says how many rows this skipped.
-- They no longer build the stud
+| Payment row has | Record is in Salesforce | Record isn't in Salesforce |
+|---|---|---|
+| Registration_ID | Linked to the `REG-` payment group | Loads **without the link** (before, it was skipped) |
+| Purcha
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
