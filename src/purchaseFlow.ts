@@ -48,9 +48,7 @@
  *     Not mapped. Purchase Item supplies the amounts.
  *   - Order balance (decided 2026-10-31): BalanceDue__c, Currency(16,2), as
  *     the workbook says. Existence on Order confirmed in the org by the user
- *     2026-10-31. Registration writes Balance_Due__c (verified on
- *     Stanford_UAT 2026-09-29) — Order appears to carry both fields; which
- *     one registration should use is still an open item.
+ *     2026-10-31. Registration writes the same field (decided 2026-11-09).
  *   - Order.Description: workbook maps BOTH Notes and Message to Description.
  *     They are concatenated (Notes, blank line, Message).
  *   - Order.Payment_Transaction_Id__c (← CC_Transaction_ID): per workbook.

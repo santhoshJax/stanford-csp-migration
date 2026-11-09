@@ -122,7 +122,8 @@
  *     this flow writes to (CardPaymentMethod, Order, PaymentGroup, Payment)
  *     plus Account/Contact (used by the relationship-syntax lookups).
  *   - All 9 of Order's mapped custom fields exist: Adjustment__c,
- *     Balance_Due__c, Check_Amount__c, Check_Number__c, Courses_Subtotal__c,
+ *     BalanceDue__c (was Balance_Due__c until 2026-11-09), Check_Amount__c,
+ *     Check_Number__c, Courses_Subtotal__c,
  *     Discount_Amount__c, TA_Discount_Type__c, Registration_Fee__c,
  *     Registration_Date__c.
  *   - Payment.GroupPayee__c exists (Text 255) — initially came back missing
@@ -421,11 +422,12 @@ const VALID_TA_DISCOUNT_TYPES = new Set([
   "Promo Code",
   "STAP Benefit",
   // Added by architect/admin 2026-10-06, re-verified via `sf sobject
-  // describe` against Stanford_UAT — exact spelling confirmed matching:
+  // describe` against Stanford_UAT — exact spelling confirmed matching.
+  // "Medical Center" was removed 2026-11-09: it is the same discount as
+  // Stanford Healthcare (see TA_DISCOUNT_TYPE_ALIASES).
   "MLA",
   "SAA onetime",
   "Teacher",
-  "Medical Center",
   "Faculty",
   "World Affairs Council",
 ]);
@@ -443,6 +445,9 @@ const TA_DISCOUNT_TYPE_ALIASES = new Map<string, string>([
   ["saa", "SAA Member"],
   ["stap", "STAP Benefit"],
   ["step", "STAP Benefit"], // likely a typo of STAP
+  // Confirmed 2026-11-09: Medical Center is the same as Stanford Healthcare.
+  ["medical center", "Stanford Healthcare"],
+  ["stanford medical center", "Stanford Healthcare"],
 ]);
 
 function resolveTaDiscountType(raw: string): string | undefined {
@@ -725,7 +730,9 @@ export function mapToOrder(
   if (adjustment !== undefined) record.Adjustment__c = adjustment;
 
   const balanceDue = parseCurrency(raw.Balance_Due);
-  if (balanceDue !== undefined) record.Balance_Due__c = balanceDue;
+  // Order balance — DECIDED 2026-11-09: BalanceDue__c, the same field
+  // Purchase Import writes (Balance_Due__c is no longer used).
+  if (balanceDue !== undefined) record.BalanceDue__c = balanceDue;
 
   // Batch_Print — Do Not Map
 

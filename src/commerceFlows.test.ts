@@ -713,3 +713,34 @@ describe("Payments source (decided 2026-11-08)", () => {
     });
   });
 });
+
+describe("Registration Import — Order balance and discount type (decided 2026-11-09)", () => {
+  const log = { warn: jest.fn() };
+  const order = (o: Record<string, string>) =>
+    mapRegistrationOrder(
+      { ID: "592436117", Student_ID: "91055730", Registration_Date: "04/01/2026", ...o },
+      log,
+      "01sORDERBOOK",
+    )!;
+
+  it("writes Balance_Due to BalanceDue__c, the same field Purchase uses", () => {
+    const o = order({ Balance_Due: "0" });
+    expect(o.BalanceDue__c).toBe(0);
+    expect(o).not.toHaveProperty("Balance_Due__c");
+  });
+
+  it("maps Medical Center and Stanford Medical Center to Stanford Healthcare", () => {
+    expect(order({ Discount_Type: "Medical Center" }).TA_Discount_Type__c).toBe(
+      "Stanford Healthcare",
+    );
+    expect(
+      order({ Discount_Type: "Stanford Medical Center" }).TA_Discount_Type__c,
+    ).toBe("Stanford Healthcare");
+  });
+
+  it("still sends the 5 values the admin adds to the picklist", () => {
+    for (const v of ["MLA", "SAA onetime", "Teacher", "Faculty", "World Affairs Council"]) {
+      expect(order({ Discount_Type: v }).TA_Discount_Type__c).toBe(v);
+    }
+  });
+});
