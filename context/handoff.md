@@ -42,48 +42,50 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-09
-**Status:** at risk — Payments Import refined & pushed; 18 open questions block UAT validation & deploy
+**Status:** at risk — Balance & Stanford Healthcare fixed & pushed; 9 blockers remain before UAT validation
 
 **Done this session**
-- Compiled 18 open questions from code comments and decisions into structured list for stakeholder review
+- Balance field: Registration now writes BalanceDue__c (matches Purchase)
+- Stanford Medical Center mapped to Stanford Healthcare in discount logic
+- 3 new tests added and passing (145 total pass, 5 expected Student-flow failures)
+- Changes committed to stanford-csp-orchestrate (commit d8e1901) and pushed to GitHub
 
 **Open items**
-- Architect: confirm other 4D payment tables beyond Payments file
-- Admin: add 6 discount types to Order.TA_Discount_Type__c in UAT
-- Admin: create Registration Fee product in UAT with active price book entry
-- Confirm 'Stanford Medical Center' vs 'Stanford Healthcare' picklist value
+- Admin: add 5 discount values to Order.TA_Discount_Type__c in UAT (MLA, SAA onetime, Teacher, Faculty, World Affairs Council)
+- Architect: confirm Order lookup field name for Prior_Registration_ID
+- Architect: confirm if STAP line is own product or adjustment on each course line
+- Architect: confirm STAP amount source (Discount_Amt or STAP_Applied)
+- Architect: confirm where drop with no enrollment row gets its lines
 - Confirm 2-year cutoff date (2024-10-06) with Julia or Trevor
-- Resolve 18 open questions from code (field names, lookup fields, cutoff logic, drop registrations, STAP handling, etc.)
-- Run sf deploy validate against UAT org schema
-- Turn off TEST_MODE in all commerce flows before deploy
+- Confirm if cash/check/SNAP registrations should skip card payment record creation
+- Confirm EffectiveDate source (Registration_Date assumed, needs validation)
 
 **Decisions**
+- Balance field: BalanceDue__c is correct (unified across Registration and Purchase)
+- Stanford Medical Center and Medical Center both map to Stanford Healthcare
 - Payments Import is sole payment source; Registration/Purchase no longer create Payment/Refund
 - Payments with Purchase_ID attach to purchase payment group; registration ID takes precedence if both present
-- Orphan payments (missing Registration/Purchase/Transcript records) now load without those links instead of being skipped
-- Student_ID link remains required; payments without matching student still rejected by Salesforce
+- Orphan payments load without missing links instead of being skipped
+- Student_ID link remains required; payments without matching student rejected
 - Old Payment/Refund code kept behind ORDER_FLOWS_CREATE_PAYMENTS switch for potential reversal
 - CardLastFour as Number(4,0); card brand mapping; 2-digit expiry year adds 2000
-- All enrollment rows generate line items; Fee line created in first Registration Import (Draft only)
-- Unreferenced Refunds from negative CC_Amt are correct
 
 **Blockers**
-- 18 open questions from code require stakeholder answers before UAT validation can proceed
-- Code not yet validated against UAT org schema
-- Registration Fee product must exist in UAT before first run
-- 6 discount picklist values not yet added to UAT
-- 'Stanford Medical Center' identity unconfirmed
+- 4 architectural questions on Prior_Registration_ID field, STAP handling, and drop line sourcing block Drop/STAP feature build
+- 5 discount picklist values not yet added to UAT (MLA, SAA onetime, Teacher, Faculty, World Affairs Council)
+- 2-year cutoff date (2024-10-06) unconfirmed with Julia or Trevor
+- Code not yet validated against UAT org schema (sf deploy validate pending)
+- TEST_MODE still on in commerce flows
 
 **Next**
-- Share 18-question list with Trevor/Julia for answers (offer spreadsheet format)
-- Admin: add 6 discount types and Registration Fee product to UAT
-- Architect: confirm other 4D payment tables
-- Confirm 2-year cutoff and resolve field-name questions (4D_Payment_Sub_Type__c, 4D_Freeze__c, Payment_Type)
-- Run sf deploy validate against UAT org
-- Turn off TEST_MODE in commerce flows
-- Review PR #1, merge to main, run Deploy session
+- Admin: add 5 discount values to Order.TA_Discount_Type__c in UAT
+- Architect: answer 4 questions on Prior_Registration_ID field, STAP product/adjustment, STAP amount source, drop line sourcing
+- Confirm 2-year cutoff date (2024-10-06) with Julia or Trevor
+- Run sf deploy validate against UAT org schema
+- Turn off TEST_MODE in all commerce flows
+- Open PR #1 → review → merge to main → run Deploy session to ship to UAT
 
-**Checked live on 2026-11-09:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-11-09:** the repository
 ### Last session — 2026-11-09
 | | |
 |---|---|
@@ -93,16 +95,23 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-Here are the open questions for each import, taken from the code on `stanford-csp-orchestrate` (head `df24360`) and this session's decisions. I've left out anything the architect or you have already settled.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch stanford-csp-orchestrate)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## Registration Import
-1. **Discount values.** Has the admin added the 6 values to `Order.TA_Discount_Type__c` in UAT? They are MLA, SAA onetime, Teacher, Medical Center, Faculty and World Affairs Council.
-2. **"Stanford Medical Center".** Is this the same as **Stanford Healthcare**, or is it a separate value?
-3. **2-year cutoff.** The architect said "I believe 2 years". We still need a firm yes from Julia or Trevor on the exact date, **2024-10-06**.
-4. **Cash, check and SNAP registrations.** These rows have no card details, but a card payment record is still created for every registration. Should we skip the card record for them?
-5. **Balance field.** Registration writes `Balance_Due__c` and Purchase writes `BalanceDue__c`. Order seems to have both fields. Which one is correct?
-6. **EffectiveDate.** The workbook gives no source for this required field, so we use Registration_Date. Is that right?
-7. **Drop registrations** (sample 592434586 / 592436118). You asked me to set the
+Both changes are committed and pushed to `stanford-csp-orchestrate` as commit `d8e1901`. The branch on GitHub points at that commit, so PR #1 includes them. The type check passes and 145 tests pass; the 5 failures are the usual Student-flow tests. Nothing has been run against an org, and test mode is still on.
+
+**What's in the commit:**
+- **Balance field:** Registration now writes `BalanceDue__c`, the same field Purchase uses. It no longer writes `Balance_Due__c`.
+- **Discount type:** `Medical Center` and `Stanford Medical Center` now load as **Stanford Healthcare**.
+- **Tests:** 3 new tests for these changes.
+
+**Still to do:**
+- **Discount values in UAT:** the admin needs to add these 5 values to `Order.T
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
