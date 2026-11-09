@@ -37,3 +37,7 @@ Record **where** a credential lives, never what it is:
 
 > **Not yet filled in.** — What access has the client granted us, to what, and when does it expire?
 > Note anything time-boxed so it does not lapse mid-engagement.
+
+## Orgs
+
+- Stanford University (sandbox): org profile kept by Orchestrate — on the Connectors page, and for owners and admins in Settings → Context → Environments. Sessions that use this org load it automatically. <!-- orchestrate:org-profile 00DWH00000508xB2AQ -->
