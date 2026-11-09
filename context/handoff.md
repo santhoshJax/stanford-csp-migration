@@ -42,53 +42,44 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-09
-**Status:** at risk — Build complete, API names documented. STAP double-discount & QA org confirmation still block final validation.
+**Status:** at risk — Code ready for UAT setup; 11 config items needed before import, products & fields still pending
 
 **Done this session**
-- Updated walkthrough with Salesforce object and field API names from code at commit 4612381
-- Documented all objects, fields, and external IDs each import writes
-- Documented all lookups resolved by external ID
-- Documented all 5 registration scenarios with exact field mappings
+- Verified branch 4612381 has no pending commits
+- Documented flow run order and dependencies
+- Listed all UAT setup requirements from code
 
 **Open items**
-- Admin: create STAP and Course Drop products in UAT with $0 price, active status
-- Admin: add 5 discount values to Order.TA_Discount_Type__c in UAT
-- Architect: confirm 592436118 has STAP discount type set in real data
-- Architect: confirm Prior_Registration__c lookup field exists on Order in UAT
-- Confirm 2-year cutoff date (2024-10-06) with Julia or Trevor
-- Confirm if cash/check/SNAP registrations should skip card payment record creation
-- Run sf deploy validate against UAT org schema before PR merge
-- Export sample STAP rows (592434586, 592436117, 592436118) under 10 MB to confirm double-discount on real data
+- Admin: create STAP product in UAT with $0 price, active status
+- Admin: create Course Drop product in UAT with $0 price, active status
+- Admin: create Registration Fee product in UAT if missing
+- Verify Order.Prior_Registration__c lookup field exists on Order in UAT
+- Verify Order.BalanceDue__c field exists in UAT
+- Create Payment.Transcript_Request__c lookup to CSP_Transcript_Request__c
+- Mark External_ID_4D__c as External ID on PaymentGroup and Refund
+- Confirm STAP Product and Course Drop Product setting names match created products
 
 **Decisions**
-- STAP line uses Discount_Amt value as-is (negative on add, positive on drop)
-- Drop line added only to Draft drop Orders with no enrollment row
-- Drop line product sourced from prior registration; falls back to Course Drop product if ambiguous
-- Prior_Registration__c link filled in round 1 if prior Order exists; round 2 backfills missing links
-- BalanceDue__c is correct unified balance field across Registration and Purchase
+- Flow run order: Student → Courses → Transcript Request → Purchase Inventory → Registration R1 (Draft) → Registration Item → Registration R2 (Activate) → Purchase flows → Payments
+- STAP and Course Drop products use $0 price; UnitPrice overridden by file data
 - Payments Import is sole payment source; Registration/Purchase no longer create Payment/Refund
-- Product price book entries use $0 price; UnitPrice overridden by file data on each line
-- Refund only created from Refund_Amount column, not from negative Sales_Amount
+- Prior_Registration__c filled in round 1 if prior Order exists; round 2 backfills missing
+- BalanceDue__c is unified balance field across Registration and Purchase
 
 **Blockers**
 - STAP and Course Drop products not yet created in UAT
-- sf deploy validate not yet run against UAT org schema
+- Required fields (Prior_Registration__c, BalanceDue__c, Transcript_Request__c, External_ID_4D__c) not yet verified/created in UAT
 - TEST_MODE still on in commerce flows
-- 592436118 discount type unconfirmed in real data
-- STAP double-discount risk unconfirmed on real data — both STAP line and enrollment adjustment apply
-- QA org STAP line structure unconfirmed
 
 **Next**
-- Export sample STAP registration rows (592434586, 592436117, 592436118) from both files under 10 MB; rerun trace on real data to confirm double-discount
-- Open General session with QA org attached; run STAP line query to confirm structure
-- Admin: create STAP and Course Drop products in UAT with $0 price, active status
-- Admin: add 5 discount picklist values to Order.TA_Discount_Type__c in UAT
-- Verify Prior_Registration__c lookup field exists on Order in UAT
-- Run sf deploy validate against UAT org schema
-- Turn off TEST_MODE in all commerce flows
-- Open/refresh PR #1 → review → merge to main → run Deploy session to ship to UAT
+- Admin: create STAP, Course Drop, and Registration Fee products in UAT with $0 price, active status
+- Admin: verify/create Order.Prior_Registration__c, Order.BalanceDue__c, Payment.Transcript_Request__c lookups
+- Admin: mark External_ID_4D__c as External ID on PaymentGroup and Refund
+- Confirm STAP Product and Course Drop Product setting names in integration config
+- Run test import in UAT with test mode on to validate setup
+- Turn off TEST_MODE in commerce flows when ready for full load
 
-**Checked live on 2026-11-09:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-11-09:** the repository
 ### Last session — 2026-11-09
 | | |
 |---|---|
@@ -98,26 +89,19 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-I've updated the walkthrough with the Salesforce object and field API names. I took every name from the record-building code on `stanford-csp-orchestrate` at commit `4612381`. No org is attached to this session, so I couldn't check them against a live describe. The sample rows and amounts are the same as last time, and I didn't change any code.
+I've checked the branch on GitHub. Its latest code commit is `4612381` and nothing is waiting to be pushed. Below is the run order, and then what to set up in UAT for the changes from 8–9 November.
 
-## Objects each import writes
+## The order the flows run in, and why
 
-| Import | Object (API name) | External ID (`External_ID_4D__c`) |
+Each step needs records from the step before it to already be in Salesforce. Records are matched by their 4D IDs, so if a record isn't there yet, the link fails or the row is skipped.
+
+| # | Flow | Why it goes here |
 |---|---|---|
-| Registration, round 1 | `CardPaymentMethod` | `REG-{Registration.ID}` |
-| | `Order` | `REG-{Registration.ID}` |
-| | `OrderItem` (fee line) | `FEE-{Registration.ID}` |
-| | `OrderItem` (STAP line) | `STAP-{Registration.ID}` |
-| | `PaymentGroup` | `REG-{Registration.ID}` |
-| Registration Item | `OrderItem` (course line) | `ENR-{Enrollment.ID}` |
-| | `OrderItemAdjustmentLineItem` | `ADJ-{Enrollment.ID}` |
-| Registration, round 2 | `OrderItem` (drop line) | `DROP-{Registration.ID}` |
-| | `Order` (Status update, `Prior_Registration__c` backfill) | `REG-{Registration.ID}` |
-| Payments | `Payment` | `PAY-{Payments.ID}` |
-| | `Refund` | `PAY-{Payments.ID}` |
-| | `RefundLinePayment` | none (insert only) |
-
-Lookups the code resolves by ext
+| 1 | **Student** | Every Order, card record, line item and payment points to a student. Students have to exist first. |
+| 2 | **Course imports** | These create the course products and their prices in the price book. A course line on an Order can't be created without its course product. |
+| 3 | **Transcript Request** | Payments for transcripts link to these. If they're missing, the payment still loads but without the link. |
+| 4 | **Purchase Inventory** | This creates the merchandise products that Purchase Item lines use. |
+| 5 | **Registration, round 1** ("Activate Registration Orders" = false) | Creates each Order as **Draft**, with its card record, fee line, STAP line and payment group. It's Draft because Salesforce o
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
