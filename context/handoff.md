@@ -42,23 +42,23 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** at risk — Code review complete. Five actionable findings; two decisions needed before build. Price update logic and name matching gaps identified.
+**Status:** at risk — Workbook-flow mismatch found: 14 columns unmapped, 6 decisions needed before build. External ID naming inconsistent.
 
 **Done this session**
-- Reviewed purchaseInventoryFlow.ts, purchaseItemFlow.ts, commerceShared.ts on stanford-csp-orchestrate
-- Confirmed PricebookEntry external ID exists in UAT org; upsert is viable
-- Identified three name-matching gaps: case sensitivity, IsActive filter, product name collision risk
-- Mapped nine inventory items to Purchase Item product names; no gaps found in file
+- Compared all four purchase/payment tabs against flows on stanford-csp-orchestrate
+- Identified 14 source columns not loaded; mapped status of each
+- Found workbook index errors: nonexistent combined tab, wrong external ID name, undocumented prefixes
+- Flagged six decisions needed: Order Status/Subtotal, Check_Amt/Reconciliation_ID/Student_Country, OrderItem.Type, Ref_Table_Number, Payment_Type/Sub_Type/Freeze, negative Sales_Amount handling
 
 **Open items**
-- Team: attempt CSV load to UAT; report FIELD_INTEGRITY_EXCEPTION or duplicate rule errors
-- Team: confirm Grade_Option__c picklist labels match CSV values (Letter Grade, CR/NC, NGR, blank)
-- Admin: verify/create Order.Prior_Registration__c, Order.BalanceDue__c, Payment.Transcript_Request__c lookups in UAT
-- Admin: mark External_ID_4D__c as External ID on PaymentGroup, Refund, Product2
-- Admin: create STAP, Course Drop, Registration Fee products in UAT ($0 price, both price books)
-- Dev: refactor section 1a code to use CSP_Storefront_Base_URL label
-- Decide: PricebookEntry external key format ({inventory ID}-STD, {inventory ID}-CSP, or {inventory ID}-{Pricebook2Id})
-- Decide: make Product2.Name match case-insensitive and filter on IsActive = true
+- Decide: Order Status and Subtotal — update workbook or add custom fields to hold 4D values
+- Decide: Check_Amt, Reconciliation_ID, Student_Country — pick target field or mark Do Not Map
+- Decide: OrderItem.Type — drop it or store classification in custom field
+- Decide: Ref_Table_Number — keep it or drop it (ambiguous without table number)
+- Decide: Payment_Type, Payment_Sub_Type, Freeze — confirm real field API names or mark Do Not Map
+- Decide: negative Sales_Amount — convert to refund as Purchase does, or skip
+- Verify in UAT: Payment_Type API name, Transcript_Request__c field existence, picklist values for Payment_Source
+- Update workbook index tab and all four tabs to match actual flow behavior and external ID naming
 
 **Decisions**
 - Keep site API names (StanfordContinuingStudies); change display name and URL path only
@@ -72,37 +72,43 @@
 
 **Blockers**
 - PricebookEntry key format undecided; blocks upsert refactor
-- Name-match case sensitivity and IsActive filter undecided; blocks code change
-- Grade_Option__c picklist labels unconfirmed against org schema
-- Duplicate rule on student + offering may block CSV load if active
-- Required UAT fields (Prior_Registration__c, BalanceDue__c, Transcript_Request__c, External_ID_4D__c) not yet verified/created
+- Product2.Name case sensitivity and IsActive filter undecided; blocks code change
+- Six workbook-flow decisions unmade; blocks accurate requirements for Build session
+- External ID naming inconsistent between workbook (External_Id_4D) and flows (External_ID_4D__c with prefixes PUR-, PIT-, PAY-)
 
 **Next**
-- Decide PricebookEntry external key format and provide to Build session
-- Decide whether to make Product2.Name match case-insensitive and add IsActive = true filter
-- Build session: refactor purchaseInventoryFlow to upsert PricebookEntry; add two PricebookEntry result tabs
-- Build session: add case-insensitive, IsActive-filtered name lookup to purchaseItemFlow
-- Test in UAT: run Purchase Inventory twice to confirm PricebookEntry upsert handles non-updatable fields correctly
+- Resolve six decisions above and confirm with stakeholder
+- Verify Payment_Type, Payment_Sub_Type, Freeze field names and picklist values in UAT org
+- Update workbook index and all four tabs to reflect actual flow mappings and external ID format
+- Provide corrected workbook and six decisions to Build session before refactoring flows
 
-**Checked live on 2026-11-11:** the repository
+**Checked live on 2026-11-11:** the Salesforce org, the repository, Google Workspace
 ### Last session — 2026-11-11
 | | |
 |---|---|
 | Type | REVIEW |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Purchase-Flows |
+| Name | Stanford-Data-Migration-Purchase-Inventory |
 | Session | `37d53c41-f101-4747-94db-b73400d5256e` |
 **In its own words (excerpt):**
-I changed nothing. I read `purchaseItemFlow.ts`, `purchaseInventoryFlow.ts` and `commerceShared.ts` on the `stanford-csp-orchestrate` branch.
+I changed nothing. I checked the four purchase-related tabs (Purchase, Purchase Item, Purchase Inventory, Payments) against `purchaseFlow.ts`, `purchaseItemFlow.ts`, `purchaseInventoryFlow.ts` and `paymentsFlow.ts` on `stanford-csp-orchestrate`.
 
-## 1. Update prices from the file using External_ID_4D__c
-PricebookEntry already has the external ID in your org, so the flow can upsert it instead of skipping existing entries.
+Most rows are handled. About 14 source columns are not loaded as the workbook says, and several of them have no sign-off. The "Script Status" and "SA Reviewed By" columns are empty on all four tabs.
 
-- **Change:** upsert PricebookEntry through the same bulk upsert helper used for Product2. Drop the "query existing, then skip" step and the insert-only composite call.
-- **Key format:** the file has one Unit_Price per product, but each product gets two entries (Standard and StanfordContinuingStudies). So the key can't be just the inventory ID. I suggest `{inventory ID}-STD` and `{inventory ID}-CSP`, or `{inventory ID}-{Pricebook2Id}`. Which do you prefer?
-- **Product link:** the upsert can reference the product by its external ID (`Product2.External_ID_4D__c` column). It then doesn't depend on a successful Product2 result.
-- **Risk to test in UAT first:** `Product2Id` and `Pricebook2Id` can't be changed on an existing PricebookEntry. If they are sent on the update, Salesforce may reject those rows. I haven't tested this. The check is to run it twice in UAT. If the 
+## Workbook-level issues
+- The index tab says Purchase, Purchase Item and Payment are "handled via 'Purchase & Payments' combined mapping tab". No such tab exists. The workbook has four separate tabs.
+- The index lists `OrderPaymentSummary` as a Purchase target. No flow creates it.
+- The workbook names the external ID `External_Id_4D`. The flows write `External_ID_4D__c`.
+- The flows add prefixes to external IDs that the workbook doesn't show: `PUR-`, `PIT-` and `PAY-`. Inventory IDs have no prefix.
+
+## Purchase → `purchaseFlow.ts`
+
+| Source column | Workbook target | In the flow |
+|---|---|---|
+| ID | Order external ID | Mapped, with the `PUR-` prefix |
+| Student_ID | Order.AccountId | Mapped through `Account.Student_ID_4D__c` |
+| Purchase_Da
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
