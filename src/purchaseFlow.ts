@@ -1,0 +1,795 @@
+/**
+ * Stanford CSP Migration – Purchase Import flow.
+ *
+ * Source: "Purchase" tab of the mapping workbook. A 4D Purchase is a
+ * non-course sale (transcript fee, manuscript surcharge, …) paid by card. It
+ * lands in Education Cloud the same way a Registration does, so this flow is
+ * the Registration flow's twin and uses the identical 4-phase chain:
+ *
+ *   1. CardPaymentMethod — card details (skipped when the row carries no card data)
+ *   2. Order             — the purchase header (Draft, order price book)
+ *   3. PaymentGroup      — one per Order (SourceObjectId = the Order's Id)
+ *   4. Payment           — one Capture/Processed payment (PaymentGroupId)
+ *
+ * Purchase Item (OrderItem) rows are loaded by the separate Purchase Item
+ * Import flow, which must run AFTER this one.
+ *
+ * EXTERNAL IDs ARE PREFIXED "PUR-"; Registration uses "REG-" on the same four
+ * objects (decided 2026-11-02, see REGISTRATION_EXT_PREFIX in commerceShared).
+ * The raw id ranges do not actually overlap (Registration 20044–592436118,
+ * Purchase 1–~500), so the prefixes are not there to avoid a clash: they mark
+ * which order stream a record belongs to (queries such as LIKE 'PUR-%' rely
+ * on it) and keep the keys safe if either range changes.
+ *
+ * PREREQUISITES: Student flow (AccountId resolved via the external-ID
+ * relationship `Account.Student_ID_4D__c`, as in Registration).
+ * Purchase Inventory is NOT required by this flow, but Order.Pricebook2Id is
+ * set to the order price book — the first custom price book in the "Price
+ * Books" config var (Standard Price Book when none is configured) — so
+ * Purchase Item can attach OrderItems from that same book later.
+ *
+ * Windowed execution / TEST_MODE: identical model to registrationFlow.ts
+ * (byte-offset cursor, MAX_ROWS per window, self-invoke). TEST_MODE is OFF
+ * (full file, all windows) since the Purchase Build Brief (D01, 2026-11-11).
+ *
+ * Differences from the workbook that the review flagged — each is a decision
+ * for the architect, none is silent:
+ *   - Order.Status (decided 2026-10-31): Salesforce only creates Orders as
+ *     Draft, and OrderItems can only be added to a Draft Order. So the flow
+ *     runs TWICE:
+ *       Round 1 ("Activate Purchase Orders" = false): Orders created Draft.
+ *       Then Purchase Item Import adds the line items.
+ *       Round 2 ("Activate Purchase Orders" = true): every existing PUR-
+ *       Order still in Draft AND with at least one OrderItem is updated to
+ *       ACTIVATED_ORDER_STATUS. Draft Orders with no line items stay Draft
+ *       and are logged.
+ *     In either round an Order already Activated is never re-sent (that
+ *     would try to change an Activated Order's price book / status).
+ *   - Order.TotalAmount (← Subtotal): not writable (derived from OrderItems).
+ *     Not mapped. Purchase Item supplies the amounts.
+ *   - Order balance (decided 2026-10-31): BalanceDue__c, Currency(16,2), as
+ *     the workbook says. Existence on Order confirmed in the org by the user
+ *     2026-10-31. Registration writes the same field (decided 2026-11-09).
+ *   - Order.Description: workbook maps BOTH Notes and Message to Description.
+ *     They are concatenated (Notes, blank line, Message).
+ *   - Order.Payment_Transaction_Id__c (← CC_Transaction_ID): per workbook.
+ *     Registration used OrderReferenceNumber for the same source column — the
+ *     two tabs disagree. Field is not among the ones verified in UAT.
+ *   - CardPaymentMethod.GatewayDate (← CC_Transaction_ID_Date_Entered): per
+ *     workbook. GatewayDate is a DateTime field — UAT rejected a bare
+ *     "2024-10-14" with "not a valid value for the type xsd:dateTime"
+ *     (2026-11-11). The source has a date only, so it is sent as midnight
+ *     UTC ("2024-10-14T00:00:00.000Z"), the same convention as
+ *     RegistrationDateTime in the Enrollment flow.
+ *   - CC_Exp_Date: workbook says "Direct Map" into ExpiryMonth/ExpiryYear but
+ *     the source is packed ("1020"); the Registration unpacking is reused.
+ *   - Check_Amt → Order.Check_Amount__c (Purchase Build Brief D01,
+ *     2026-11-11). Parsed as currency; blank / unparseable is left unset.
+ *     Field existence on Order is an org check listed in the PR.
+ *   - Reconciliation_ID, Student_Country: marked Direct Map with NO target in
+ *     the workbook. Not mapped.
+ *   - Order.BillToContact: not on this tab (it is on Registration). Not mapped.
+ *   - Order.EffectiveDate (← Purchase_Date): required on Order. A row with no
+ *     parseable Purchase_Date is out of scope.
+ *   - 2-year scope: no cutoff column exists on this tab. Purchase_Date >=
+ *     COMMERCE_TWO_YEAR_CUTOFF is assumed.
+ */
+
+import { flow, type Connection } from "@prismatic-io/spectral";
+import {
+  str,
+  toDate,
+  toSalesforceCountryCode,
+  toSalesforceStateCode,
+  getAccessToken,
+  getSfInstanceUrl,
+} from "./utils";
+import { createPerObjectResultsSheet } from "./reportResults";
+import {
+  COMMERCE_TWO_YEAR_CUTOFF,
+  EXT_ID_FIELD,
+  type SfRecord,
+  buildStudentEmailCache,
+  PRICE_BOOKS_CONFIG_VAR,
+  parseInteger,
+  orderPricebook,
+  paymentToRefund,
+  ORDER_FLOWS_CREATE_PAYMENTS,
+  resolveConfiguredPricebooks,
+  invokeNextWindow,
+  parseCurrency,
+  logUnknownCardTypes,
+  mapCardType,
+  parseExpiry,
+  parseSuccessfulSfIds,
+  readWindowCursor,
+  sfQueryAll,
+  streamTsvWindow,
+  stripDotZero,
+  upsertInBatches,
+} from "./commerceShared";
+
+const SF_CARD_PAYMENT_METHOD = "CardPaymentMethod";
+const SF_ORDER = "Order";
+const SF_PAYMENT_GROUP = "PaymentGroup";
+const SF_PAYMENT = "Payment";
+const SF_REFUND = "Refund";
+const FLOW_NAME = "Purchase Import";
+
+/** External-ID namespace — see header. */
+export const PURCHASE_EXT_PREFIX = "PUR-";
+
+const MAX_ROWS = 25_000;
+// OFF since D01 (2026-11-11): process the whole file, self-invoking per window.
+// Set to true to process one window of TEST_LIMIT records only.
+export const TEST_MODE = false;
+const TEST_LIMIT = 50;
+const TEST_SKIP = 0;
+
+/** Same default Registration uses (Draft is the only creatable Order status). */
+const DEFAULT_ORDER_STATUS = "Draft";
+
+/** Status written in round 2. Standard Order.Status value for StatusCode Activated. */
+export const ACTIVATED_ORDER_STATUS = "Activated";
+
+/** Boolean config var that switches the flow into round 2 (see header). */
+export const ACTIVATE_ORDERS_CONFIG_VAR = "Activate Purchase Orders";
+
+/** What Salesforce already holds for one PUR- Order. */
+export interface ExistingOrderState {
+  id: string;
+  status: string;
+  hasItems: boolean;
+}
+
+export interface OrderActivationPlan {
+  /** Records to upsert (new Orders as Draft, Draft→Activated updates). */
+  toUpsert: SfRecord[];
+  /** Already Activated — left untouched; ext id → Order Id (for PaymentGroup). */
+  alreadyActivated: Map<string, string>;
+  /** Draft with no OrderItems in round 2 — left Draft. */
+  draftWithoutItems: string[];
+  /** Draft Orders switched to Activated in round 2. */
+  activating: number;
+}
+
+/**
+ * Decides, per mapped Order, what this run sends. Pure — tested directly.
+ *   - Not in Salesforce yet           → upsert the full Draft record.
+ *   - Already Activated               → skip (never re-sent).
+ *   - Draft, round 1                  → upsert the full Draft record (refresh).
+ *   - Draft, round 2, has OrderItems  → upsert ONLY { ext id, Status: Activated }.
+ *   - Draft, round 2, no OrderItems   → skip, reported as draftWithoutItems.
+ */
+export function planOrderActivation(
+  orders: SfRecord[],
+  existing: Map<string, ExistingOrderState>,
+  activate: boolean,
+): OrderActivationPlan {
+  const plan: OrderActivationPlan = {
+    toUpsert: [],
+    alreadyActivated: new Map(),
+    draftWithoutItems: [],
+    activating: 0,
+  };
+  for (const order of orders) {
+    const extId = order[EXT_ID_FIELD] as string;
+    const current = existing.get(extId);
+    if (!current) {
+      plan.toUpsert.push(order);
+    } else if (current.status !== DEFAULT_ORDER_STATUS) {
+      plan.alreadyActivated.set(extId, current.id);
+    } else if (!activate) {
+      plan.toUpsert.push(order);
+    } else if (current.hasItems) {
+      plan.toUpsert.push({
+        [EXT_ID_FIELD]: extId,
+        Status: ACTIVATED_ORDER_STATUS,
+      });
+      plan.activating++;
+    } else {
+      plan.draftWithoutItems.push(extId);
+    }
+  }
+  return plan;
+}
+
+/** Existing PUR- Orders with their Status and whether they have line items. */
+async function loadExistingPurchaseOrders(
+  sfBase: string,
+  sfToken: string,
+  logger: { info: (m: string) => void },
+): Promise<Map<string, ExistingOrderState>> {
+  const rows = await sfQueryAll<{
+    Id: string;
+    Status: string;
+    External_ID_4D__c: string;
+    OrderItems: { totalSize: number } | null;
+  }>(
+    sfBase,
+    sfToken,
+    "SELECT Id, Status, External_ID_4D__c, (SELECT Id FROM OrderItems LIMIT 1) " +
+      "FROM Order WHERE External_ID_4D__c LIKE 'PUR-%'",
+    logger,
+  );
+  const map = new Map<string, ExistingOrderState>();
+  for (const row of rows) {
+    map.set(row.External_ID_4D__c, {
+      id: row.Id,
+      status: row.Status,
+      hasItems: (row.OrderItems?.totalSize ?? 0) > 0,
+    });
+  }
+  return map;
+}
+
+const TEMP_STUDENT_ID_KEY = "_studentId4D";
+
+export interface RawPurchaseRow {
+  ID?: string;
+  Student_ID?: string;
+  Purchase_Date?: string;
+  Status?: string;
+  Notes?: string;
+  Message?: string;
+  CC_Last_Four?: string;
+  CC_Exp_Date?: string;
+  CC_Billing_Last_Name?: string;
+  CC_Billing_First_Name?: string;
+  CC_Billing_Address?: string;
+  CC_Billing_City?: string;
+  CC_Billing_State?: string;
+  CC_Billing_Zip?: string;
+  CC_Billing_Country?: string;
+  CC_Transaction_ID?: string;
+  CC_Transaction_ID_Date_Entered?: string;
+  CC_Card_Type?: string;
+  CC_Amt?: string;
+  Check_Amt?: string;
+  Subtotal?: string;
+  Balance_Due?: string;
+  [key: string]: string | undefined;
+}
+
+export function purchaseExtId(id: string): string {
+  return `${PURCHASE_EXT_PREFIX}${id}`;
+}
+
+function billingAddressFields(raw: RawPurchaseRow) {
+  const street = str(raw.CC_Billing_Address);
+  const city = str(raw.CC_Billing_City);
+  const countryCode = toSalesforceCountryCode(raw.CC_Billing_Country);
+  const stateCode = countryCode
+    ? toSalesforceStateCode(raw.CC_Billing_State, countryCode)
+    : str(raw.CC_Billing_State);
+  const zip = str(raw.CC_Billing_Zip);
+  return { street, city, countryCode, stateCode, zip };
+}
+
+export function mapToCardPaymentMethod(
+  raw: RawPurchaseRow,
+  unknownCardTypes = new Map<string, number>(),
+): SfRecord | null {
+  const id = str(raw.ID).trim();
+  if (!id) return null;
+
+  // Same guard as Registration: no card identifiers → no CardPaymentMethod.
+  const hasCardData =
+    str(raw.CC_Card_Type) || str(raw.CC_Last_Four) || str(raw.CC_Exp_Date);
+  if (!hasCardData) return null;
+
+  const record: SfRecord = {
+    [EXT_ID_FIELD]: purchaseExtId(id),
+    Status: "Active",
+    ProcessingMode: "External",
+  };
+
+  const studentId = stripDotZero(raw.Student_ID);
+  if (studentId && studentId !== "0") {
+    record["Account.Student_ID_4D__c"] = studentId;
+  }
+
+  const { street, city, countryCode, stateCode, zip } =
+    billingAddressFields(raw);
+  if (street) record.PaymentMethodStreet = street;
+  if (city) record.PaymentMethodCity = city;
+  if (countryCode) record.PaymentMethodCountryCode = countryCode;
+  if (stateCode) record.PaymentMethodStateCode = stateCode;
+  if (zip) record.PaymentMethodPostalCode = zip;
+
+  // CardType is a restricted picklist — translate 4D short forms (MC, AmEx).
+  const rawCardType = str(raw.CC_Card_Type).trim();
+  const cardType = mapCardType(rawCardType);
+  if (cardType) record.CardType = cardType;
+  else if (rawCardType)
+    unknownCardTypes.set(
+      rawCardType,
+      (unknownCardTypes.get(rawCardType) ?? 0) + 1,
+    );
+
+  const expiry = parseExpiry(raw.CC_Exp_Date);
+  if (expiry) {
+    record.ExpiryMonth = expiry.month;
+    record.ExpiryYear = expiry.year;
+  }
+
+  // CardLastFour is Number(4,0) in the org (confirmed 2026-11-04), so a
+  // leading zero cannot be stored: "0418" is saved as 418.
+  const lastFour = parseInteger(raw.CC_Last_Four);
+  if (lastFour !== undefined) record.CardLastFour = lastFour;
+
+  const firstName = str(raw.CC_Billing_First_Name);
+  if (firstName) record.CardHolderFirstName = firstName;
+  const lastName = str(raw.CC_Billing_Last_Name);
+  if (lastName) record.CardHolderLastName = lastName;
+
+  // GatewayDate is DateTime, not Date: a bare YYYY-MM-DD fails the Bulk
+  // load with "not a valid value for the type xsd:dateTime".
+  const gatewayDate = toDate(raw.CC_Transaction_ID_Date_Entered);
+  if (gatewayDate) record.GatewayDate = `${gatewayDate}T00:00:00.000Z`;
+
+  return record;
+}
+
+export function mapToOrder(
+  raw: RawPurchaseRow,
+  pricebookId: string,
+): SfRecord | null {
+  const id = str(raw.ID).trim();
+  if (!id) return null;
+
+  const purchaseDate = toDate(raw.Purchase_Date);
+  if (!purchaseDate) return null; // EffectiveDate is required
+
+  const record: SfRecord = {
+    [EXT_ID_FIELD]: purchaseExtId(id),
+    Status: DEFAULT_ORDER_STATUS,
+    EffectiveDate: purchaseDate,
+    Pricebook2Id: pricebookId,
+  };
+
+  const studentId = stripDotZero(raw.Student_ID);
+  if (studentId && studentId !== "0") {
+    record["Account.Student_ID_4D__c"] = studentId;
+  }
+
+  const notes = str(raw.Notes)
+    .replace(/_4DNL_/g, "\n")
+    .trim();
+  const message = str(raw.Message)
+    .replace(/_4DNL_/g, "\n")
+    .trim();
+  const description = [notes, message].filter(Boolean).join("\n\n");
+  if (description) record.Description = description.slice(0, 32000);
+
+  const txnId = str(raw.CC_Transaction_ID);
+  if (txnId) record.Payment_Transaction_Id__c = txnId;
+
+  const balanceDue = parseCurrency(raw.Balance_Due);
+  if (balanceDue !== undefined) record.BalanceDue__c = balanceDue;
+
+  // Check_Amt → Check_Amount__c (D01). Only written when the source has a value.
+  const checkAmount = parseCurrency(raw.Check_Amt);
+  if (checkAmount !== undefined) record.Check_Amount__c = checkAmount;
+
+  return record;
+}
+
+export function mapToPayment(
+  raw: RawPurchaseRow,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept so callers and tests keep one signature
+  logger: { warn: (m: string) => void },
+): SfRecord | null {
+  const id = str(raw.ID).trim();
+  if (!id) return null;
+
+  const amount = parseCurrency(raw.CC_Amt);
+  if (amount === undefined || amount === 0) return null;
+  // amount < 0 — DECIDED 2026-11-04: loads as an Unreferenced Refund, not a
+  // negative Payment. onExecution converts it (paymentToRefund) before Phase 4.
+
+  const record: SfRecord = {
+    [EXT_ID_FIELD]: purchaseExtId(id),
+    Type: "Capture",
+    Status: "Processed",
+    ProcessingMode: "External",
+    Amount: amount,
+  };
+
+  const studentId = stripDotZero(raw.Student_ID);
+  if (studentId && studentId !== "0") {
+    record["Account.Student_ID_4D__c"] = studentId;
+    record[TEMP_STUDENT_ID_KEY] = studentId;
+  }
+
+  const effectiveDate = toDate(raw.CC_Transaction_ID_Date_Entered);
+  if (effectiveDate) record.EffectiveDate = effectiveDate;
+
+  return record;
+}
+
+export const purchaseImport = flow({
+  name: FLOW_NAME,
+  stableKey: "purc2026-1014-4a02-9b10-0a1b2c3d4e02",
+  description:
+    "Streams the Purchase TSV from Google Drive one window at a time and " +
+    "bulk-upserts CardPaymentMethod, Order and PaymentGroup (Payments come from Payments Import) " +
+    "records (External IDs prefixed PUR-). Must run after the Student flow " +
+    "and before Purchase Item Import.",
+
+  onTrigger: async (_context, payload) => {
+    await Promise.resolve();
+    return { payload };
+  },
+
+  onExecution: async (context, params) => {
+    const { logger, configVars } = context;
+    const { byteOffset, knownHeaders, windowNumber } = readWindowCursor(params);
+
+    logger.info(
+      `[Purchase Import] Starting window ${windowNumber} at byte ${byteOffset}…`,
+    );
+
+    const gdConn = configVars[
+      "Google Drive Connection"
+    ] as unknown as Connection;
+    const sfConn = configVars["Salesforce Connection"] as unknown as Connection;
+    const fileId = configVars["Purchase File ID"] as unknown as string;
+    const failedFolderId = configVars["Failed Records Folder ID"] as
+      string | undefined;
+    if (!fileId) throw new Error("Purchase File ID config var is empty.");
+
+    const gdToken = getAccessToken(gdConn);
+    const sfToken = getAccessToken(sfConn);
+    const sfBase = getSfInstanceUrl(sfConn);
+
+    // ── Pre-flight caches + stream this window, in parallel ──────────────────
+    let cardPaymentMethods: SfRecord[] = [];
+    const unknownCardTypes = new Map<string, number>();
+    let orders: SfRecord[] = [];
+    let payments: SfRecord[] = [];
+    let filteredOut = 0;
+
+    // Order.Pricebook2Id — the order price book chosen from the "Price
+    // Books" config var (see orderPricebook). Purchase Item Import uses the
+    // same rule, so its OrderItems always match the Order's price book.
+    const orderBook = orderPricebook(
+      await resolveConfiguredPricebooks(
+        sfBase,
+        sfToken,
+        configVars[PRICE_BOOKS_CONFIG_VAR] as unknown as string | undefined,
+        logger,
+      ),
+    );
+    logger.info(`[Purchase Import] Order price book: "${orderBook.name}"`);
+
+    const activateOrders =
+      String(configVars[ACTIVATE_ORDERS_CONFIG_VAR]) === "true";
+    logger.info(
+      `[Purchase Import] ${ACTIVATE_ORDERS_CONFIG_VAR} = ${activateOrders} — ` +
+        (activateOrders
+          ? `round 2: Draft Orders with line items → ${ACTIVATED_ORDER_STATUS}`
+          : "round 1: Orders created/refreshed as Draft"),
+    );
+
+    const [emailCache, existingOrders, window] = await Promise.all([
+      // The cache only feeds Payment.GroupPayee, so skip it when this flow
+      // does not create Payments (see ORDER_FLOWS_CREATE_PAYMENTS).
+      ORDER_FLOWS_CREATE_PAYMENTS
+        ? buildStudentEmailCache(sfBase, sfToken, logger)
+        : Promise.resolve(new Map<string, string>()),
+      loadExistingPurchaseOrders(sfBase, sfToken, logger),
+      streamTsvWindow(
+        fileId,
+        gdToken,
+        byteOffset,
+        MAX_ROWS,
+        knownHeaders,
+        (row: RawPurchaseRow) => {
+          const purchaseDate = toDate(row.Purchase_Date);
+          if (!purchaseDate || purchaseDate < COMMERCE_TWO_YEAR_CUTOFF) {
+            filteredOut++;
+            return;
+          }
+          const cpm = mapToCardPaymentMethod(row, unknownCardTypes);
+          if (cpm) cardPaymentMethods.push(cpm);
+          const order = mapToOrder(row, orderBook.id);
+          if (order) orders.push(order);
+          const payment = mapToPayment(row, logger);
+          if (payment) payments.push(payment);
+        },
+      ),
+    ]);
+    const { rowsInWindow, hasMore, nextByteOffset, parsedHeaders } = window;
+    logUnknownCardTypes("Purchase Import", unknownCardTypes, logger);
+
+    logger.info(
+      `[Purchase Import] Window ${windowNumber} stream complete — rows=${rowsInWindow}, ` +
+        `filteredOut(2yr scope)=${filteredOut}, hasMore=${hasMore}, nextByte=${nextByteOffset}, ` +
+        `cardPaymentMethods=${cardPaymentMethods.length}, orders=${orders.length}, payments=${payments.length}`,
+    );
+
+    // ── Payments come from Payments Import, not from CC_Amt (decided 2026-11-08) ──
+    if (!ORDER_FLOWS_CREATE_PAYMENTS) {
+      if (payments.length > 0) {
+        logger.info(
+          `[Purchase Import] ${payments.length} CC_Amt payment/refund row(s) NOT created — ` +
+            "Payments Import is the only source of Payment and Refund records",
+        );
+      }
+      payments = [];
+    }
+
+    // ── Negative CC_Amt → Refund, not a negative Payment (decided 2026-11-04) ──
+    const refunds: SfRecord[] = [];
+    payments = payments.filter((payment) => {
+      if (Number(payment.Amount) >= 0) return true;
+      delete payment[TEMP_STUDENT_ID_KEY];
+      refunds.push(paymentToRefund(payment));
+      return false;
+    });
+    if (refunds.length > 0) {
+      logger.info(
+        `[Purchase Import] ${refunds.length} negative CC_Amt row(s) will load as Unreferenced Refunds`,
+      );
+    }
+
+    // GroupPayee (Text, not a lookup) — stitched from the email cache.
+    let groupPayeeMissing = 0;
+    for (const payment of payments) {
+      const studentId = payment[TEMP_STUDENT_ID_KEY] as string | undefined;
+      delete payment[TEMP_STUDENT_ID_KEY];
+      if (!studentId) continue;
+      const email = emailCache.get(studentId);
+      if (email) payment.GroupPayee__c = email;
+      else groupPayeeMissing++;
+    }
+    if (groupPayeeMissing > 0) {
+      logger.warn(
+        `[Purchase Import][Payment] ${groupPayeeMissing} record(s) missing GroupPayee — ` +
+          "Student_ID had no matching Account email in the cache",
+      );
+    }
+
+    if (TEST_MODE) {
+      cardPaymentMethods = cardPaymentMethods.slice(
+        TEST_SKIP,
+        TEST_SKIP + TEST_LIMIT,
+      );
+      orders = orders.slice(TEST_SKIP, TEST_SKIP + TEST_LIMIT);
+      payments = payments.slice(TEST_SKIP, TEST_SKIP + TEST_LIMIT);
+      refunds.splice(TEST_LIMIT);
+      logger.info(
+        `[Purchase Import] TEST MODE: skipped first ${TEST_SKIP}, limited to next ${TEST_LIMIT} records per object, and won't invoke the next window.`,
+      );
+    }
+
+    // ── Phase 1: CardPaymentMethod ───────────────────────────────────────────
+    const cpm =
+      cardPaymentMethods.length > 0
+        ? await upsertInBatches(
+            cardPaymentMethods,
+            SF_CARD_PAYMENT_METHOD,
+            sfBase,
+            sfToken,
+            logger,
+            "[Purchase Import][CardPaymentMethod]",
+          )
+        : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
+
+    // ── Phase 2: Order (Draft create, or round-2 activation) ─────────────────
+    const plan = planOrderActivation(orders, existingOrders, activateOrders);
+    logger.info(
+      `[Purchase Import][Order] to send=${plan.toUpsert.length} (activating=${plan.activating}), ` +
+        `already Activated (skipped)=${plan.alreadyActivated.size}, ` +
+        `Draft without line items (left Draft)=${plan.draftWithoutItems.length}`,
+    );
+    if (plan.draftWithoutItems.length > 0) {
+      logger.warn(
+        `[Purchase Import][Order] ${plan.draftWithoutItems.length} Draft Order(s) have no OrderItems ` +
+          `and were NOT activated — run Purchase Item Import first. e.g. ${plan.draftWithoutItems
+            .slice(0, 10)
+            .join(", ")}`,
+      );
+    }
+    const orderResult =
+      plan.toUpsert.length > 0
+        ? await upsertInBatches(
+            plan.toUpsert,
+            SF_ORDER,
+            sfBase,
+            sfToken,
+            logger,
+            "[Purchase Import][Order]",
+          )
+        : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
+
+    // ── Phase 3: PaymentGroup (one per successful Order) ─────────────────────
+    const orderSfIds = parseSuccessfulSfIds(orderResult.successfulCsv);
+    // Orders skipped this run still exist — keep their PaymentGroup upserts.
+    for (const [extId, sfId] of plan.alreadyActivated)
+      orderSfIds.set(extId, sfId);
+    for (const extId of plan.draftWithoutItems) {
+      const current = existingOrders.get(extId);
+      if (current) orderSfIds.set(extId, current.id);
+    }
+    const paymentGroups: SfRecord[] = [];
+    for (const [extId, orderSfId] of orderSfIds) {
+      paymentGroups.push({ [EXT_ID_FIELD]: extId, SourceObjectId: orderSfId });
+    }
+    if (orders.length > 0 && paymentGroups.length < orders.length) {
+      logger.warn(
+        `[Purchase Import][PaymentGroup] ${orders.length - paymentGroups.length} ` +
+          "purchase(s) have no PaymentGroup — their Order did not succeed",
+      );
+    }
+    const pg =
+      paymentGroups.length > 0
+        ? await upsertInBatches(
+            paymentGroups,
+            SF_PAYMENT_GROUP,
+            sfBase,
+            sfToken,
+            logger,
+            "[Purchase Import][PaymentGroup]",
+          )
+        : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
+
+    // Stitch PaymentGroupId onto Payments
+    const pgSfIds = parseSuccessfulSfIds(pg.successfulCsv);
+    let paymentGroupMissing = 0;
+    for (const payment of payments) {
+      const pgId = pgSfIds.get(payment[EXT_ID_FIELD] as string);
+      if (pgId) payment.PaymentGroupId = pgId;
+      else paymentGroupMissing++;
+    }
+    if (paymentGroupMissing > 0) {
+      logger.warn(
+        `[Purchase Import][Payment] ${paymentGroupMissing} record(s) missing PaymentGroupId — ` +
+          "their PaymentGroup (or its parent Order) did not succeed",
+      );
+    }
+
+    // ── Phase 4: Payment ─────────────────────────────────────────────────────
+    const paymentResult =
+      payments.length > 0
+        ? await upsertInBatches(
+            payments,
+            SF_PAYMENT,
+            sfBase,
+            sfToken,
+            logger,
+            "[Purchase Import][Payment]",
+          )
+        : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
+
+    // ── Phase 5: Refund (negative CC_Amt rows) ───────────────────────────────
+    let refundMissingGroup = 0;
+    for (const refund of refunds) {
+      const pgId = pgSfIds.get(refund[EXT_ID_FIELD] as string);
+      if (pgId) refund.PaymentGroupId = pgId;
+      else refundMissingGroup++;
+    }
+    if (refundMissingGroup > 0) {
+      logger.warn(
+        `[Purchase Import][Refund] ${refundMissingGroup} record(s) missing PaymentGroupId — ` +
+          "their PaymentGroup (or its parent Order) did not succeed",
+      );
+    }
+    const refundResult =
+      refunds.length > 0
+        ? await upsertInBatches(
+            refunds,
+            SF_REFUND,
+            sfBase,
+            sfToken,
+            logger,
+            "[Purchase Import][Refund]",
+          )
+        : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
+
+    // ── Results sheet ────────────────────────────────────────────────────────
+    try {
+      const sheet = await createPerObjectResultsSheet({
+        flowName: FLOW_NAME,
+        objects: [
+          {
+            objectName: SF_CARD_PAYMENT_METHOD,
+            successfulCsv: cpm.successfulCsv,
+            failedCsv: cpm.failedCsv,
+          },
+          {
+            objectName: SF_ORDER,
+            successfulCsv: orderResult.successfulCsv,
+            failedCsv: orderResult.failedCsv,
+          },
+          {
+            objectName: SF_PAYMENT_GROUP,
+            successfulCsv: pg.successfulCsv,
+            failedCsv: pg.failedCsv,
+          },
+          ...(ORDER_FLOWS_CREATE_PAYMENTS
+            ? [
+                {
+                  objectName: SF_PAYMENT,
+                  successfulCsv: paymentResult.successfulCsv,
+                  failedCsv: paymentResult.failedCsv,
+                },
+                {
+                  objectName: SF_REFUND,
+                  successfulCsv: refundResult.successfulCsv,
+                  failedCsv: refundResult.failedCsv,
+                },
+              ]
+            : []),
+        ],
+        accessToken: gdToken,
+        folderId: failedFolderId,
+      });
+      logger.info(`[Purchase Import] Results sheet: ${sheet.url}`);
+    } catch (err) {
+      logger.warn(
+        `[Purchase Import] Could not write results sheet: ${String(err)}`,
+      );
+    }
+
+    logger.info(
+      `[Purchase Import] Window ${windowNumber} complete —` +
+        `\n  Window rows:                 ${rowsInWindow}` +
+        `\n  CardPaymentMethod submitted: ${cardPaymentMethods.length}, processed: ${cpm.processed}, failed: ${cpm.failed}` +
+        `\n  Order mapped:                ${orders.length}, sent: ${plan.toUpsert.length}, activating: ${plan.activating}, ` +
+        `already Activated: ${plan.alreadyActivated.size}, Draft w/o items: ${plan.draftWithoutItems.length}` +
+        `\n  Order submitted:             ${plan.toUpsert.length}, processed: ${orderResult.processed}, failed: ${orderResult.failed}` +
+        `\n  PaymentGroup submitted:      ${paymentGroups.length}, processed: ${pg.processed}, failed: ${pg.failed}` +
+        `\n  Payment submitted:           ${payments.length}, processed: ${paymentResult.processed}, failed: ${paymentResult.failed}` +
+        `\n  Refund submitted:            ${refunds.length}, processed: ${refundResult.processed}, failed: ${refundResult.failed}`,
+    );
+
+    if (TEST_MODE && hasMore) {
+      logger.info(
+        "[Purchase Import] TEST MODE: more rows remain, but stopping here — set TEST_MODE = false to process the full file.",
+      );
+    } else if (hasMore) {
+      await invokeNextWindow(context, FLOW_NAME, {
+        byteOffset: nextByteOffset,
+        headers: parsedHeaders,
+        windowNumber: windowNumber + 1,
+      });
+    } else {
+      logger.info(
+        `[Purchase Import] All rows processed — import complete after ${windowNumber} window(s).`,
+      );
+    }
+
+    return {
+      data: {
+        windowNumber,
+        byteOffset,
+        nextByteOffset,
+        hasMore,
+        rowsInWindow,
+        cardPaymentMethods: cardPaymentMethods.length,
+        cardPaymentMethodsProcessed: cpm.processed,
+        cardPaymentMethodsFailed: cpm.failed,
+        orders: orders.length,
+        activateOrders,
+        ordersActivating: plan.activating,
+        ordersAlreadyActivated: plan.alreadyActivated.size,
+        ordersDraftWithoutItems: plan.draftWithoutItems.length,
+        ordersProcessed: orderResult.processed,
+        ordersFailed: orderResult.failed,
+        paymentGroups: paymentGroups.length,
+        paymentGroupsProcessed: pg.processed,
+        paymentGroupsFailed: pg.failed,
+        payments: payments.length,
+        paymentsProcessed: paymentResult.processed,
+        paymentsFailed: paymentResult.failed,
+        refunds: refunds.length,
+        refundsProcessed: refundResult.processed,
+        refundsFailed: refundResult.failed,
+      },
+    };
+  },
+});
+
+export default [purchaseImport];

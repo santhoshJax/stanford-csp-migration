@@ -1528,12 +1528,10 @@ export const coursesImport2Year = flow({
       // 6. CourseOffering
       let courseOfferingId: string | null = null;
       const isCancelled = parseBool(row.Cancelled) === true;
-      // Remap pre-2013 quarters to their 2013 equivalent (fa08 → fa13, wi11 → wi13, etc.)
-      const effectiveQuarter = (() => {
-        const m = /^([a-z]+)(\d+)$/i.exec(quarter);
-        if (m && parseInt(m[2], 10) < 13) return `${m[1].toLowerCase()}13`;
-        return quarter;
-      })();
+      // Link to the offering's own quarter. The old pre-2013 → 2013 remap
+      // (fa08 → fa13) was removed once the Quarter Import Before 2013 flow
+      // loaded the real fa88–sp12 AcademicSessions.
+      const effectiveQuarter = quarter.trim().toLowerCase();
       const co: Record<string, unknown> = {
         Name: code || sourceId,
         ...(sectionSuffix ? { SectionNumber: sectionSuffix } : {}),

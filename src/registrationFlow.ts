@@ -10,6 +10,32 @@
  * the previous window ended — this is what keeps a single execution from
  * having to hold the entire (very large) source file in memory at once.
  *
+ * ORDER LIFECYCLE (2026-11-02 — CURRENT; supersedes the Order.Status,
+ * TotalAmount and "no OrderItems" notes further down, kept as history):
+ *   Round 1  "Activate Registration Orders" = false → Orders are created Draft
+ *            with Pricebook2Id = the order price book (first custom book in
+ *            the "Price Books" config var).
+ *   Items    Registration Item Import (src/registrationItemFlow.ts) reads the
+ *            Enrollment TSV and adds one OrderItem per enrollment
+ *            (ENR-{Enrollment.ID}, UnitPrice = Tuition, Quantity 1).
+ *   Round 2  "Activate Registration Orders" = true → every Draft Order with at
+ *            least one OrderItem is switched to Activated (planOrderActivation,
+ *            shared with Purchase Import). Draft Orders without items stay
+ *            Draft and are logged; Activated Orders are never re-sent.
+ *   Extra lines (2026-11-05 / 2026-11-09), all on the Order's price book:
+ *     FEE-{id}  round 1, UnitPrice = Reg_Fee ("Registration Fee Product")
+ *     STAP-{id} round 1, UnitPrice = Discount_Amt (signed) when the discount
+ *               type is STAP Benefit ("STAP Product")
+ *     DROP-{id} round 2, before activation, UnitPrice = Courses_Subtotal on a
+ *               drop Order (Prior_Registration_ID set) with no ENR- line;
+ *               product = the prior registration's course line, else
+ *               "Course Drop Product". So drop Orders get a line and activate.
+ *   Prior_Registration_ID → Order.Prior_Registration__c, only when the prior
+ *   Order is already in Salesforce (otherwise loaded unlinked and counted).
+ *   Order.TotalAmount stays unmapped — Salesforce calculates it from the
+ *   OrderItems, and the workbook's CC_Amt → TotalAmount row is a
+ *   reconciliation check against the Payment total.
+ *
  * Each window bulk-upserts FOUR Salesforce objects from each source row:
  *   1. CardPaymentMethod — stored card details (billing name/address, card
  *      type, last four, expiry).
@@ -17,7 +43,7 @@
  *      address, amounts, dates, discount/TA info, notes).
  *   3. PaymentGroup       — one per Order, created after Order so it can
  *      point SourceObjectId at the real Order Id. Upserted on
- *      External_ID_4D__c = Registration.ID like everything else, which
+ *      External_ID_4D__c = "REG-" + Registration.ID like everything else, which
  *      satisfies the workbook's "if a PaymentGroup already exists for this
  *      Order, reuse it" rule for free (a re-run just updates the same row
  *      instead of creating a duplicate). Payment_Number__c is an AutoNumber
@@ -55,10 +81,11 @@
  *   (an actual email string, not a lookup) still needs a real value fetched
  *   ahead of time — see "Student email cache" below.
  *
- * Upsert key: External_ID_4D__c = Registration.ID, set on all four objects
- *   (no prefix needed — each lives in its own object namespace, unlike the
- *   Enrollment flow's CourseOfferingParticipant which shares a namespace
- *   with instructor/associate junction rows).
+ * Upsert key: External_ID_4D__c = "REG-" + Registration.ID (registrationExtId
+ *   in commerceShared), set on all four objects. Decided 2026-11-02 so that
+ *   Registration and Purchase ("PUR-") records can be told apart by key.
+ *   Registration Item Import finds the Order, and Payments Import the
+ *   PaymentGroup, with the same REG- key.
  *
  * Student email cache: Salesforce's external-ID relationship trick only
  *   resolves lookup fields (a value copied into a Text field, like
@@ -105,7 +132,8 @@
  *     this flow writes to (CardPaymentMethod, Order, PaymentGroup, Payment)
  *     plus Account/Contact (used by the relationship-syntax lookups).
  *   - All 9 of Order's mapped custom fields exist: Adjustment__c,
- *     Balance_Due__c, Check_Amount__c, Check_Number__c, Courses_Subtotal__c,
+ *     BalanceDue__c (was Balance_Due__c until 2026-11-09), Check_Amount__c,
+ *     Check_Number__c, Courses_Subtotal__c,
  *     Discount_Amount__c, TA_Discount_Type__c, Registration_Fee__c,
  *     Registration_Date__c.
  *   - Payment.GroupPayee__c exists (Text 255) — initially came back missing
@@ -183,6 +211,8 @@
  *     above — this flow creates none). Defaulted to "Draft" so Orders can
  *     actually be created; needs the architect to confirm whether Draft is
  *     the intended final state or a later activation step is expected.
+ *     [SUPERSEDED 2026-11-02 — see ORDER LIFECYCLE at the top: Draft, then
+ *     items, then round-2 activation.]
  *   - Order.TotalAmount — NOT a Field-Level Security issue like GroupPayee__c
  *     was. `describe()` shows createable=false/updateable=false — nobody can
  *     write this field via API; it's Order's own built-in platform behavior
@@ -192,6 +222,8 @@
  *     (2026-10-01): the workbook has no Order line item mapping anywhere, so
  *     no OrderItems are created; CC_Amt stays on Payment.Amount only and
  *     Order.TotalAmount is intentionally left blank.
+ *     [SUPERSEDED 2026-11-02 — OrderItems now come from Registration Item
+ *     Import, so TotalAmount is calculated by Salesforce.]
  *   - Order.TA_Discount_Type__c — real source values ("65+", "MLA",
  *     "SAA onetime", "Teacher", ...) don't match any of the object's actual
  *     picklist values ("Senior 65+", "Stanford Affiliate", "SAA Member",
@@ -237,8 +269,41 @@
  *     Status="Draft" default is correct. Also tells us a FUTURE flow (not
  *     built yet) will be needed to transition these Orders from Draft to
  *     Activated after this initial load — out of scope for this flow today.
+ *     [BUILT 2026-11-02 — that step is round 2 of this same flow ("Activate
+ *     Registration Orders" = true), not a separate flow.]
  *
- * ⚠️  STILL OPEN:
+ * ══════════════════════════════════════════════════════════════════════════
+ * UPDATED WORKBOOK REVIEW — 2026-10-14 (comment-only; no logic changed)
+ * ══════════════════════════════════════════════════════════════════════════
+ * The Registration tab now carries OrderItem rows (OrderId = the created
+ * Order, UnitPrice = CC_Amt, Quantity default 1), so the 2026-10-01 note above
+ * that "the workbook has no Order line item mapping anywhere" is OUT OF DATE.
+ * This flow still creates no OrderItems — blocked on questions the tab does not
+ * answer (OrderItem needs a PricebookEntryId and the Order needs a Pricebook2Id;
+ * which product do Registration lines use?). See
+ * reports/registration-mapping-review-2026-10-14.md for the full list. Once
+ * OrderItems exist, Order.TotalAmount becomes platform-calculated, which also
+ * reconciles the tab's still-listed CC_Amt → TotalAmount "Direct Map".
+ * Also: Payments/Purchase flows use prefixed External IDs (PAY-/PUR-/PIT-);
+ * [UPDATED 2026-11-02: this flow now uses REG- keys as well.]
+ * [SUPERSEDED 2026-11-02 — the product/price-book questions are answered:
+ * Registration lines use the course Product (Product2.External_ID_4D__c =
+ * Course_ID) through its entry in the order price book.]
+ *
+ * ⚠️  STILL OPEN — with the architect (2026-11-02; do not build until answered):
+ *   - Order_Type__c vs a record type to tell Registration and Purchase
+ *     Orders apart (until then the REG- / PUR- key prefix is the marker).
+ *   (Decided 2026-11-02: REG- prefix; no ATEs for historical data, as the
+ *   2026-09-28 decision says.)
+ *   - Payments table as the single payment source; registrations with no
+ *     card; transcript-only payments.
+ *   - Final state of historical Orders: Draft or Activated.
+ *   - Enrollments whose Registration falls outside the 2-year Order window
+ *     are skipped by Registration Item Import ("Order not loaded").
+ *   - Registration Item rules (registrationItemFlow.ts) — all decided by the
+ *     architect 2026-11-02: UnitPrice = Tuition, not Extension; every
+ *     enrollment row under a registration gets its own line item (Add, Drop,
+ *     AJST, and every Status incl. New / DupEnrollment).
  *   - Check_No → Order.Check_Number__c is typed "Number"; non-numeric
  *     values are skipped with a warning. DEFERRED (2026-10-01) — architect
  *     indicated historically all payments were by credit card, so this is
@@ -280,6 +345,20 @@ import {
   runBulkJob,
 } from "./utils";
 import { createPerObjectResultsSheet } from "./reportResults";
+import {
+  logUnknownCardTypes,
+  mapCardType,
+  parseExpiry,
+  PRICE_BOOKS_CONFIG_VAR,
+  loadOrderStates,
+  orderPricebook,
+  paymentToRefund,
+  ORDER_FLOWS_CREATE_PAYMENTS,
+  REGISTRATION_EXT_PREFIX,
+  registrationExtId,
+  resolveConfiguredPricebooks,
+} from "./commerceShared";
+import { ACTIVATED_ORDER_STATUS, planOrderActivation } from "./purchaseFlow";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const BULK_BATCH_SIZE = 50_000;
@@ -288,6 +367,7 @@ const SF_CARD_PAYMENT_METHOD = "CardPaymentMethod";
 const SF_ORDER = "Order";
 const SF_PAYMENT_GROUP = "PaymentGroup";
 const SF_PAYMENT = "Payment";
+const SF_REFUND = "Refund";
 // Rows per execution window (see "Windowed execution" note in the header
 // comment). Bounded well under BULK_BATCH_SIZE so each window submits
 // exactly one Bulk API batch per object.
@@ -322,6 +402,18 @@ const TEST_SKIP = 100;
 // OrderItems enter scope.
 const DEFAULT_ORDER_STATUS = "Draft";
 
+// Order.Status — DECIDED 2026-11-02 (same two-round model as Purchase Import):
+//   Round 1 ("Activate Registration Orders" = false): Orders are created
+//     Draft with Pricebook2Id = the order price book. Registration Item
+//     Import then adds one OrderItem per enrollment.
+//   Round 2 ("Activate Registration Orders" = true): every existing Order
+//     still in Draft AND with at least one OrderItem is switched to
+//     ACTIVATED_ORDER_STATUS. Draft Orders with no OrderItems stay Draft and
+//     are logged. An Order that is already Activated is never re-sent.
+/** Boolean config var that switches this flow into round 2. */
+export const ACTIVATE_REGISTRATION_ORDERS_CONFIG_VAR =
+  "Activate Registration Orders";
+
 // Order.TA_Discount_Type__c — real picklist values confirmed via
 // `sf sobject describe` against Stanford_UAT. Only an exact match (after
 // the alias translation below) is set; anything else is skipped with a
@@ -340,11 +432,12 @@ const VALID_TA_DISCOUNT_TYPES = new Set([
   "Promo Code",
   "STAP Benefit",
   // Added by architect/admin 2026-10-06, re-verified via `sf sobject
-  // describe` against Stanford_UAT — exact spelling confirmed matching:
+  // describe` against Stanford_UAT — exact spelling confirmed matching.
+  // "Medical Center" was removed 2026-11-09: it is the same discount as
+  // Stanford Healthcare (see TA_DISCOUNT_TYPE_ALIASES).
   "MLA",
   "SAA onetime",
   "Teacher",
-  "Medical Center",
   "Faculty",
   "World Affairs Council",
 ]);
@@ -362,17 +455,30 @@ const TA_DISCOUNT_TYPE_ALIASES = new Map<string, string>([
   ["saa", "SAA Member"],
   ["stap", "STAP Benefit"],
   ["step", "STAP Benefit"], // likely a typo of STAP
+  // Confirmed 2026-11-09: Medical Center is the same as Stanford Healthcare.
+  ["medical center", "Stanford Healthcare"],
+  ["stanford medical center", "Stanford Healthcare"],
+  // Added 2026-11-11 (user confirmed the picklist values exist): the source
+  // writes the short name of an existing option.
+  ["sbsaa", "SBSAA Member"],
 ]);
 
-function resolveTaDiscountType(raw: string): string | undefined {
-  const alias = TA_DISCOUNT_TYPE_ALIASES.get(raw.toLowerCase());
+// Promotion codes arrive as "PROMO-<code>" (e.g. "PROMO-J2h2PM3vlw"); every
+// one loads as the "Promo Code" picklist value (added 2026-11-11).
+const PROMO_CODE_PREFIX = "promo-";
+const PROMO_CODE_TYPE = "Promo Code";
+
+export function resolveTaDiscountType(raw: string): string | undefined {
+  const lower = raw.toLowerCase();
+  const alias = TA_DISCOUNT_TYPE_ALIASES.get(lower);
   if (alias) return alias;
+  if (lower.startsWith(PROMO_CODE_PREFIX)) return PROMO_CODE_TYPE;
   return VALID_TA_DISCOUNT_TYPES.has(raw) ? raw : undefined;
 }
 
 // ── Raw row type ──────────────────────────────────────────────────────────────
 
-interface RawRegistrationRow {
+export interface RawRegistrationRow {
   ID?: string;
   Student_ID?: string;
   CC_Billing_Address?: string;
@@ -403,7 +509,7 @@ interface RawRegistrationRow {
   Last_Modified_Date?: string; // Do Not Map
   Last_Modified_Time?: string; // Do Not Map
   Notes?: string;
-  Prior_Registration_ID?: string; // Do Not Map
+  Prior_Registration_ID?: string; // → Order.Prior_Registration__c (decided 2026-11-05)
   Reconciliation_ID?: string; // Do Not Map
   Reg_Fee?: string;
   Registration_Date?: string;
@@ -431,22 +537,6 @@ function parseInteger(raw: string | undefined): number | undefined {
   if (!s) return undefined;
   const n = parseInt(s, 10);
   return isNaN(n) ? undefined : n;
-}
-
-/**
- * CC_Exp_Date — packed "M" + "YY" digits with no separator, e.g. "610" =
- * month 6 / year 10, "1210" = month 12 / year 10. Per workbook: last two
- * digits are always the year, everything before that is the month.
- */
-function parseExpiry(
-  raw: string | undefined,
-): { month: number; year: number } | undefined {
-  const digits = str(raw).replace(/\D/g, "");
-  if (digits.length < 2) return undefined;
-  const year = parseInt(digits.slice(-2), 10);
-  const month = parseInt(digits.slice(0, -2), 10);
-  if (isNaN(month) || isNaN(year) || month < 1 || month > 12) return undefined;
-  return { month, year };
 }
 
 // ── Salesforce query helper ───────────────────────────────────────────────────
@@ -546,7 +636,10 @@ function billingAddressFields(raw: RawRegistrationRow): {
   return { street, city, countryCode, stateCode, zip };
 }
 
-function mapToCardPaymentMethod(raw: RawRegistrationRow): SfRecord | null {
+export function mapToCardPaymentMethod(
+  raw: RawRegistrationRow,
+  unknownCardTypes: Map<string, number> = new Map(),
+): SfRecord | null {
   const id = str(raw.ID).trim();
   if (!id) return null;
 
@@ -566,7 +659,7 @@ function mapToCardPaymentMethod(raw: RawRegistrationRow): SfRecord | null {
   // Status="Active", ProcessingMode="External" — both CONFIRMED correct by
   // the architect (2026-10-01).
   const record: SfRecord = {
-    [EXT_ID_FIELD]: id,
+    [EXT_ID_FIELD]: registrationExtId(id),
     Status: "Active",
     ProcessingMode: "External",
   };
@@ -590,8 +683,15 @@ function mapToCardPaymentMethod(raw: RawRegistrationRow): SfRecord | null {
   if (stateCode) record.PaymentMethodStateCode = stateCode;
   if (zip) record.PaymentMethodPostalCode = zip;
 
-  const cardType = str(raw.CC_Card_Type);
-  if (cardType) record.CardType = cardType; // Direct Map per workbook
+  // CardType is a restricted picklist — translate 4D short forms (MC, AmEx).
+  const rawCardType = str(raw.CC_Card_Type).trim();
+  const cardType = mapCardType(rawCardType);
+  if (cardType) record.CardType = cardType;
+  else if (rawCardType)
+    unknownCardTypes.set(
+      rawCardType,
+      (unknownCardTypes.get(rawCardType) ?? 0) + 1,
+    );
 
   const expiry = parseExpiry(raw.CC_Exp_Date);
   if (expiry) {
@@ -599,6 +699,8 @@ function mapToCardPaymentMethod(raw: RawRegistrationRow): SfRecord | null {
     record.ExpiryYear = expiry.year;
   }
 
+  // CardLastFour is Number(4,0) in the org (confirmed 2026-11-04), so a
+  // leading zero cannot be stored: "0418" is saved as 418.
   const lastFour = parseInteger(raw.CC_Last_Four);
   if (lastFour !== undefined) record.CardLastFour = lastFour;
 
@@ -611,16 +713,20 @@ function mapToCardPaymentMethod(raw: RawRegistrationRow): SfRecord | null {
   return record;
 }
 
-function mapToOrder(
+export function mapToOrder(
   raw: RawRegistrationRow,
   logger: { warn: (m: string) => void },
+  pricebookId: string,
 ): SfRecord | null {
   const id = str(raw.ID).trim();
   if (!id) return null;
 
   const record: SfRecord = {
-    [EXT_ID_FIELD]: id,
+    [EXT_ID_FIELD]: registrationExtId(id),
     Status: DEFAULT_ORDER_STATUS, // "Draft" — see note above re: FAILED_ACTIVATION
+    // Required before any OrderItem can be added; Registration Item Import
+    // takes its PricebookEntry from this same book (workbook: Order.Pricebook2Id).
+    Pricebook2Id: pricebookId,
   };
 
   // AccountId / BillToContactId — resolved by Salesforce during the Bulk API
@@ -644,7 +750,9 @@ function mapToOrder(
   if (adjustment !== undefined) record.Adjustment__c = adjustment;
 
   const balanceDue = parseCurrency(raw.Balance_Due);
-  if (balanceDue !== undefined) record.Balance_Due__c = balanceDue;
+  // Order balance — DECIDED 2026-11-09: BalanceDue__c, the same field
+  // Purchase Import writes (Balance_Due__c is no longer used).
+  if (balanceDue !== undefined) record.BalanceDue__c = balanceDue;
 
   // Batch_Print — Do Not Map
 
@@ -659,7 +767,11 @@ function mapToOrder(
   // native to the standard Order object). The workbook has no Order line
   // item mapping anywhere, so no OrderItems are created here — CC_Amt stays
   // on Payment.Amount only, and Order.TotalAmount is intentionally left
-  // blank. No longer an open item.
+  // blank. UPDATED 2026-11-02: OrderItems are now loaded by Registration
+  // Item Import (UnitPrice = Enrollment.Tuition), so Salesforce calculates
+  // TotalAmount from them. CC_Amt stays on Payment.Amount, and the
+  // workbook's CC_Amt → TotalAmount row is now a reconciliation check
+  // (TotalAmount vs the Payment total), not a mapping.
 
   // OrderReferenceNumber — workbook marks "Conversion" with no described logic;
   // passthrough raw value. See OPEN ITEMS.
@@ -726,6 +838,16 @@ function mapToOrder(
   const regDate = toDate(raw.Registration_Date);
   if (regDate) record.Registration_Date__c = regDate;
 
+  // Prior_Registration_ID — DECIDED 2026-11-05 standup (was "Do Not Map"):
+  // a drop / change registration links to the Order it changes through the
+  // Order lookup Prior_Registration__c (field name confirmed 2026-11-09).
+  // Carried as a temp key here and resolved in onExecution only when the
+  // prior Order exists in Salesforce (stripped before upload).
+  const priorId = stripDotZero(raw.Prior_Registration_ID);
+  if (priorId && priorId !== "0" && priorId !== id) {
+    record[TEMP_PRIOR_REGISTRATION_KEY] = priorId;
+  }
+
   // Order.EffectiveDate — RESOLVED (2026-10-06): architect confirmed
   // "Let's set the Order Start Date as the Registration_Date". Direct map,
   // no fallback to PoDate needed — and the 141,255-blank-date problem this
@@ -745,13 +867,243 @@ function mapToOrder(
   return record;
 }
 
+// ── Registration fee line (decided 2026-11-05) ───────────────────────────────
+// Reg_Fee becomes its own OrderItem on the registration's Order, next to the
+// enrollment (tuition) lines from Registration Item Import, so the Order
+// total includes the fee: e.g. 592434586 = $610 course + $35 fee = $645.
+// The fee product is found by Product2.Name (config var below) in the order
+// price book, the same way Purchase Item resolves products.
+const SF_ORDER_ITEM = "OrderItem";
+/** Text config var: Product2.Name of the registration fee product. */
+export const REGISTRATION_FEE_PRODUCT_CONFIG_VAR = "Registration Fee Product";
+export const DEFAULT_REGISTRATION_FEE_PRODUCT = "Registration Fee";
+/** OrderItem key prefix for the fee line: FEE-{Registration.ID}. */
+export const REGISTRATION_FEE_EXT_PREFIX = "FEE-";
+
+/**
+ * Builds the fee OrderItem for one mapped Order, or null when there is no
+ * fee (Reg_Fee blank or 0). Pure — tested directly. A negative fee (drop
+ * registrations) is loaded as-is, like a negative tuition line.
+ */
+export function mapToRegistrationFeeItem(
+  order: SfRecord,
+  pricebookEntryId: string,
+): SfRecord | null {
+  const fee = order.Registration_Fee__c;
+  if (typeof fee !== "number" || fee === 0) return null;
+  const orderExtId = order[EXT_ID_FIELD] as string;
+  const registrationId = orderExtId.startsWith(REGISTRATION_EXT_PREFIX)
+    ? orderExtId.slice(REGISTRATION_EXT_PREFIX.length)
+    : orderExtId;
+  const item: SfRecord = {
+    [EXT_ID_FIELD]: `${REGISTRATION_FEE_EXT_PREFIX}${registrationId}`,
+    "Order.External_ID_4D__c": orderExtId,
+    PricebookEntryId: pricebookEntryId,
+    UnitPrice: fee,
+    Quantity: 1,
+    Type: "Order Product",
+  };
+  const studentId = order["Account.Student_ID_4D__c"];
+  if (typeof studentId === "string" && studentId) {
+    item["Student__r.Student_ID_4D__c"] = studentId;
+  }
+  return item;
+}
+
+// ── Prior registration link, STAP line and drop line (decided 2026-11-05) ──
+// From the 2026-11-05 standup notes ("Aligned"): an add and its drop are two
+// separate Orders, linked by an Order lookup on the prior registration; drop
+// Orders are activated like normal Orders; STAP is a negative line for the
+// benefit amount and comes back as a positive line when a course is dropped.
+// The three details the notes leave open are named below so they are easy to
+// change if Trevor disagrees:
+//   - STAP amount = Discount_Amt as it is in the file. It is already signed
+//     (Courses_Subtotal + Reg_Fee + Discount_Amt + Adjustment − CC_Amt −
+//     Check_Amt = Balance_Due), so it is −415 on 592436117 and +610 on drop
+//     592436118, matching Trevor's examples. Only Orders whose discount type
+//     is STAP Benefit get it (other discounts are already the per-enrollment
+//     adjustments from Registration Item Import).
+//   - STAP product = Product2.Name from the "STAP Product" config var.
+//   - Drop line = Courses_Subtotal, added in round 2 only to a Draft drop
+//     Order that has no enrollment (ENR-) line, using the product of the
+//     prior registration's course line (see chooseDropLineEntry).
+
+/** Temp key on mapped Orders: raw Prior_Registration_ID. Never uploaded. */
+export const TEMP_PRIOR_REGISTRATION_KEY = "_priorRegistrationId";
+/** Order lookup to the prior registration's Order (confirmed 2026-11-09). */
+export const PRIOR_REGISTRATION_FIELD = "Prior_Registration__c";
+
+/** Text config var: Product2.Name of the STAP benefit product. */
+export const STAP_PRODUCT_CONFIG_VAR = "STAP Product";
+export const DEFAULT_STAP_PRODUCT = "STAP";
+/** OrderItem key prefix for the STAP line: STAP-{Registration.ID}. */
+export const STAP_EXT_PREFIX = "STAP-";
+/** TA_Discount_Type__c value that gets a STAP line. */
+export const STAP_DISCOUNT_TYPE = "STAP Benefit";
+
+/** Text config var: fallback product for a drop line with no single prior course. */
+export const COURSE_DROP_PRODUCT_CONFIG_VAR = "Course Drop Product";
+export const DEFAULT_COURSE_DROP_PRODUCT = "Course Drop";
+/** OrderItem key prefix for the drop line: DROP-{Registration.ID}. */
+export const DROP_EXT_PREFIX = "DROP-";
+
+function registrationIdOf(order: SfRecord): string {
+  const extId = order[EXT_ID_FIELD] as string;
+  return extId.startsWith(REGISTRATION_EXT_PREFIX)
+    ? extId.slice(REGISTRATION_EXT_PREFIX.length)
+    : extId;
+}
+
+/** Removes the temp keys so a mapped Order can be uploaded. Returns a copy. */
+export function stripOrderTempKeys(order: SfRecord): SfRecord {
+  const copy: SfRecord = { ...order };
+  delete copy[TEMP_PRIOR_REGISTRATION_KEY];
+  return copy;
+}
+
+/**
+ * The Salesforce Id of this Order's prior registration Order, or undefined
+ * when it has none or the prior Order is not in Salesforce (link if it
+ * exists, same rule as Payments Import). Pure — tested directly.
+ */
+export function priorRegistrationOrderId(
+  order: SfRecord,
+  priorOrderIdByExtId: Map<string, string>,
+): string | undefined {
+  const priorId = order[TEMP_PRIOR_REGISTRATION_KEY];
+  if (typeof priorId !== "string" || !priorId) return undefined;
+  return priorOrderIdByExtId.get(registrationExtId(priorId));
+}
+
+/** Shared shape of the Registration Import line items. */
+function registrationLine(
+  order: SfRecord,
+  prefix: string,
+  pricebookEntryId: string,
+  unitPrice: number,
+): SfRecord {
+  const item: SfRecord = {
+    [EXT_ID_FIELD]: `${prefix}${registrationIdOf(order)}`,
+    "Order.External_ID_4D__c": order[EXT_ID_FIELD] as string,
+    PricebookEntryId: pricebookEntryId,
+    UnitPrice: unitPrice,
+    Quantity: 1,
+    Type: "Order Product",
+  };
+  const studentId = order["Account.Student_ID_4D__c"];
+  if (typeof studentId === "string" && studentId) {
+    item["Student__r.Student_ID_4D__c"] = studentId;
+  }
+  return item;
+}
+
+/**
+ * STAP line for one mapped Order: UnitPrice = Discount_Amt (signed), only
+ * when the discount type is STAP Benefit and the amount is not 0.
+ */
+export function mapToStapItem(
+  order: SfRecord,
+  pricebookEntryId: string,
+): SfRecord | null {
+  if (order.TA_Discount_Type__c !== STAP_DISCOUNT_TYPE) return null;
+  const amount = order.Discount_Amount__c;
+  if (typeof amount !== "number" || amount === 0) return null;
+  return registrationLine(order, STAP_EXT_PREFIX, pricebookEntryId, amount);
+}
+
+// ── Registration adjustment line (decided 2026-11-11) ────────────────────────
+// Registration.Adjustment (a staff write-off, no-fee waiver or correction,
+// signed like Discount_Amt) becomes its own OrderItem so the Order total
+// matches what the student owed: e.g. 592420813 = $540 course + $35 fee −
+// $575 adjustment = $0. Without it the Order showed $575 (27 of 1,394
+// matched sample registrations were wrong). Adjustment__c is still written.
+
+/** Text config var: Product2.Name of the registration adjustment product. */
+export const REGISTRATION_ADJUSTMENT_PRODUCT_CONFIG_VAR =
+  "Registration Adjustment Product";
+export const DEFAULT_REGISTRATION_ADJUSTMENT_PRODUCT = "Adjustment";
+/** OrderItem key prefix for the adjustment line: REGADJ-{Registration.ID}. */
+export const REGISTRATION_ADJUSTMENT_EXT_PREFIX = "REGADJ-";
+
+/**
+ * Adjustment line for one mapped Order: UnitPrice = Adjustment as signed in
+ * the file, or null when it is blank or 0. Pure — tested directly.
+ */
+export function mapToRegistrationAdjustmentItem(
+  order: SfRecord,
+  pricebookEntryId: string,
+): SfRecord | null {
+  const amount = order.Adjustment__c;
+  if (typeof amount !== "number" || amount === 0) return null;
+  return registrationLine(
+    order,
+    REGISTRATION_ADJUSTMENT_EXT_PREFIX,
+    pricebookEntryId,
+    amount,
+  );
+}
+
+/** A course (ENR-) line already on the prior registration's Order. */
+export interface PriorCourseLine {
+  pricebookEntryId: string;
+  unitPrice: number;
+  courseOfferingId?: string | null;
+}
+
+/**
+ * Picks the product for a drop line: the prior registration's course line
+ * when there is exactly one, or exactly one whose price equals the dropped
+ * amount; otherwise null (the caller uses the "Course Drop" product).
+ */
+export function chooseDropLineEntry(
+  coursesSubtotal: number,
+  priorLines: PriorCourseLine[],
+): PriorCourseLine | null {
+  const distinct = new Map<string, PriorCourseLine>();
+  for (const line of priorLines) {
+    if (!distinct.has(line.pricebookEntryId)) {
+      distinct.set(line.pricebookEntryId, line);
+    }
+  }
+  if (distinct.size === 1) return [...distinct.values()][0];
+  const target = Math.abs(coursesSubtotal);
+  const byPrice = [...distinct.values()].filter(
+    (l) => Math.abs(l.unitPrice) === target,
+  );
+  return byPrice.length === 1 ? byPrice[0] : null;
+}
+
+/**
+ * Drop line for a drop registration with no enrollment line:
+ * UnitPrice = Courses_Subtotal (e.g. −610 on 592436118). Null when the
+ * Order is not a drop (no prior registration) or the subtotal is 0/blank.
+ */
+export function mapToDropItem(
+  order: SfRecord,
+  pricebookEntryId: string,
+  courseOfferingId?: string | null,
+): SfRecord | null {
+  if (!order[TEMP_PRIOR_REGISTRATION_KEY]) return null;
+  const subtotal = order.Courses_Subtotal__c;
+  if (typeof subtotal !== "number" || subtotal === 0) return null;
+  const item = registrationLine(
+    order,
+    DROP_EXT_PREFIX,
+    pricebookEntryId,
+    subtotal,
+  );
+  if (courseOfferingId) item.Course_Offering__c = courseOfferingId;
+  return item;
+}
+
 // Temp key stashed on mapped Payment records to carry the raw Student_ID
 // through to the post-stream GroupPayee stitch (see onExecution). Stripped
 // before any record is sent to Salesforce — never actually uploaded.
 const TEMP_STUDENT_ID_KEY = "_studentId4D";
 
-function mapToPayment(
+export function mapToPayment(
   raw: RawRegistrationRow,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept so callers and tests keep one signature
   logger: { warn: (m: string) => void },
 ): SfRecord | null {
   const id = str(raw.ID).trim();
@@ -766,22 +1118,14 @@ function mapToPayment(
   const amount = parseCurrency(raw.CC_Amt);
   if (amount === undefined || amount === 0) return null;
 
-  // CC_Amt < 0 — a card refund (1,191 "Drop w/Refund" rows). Still creating
-  // this as Type="Capture" with a negative Amount for now — NOT a confirmed
-  // decision. `sf sobject describe Payment` shows this org's Type picklist
-  // only has "Sale"/"Capture" available, no "Refund" value, so there's no
-  // clean way to represent a refund here yet. See OPEN ITEMS: needs an
-  // architect answer (new Type value needed, or skip refund rows entirely).
-  if (amount < 0) {
-    logger.warn(
-      `[Registration Import][Payment] Registration ${id} has a negative CC_Amt (${amount}) ` +
-        `— refund. Payment.Type picklist has no "Refund" option in this org; ` +
-        `creating as Type="Capture" with negative Amount pending architect guidance.`,
-    );
-  }
+  // CC_Amt < 0 — a card refund (1,191 "Drop w/Refund" rows) or a negative
+  // adjustment (e.g. 592436039, −165 Teacher discount). DECIDED 2026-11-04:
+  // these load as a Refund, not a negative Payment. The record is still built
+  // here with its negative Amount; onExecution turns it into an Unreferenced
+  // Refund for the absolute amount (paymentToRefund) before Phase 4.
 
   const record: SfRecord = {
-    [EXT_ID_FIELD]: id,
+    [EXT_ID_FIELD]: registrationExtId(id),
     Type: "Capture", // Default value per workbook
     Status: "Processed", // Default value per workbook
     // ProcessingMode is required (confirmed via describe) and not in the
@@ -829,6 +1173,66 @@ interface WindowStreamResult {
   parsedHeaders: string[];
 }
 
+/** Active PricebookEntry Id for a Product2.Name in one price book, if any. */
+async function findPricebookEntryByProductName(
+  base: string,
+  token: string,
+  pricebookId: string,
+  productName: string,
+): Promise<string | undefined> {
+  const escaped = productName.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  const rows = await sfQueryAll<{ Id: string }>(
+    base,
+    token,
+    `SELECT Id FROM PricebookEntry WHERE Pricebook2Id = '${pricebookId}' ` +
+      `AND IsActive = true AND Product2.Name = '${escaped}' LIMIT 1`,
+  );
+  return rows[0]?.Id;
+}
+
+/**
+ * Enrollment (ENR-) OrderItems on the given Orders, grouped by the Order's
+ * External_ID_4D__c. Used for drop lines: whether a drop Order already has a
+ * course line, and which course the prior registration had.
+ */
+async function loadCourseLines(
+  base: string,
+  token: string,
+  orderExtIds: string[],
+): Promise<Map<string, PriorCourseLine[]>> {
+  const map = new Map<string, PriorCourseLine[]>();
+  const unique = [...new Set(orderExtIds)];
+  for (let i = 0; i < unique.length; i += 200) {
+    const list = unique
+      .slice(i, i + 200)
+      .map((id) => `'${id.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`)
+      .join(",");
+    const rows = await sfQueryAll<{
+      PricebookEntryId: string;
+      UnitPrice: number;
+      Course_Offering__c: string | null;
+      Order: { External_ID_4D__c: string } | null;
+    }>(
+      base,
+      token,
+      "SELECT PricebookEntryId, UnitPrice, Course_Offering__c, Order.External_ID_4D__c FROM OrderItem " +
+        `WHERE Order.External_ID_4D__c IN (${list}) AND External_ID_4D__c LIKE 'ENR-%'`,
+    );
+    for (const row of rows) {
+      const key = row.Order?.External_ID_4D__c;
+      if (!key) continue;
+      const lines = map.get(key) ?? [];
+      lines.push({
+        pricebookEntryId: row.PricebookEntryId,
+        unitPrice: row.UnitPrice,
+        courseOfferingId: row.Course_Offering__c,
+      });
+      map.set(key, lines);
+    }
+  }
+  return map;
+}
+
 async function streamAndMapWindow(
   fileId: string,
   accessToken: string,
@@ -836,6 +1240,7 @@ async function streamAndMapWindow(
   maxRows: number,
   knownHeaders: string[],
   logger: { info: (m: string) => void; warn: (m: string) => void },
+  pricebookId: string,
 ): Promise<WindowStreamResult> {
   const reqHeaders: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
@@ -879,6 +1284,7 @@ async function streamAndMapWindow(
     // passed down from the previous window via the self-invoke payload.
     let headers: string[] = knownHeaders.length > 0 ? [...knownHeaders] : [];
     const cardPaymentMethods: SfRecord[] = [];
+    const unknownCardTypes = new Map<string, number>();
     const orders: SfRecord[] = [];
     const payments: SfRecord[] = [];
     let rowsInWindow = 0;
@@ -950,10 +1356,10 @@ async function streamAndMapWindow(
           return;
         }
 
-        const cpm = mapToCardPaymentMethod(row);
+        const cpm = mapToCardPaymentMethod(row, unknownCardTypes);
         if (cpm) cardPaymentMethods.push(cpm);
 
-        const order = mapToOrder(row, logger);
+        const order = mapToOrder(row, logger, pricebookId);
         if (order) orders.push(order);
 
         const payment = mapToPayment(row, logger);
@@ -962,7 +1368,8 @@ async function streamAndMapWindow(
         lastCompletedCursor = rowEndByte;
       },
 
-      complete: () =>
+      complete: () => {
+        logUnknownCardTypes("Registration Import", unknownCardTypes, logger);
         resolve({
           cardPaymentMethods,
           orders,
@@ -972,7 +1379,8 @@ async function streamAndMapWindow(
           hasMore: aborted,
           nextByteOffset: lastCompletedCursor,
           parsedHeaders: headers,
-        }),
+        });
+      },
       error: (err: Error) => reject(err),
     });
   });
@@ -1070,9 +1478,12 @@ export const registrationImport = flow({
   stableKey: "reg22334-4556-4778-9900-aabbccddeeff",
   description:
     "Streams the Registration TSV from Google Drive one window at a time " +
-    "and bulk-upserts CardPaymentMethod, Order, PaymentGroup, and Payment " +
-    "records via Bulk API 2.0. Recurses until the full file has been " +
-    "processed. Must run after the Student flow.",
+    "and bulk-upserts CardPaymentMethod, Order and PaymentGroup (Payments come from Payments Import) " +
+    "records via Bulk API 2.0. Orders are created Draft with the order " +
+    "price book; run Registration Item Import, then set Activate " +
+    "Registration Orders = true and run this flow again to activate them. " +
+    "Recurses until the full file has been processed. Must run after the " +
+    "Student flow and the Course imports.",
 
   onTrigger: async (_context, payload) => {
     await Promise.resolve();
@@ -1116,6 +1527,25 @@ export const registrationImport = flow({
     const sfToken = getAccessToken(sfConn);
     const sfBase = getSfInstanceUrl(sfConn);
 
+    // ── Order price book + round (see "Order.Status — DECIDED" above) ────────
+    const orderBook = orderPricebook(
+      await resolveConfiguredPricebooks(
+        sfBase,
+        sfToken,
+        configVars[PRICE_BOOKS_CONFIG_VAR] as unknown as string | undefined,
+        logger,
+      ),
+    );
+    logger.info(`[Registration Import] Order price book: "${orderBook.name}"`);
+    const activateOrders =
+      String(configVars[ACTIVATE_REGISTRATION_ORDERS_CONFIG_VAR]) === "true";
+    logger.info(
+      `[Registration Import] ${ACTIVATE_REGISTRATION_ORDERS_CONFIG_VAR} = ${activateOrders} — ` +
+        (activateOrders
+          ? `round 2: Draft Orders with line items → ${ACTIVATED_ORDER_STATUS}`
+          : "round 1: Orders created/refreshed as Draft"),
+    );
+
     // ── Build email cache + stream/map this window in parallel ───────────────
     // Neither depends on the other any more: AccountId/BillToContactId are
     // resolved by Salesforce itself (external-ID relationship syntax), so
@@ -1129,7 +1559,11 @@ export const registrationImport = flow({
         "cache and streaming this window of the Registration TSV in parallel…",
     );
     const [emailCache, windowResult] = await Promise.all([
-      buildStudentEmailCache(sfBase, sfToken, logger),
+      // The cache only feeds Payment.GroupPayee, so skip it when this flow
+      // does not create Payments (see ORDER_FLOWS_CREATE_PAYMENTS).
+      ORDER_FLOWS_CREATE_PAYMENTS
+        ? buildStudentEmailCache(sfBase, sfToken, logger)
+        : Promise.resolve(new Map<string, string>()),
       streamAndMapWindow(
         fileId,
         gdToken,
@@ -1137,6 +1571,7 @@ export const registrationImport = flow({
         MAX_ROWS,
         knownHeaders,
         logger,
+        orderBook.id,
       ),
     ]);
     logger.info(
@@ -1159,6 +1594,31 @@ export const registrationImport = flow({
         `cardPaymentMethods=${cardPaymentMethods.length}, orders=${orders.length}, ` +
         `payments=${payments.length}`,
     );
+
+    // ── Payments come from Payments Import, not from CC_Amt (decided 2026-11-08) ──
+    if (!ORDER_FLOWS_CREATE_PAYMENTS) {
+      if (payments.length > 0) {
+        logger.info(
+          `[Registration Import] ${payments.length} CC_Amt payment/refund row(s) NOT created — ` +
+            "Payments Import is the only source of Payment and Refund records",
+        );
+      }
+      payments = [];
+    }
+
+    // ── Negative CC_Amt → Refund, not a negative Payment (decided 2026-11-04) ──
+    const refunds: SfRecord[] = [];
+    payments = payments.filter((payment) => {
+      if (Number(payment.Amount) >= 0) return true;
+      delete payment[TEMP_STUDENT_ID_KEY];
+      refunds.push(paymentToRefund(payment));
+      return false;
+    });
+    if (refunds.length > 0) {
+      logger.info(
+        `[Registration Import] ${refunds.length} negative CC_Amt row(s) will load as Unreferenced Refunds`,
+      );
+    }
 
     // ── Stitch GroupPayee onto Payment records now that the email cache is ready ──
     let groupPayeeMissing = 0;
@@ -1187,6 +1647,7 @@ export const registrationImport = flow({
       );
       orders = orders.slice(TEST_SKIP, TEST_SKIP + TEST_LIMIT);
       payments = payments.slice(TEST_SKIP, TEST_SKIP + TEST_LIMIT);
+      refunds.splice(TEST_LIMIT);
       logger.info(
         `[Registration Import] TEST MODE: skipped first ${TEST_SKIP}, limited to next ${TEST_LIMIT} records per object, and won't invoke the next window.`,
       );
@@ -1227,18 +1688,180 @@ export const registrationImport = flow({
       cpmFailedCsv = r.failedCsv;
     }
 
-    // ── Phase 2: Order ────────────────────────────────────────────────────────
+    // ── Phase 2: Order (Draft create, or round-2 activation) ─────────────────
     let orderProcessed = 0;
     let orderFailed = 0;
     let orderSuccessfulCsv = "";
     let orderFailedCsv = "";
 
-    if (orders.length > 0) {
+    const existingOrders = await loadOrderStates(
+      sfBase,
+      sfToken,
+      orders.map((o) => o[EXT_ID_FIELD] as string),
+      logger,
+    );
+
+    // ── Prior registration Orders that exist in Salesforce (link if exists) ──
+    const priorExtIds = orders
+      .map((o) => o[TEMP_PRIOR_REGISTRATION_KEY])
+      .filter((v): v is string => typeof v === "string" && v !== "")
+      .map((v) => registrationExtId(v));
+    const priorOrderIdByExtId = new Map<string, string>();
+    if (priorExtIds.length > 0) {
+      const priorStates = await loadOrderStates(
+        sfBase,
+        sfToken,
+        priorExtIds,
+        logger,
+      );
+      for (const [extId, st] of priorStates)
+        priorOrderIdByExtId.set(extId, st.id);
+    }
+    const withPrior = orders.filter((o) => o[TEMP_PRIOR_REGISTRATION_KEY]);
+    const priorNotInOrg = withPrior.filter(
+      (o) => !priorRegistrationOrderId(o, priorOrderIdByExtId),
+    ).length;
+    logger.info(
+      `[Registration Import][Order] ${withPrior.length} Order(s) have a Prior_Registration_ID; ` +
+        `${withPrior.length - priorNotInOrg} prior Order(s) found in Salesforce, ` +
+        `${priorNotInOrg} not (yet) in Salesforce — loaded without ${PRIOR_REGISTRATION_FIELD}` +
+        (activateOrders ? "" : " (round 2 links any loaded since)"),
+    );
+
+    // ── Round 2: drop line for drop Orders with no enrollment line ──────────
+    // Runs BEFORE activation: a line cannot be added to an Activated Order.
+    const dropItems: SfRecord[] = [];
+    let dropResult = {
+      processed: 0,
+      failed: 0,
+      successfulCsv: "",
+      failedCsv: "",
+    };
+    let dropFallback = 0;
+    if (activateOrders) {
+      const dropCandidates = orders.filter((o) => {
+        const st = existingOrders.get(o[EXT_ID_FIELD] as string);
+        return (
+          st?.status === DEFAULT_ORDER_STATUS &&
+          o[TEMP_PRIOR_REGISTRATION_KEY] &&
+          typeof o.Courses_Subtotal__c === "number" &&
+          o.Courses_Subtotal__c !== 0
+        );
+      });
+      if (dropCandidates.length > 0) {
+        const courseLines = await loadCourseLines(sfBase, sfToken, [
+          ...dropCandidates.map((o) => o[EXT_ID_FIELD] as string),
+          ...dropCandidates.map((o) =>
+            registrationExtId(o[TEMP_PRIOR_REGISTRATION_KEY] as string),
+          ),
+        ]);
+        const needLine = dropCandidates.filter(
+          (o) => !courseLines.has(o[EXT_ID_FIELD] as string),
+        );
+        let fallbackEntryId: string | undefined;
+        const fallbackName =
+          String(configVars[COURSE_DROP_PRODUCT_CONFIG_VAR] ?? "").trim() ||
+          DEFAULT_COURSE_DROP_PRODUCT;
+        for (const order of needLine) {
+          const priorLines =
+            courseLines.get(
+              registrationExtId(order[TEMP_PRIOR_REGISTRATION_KEY] as string),
+            ) ?? [];
+          const chosen = chooseDropLineEntry(
+            order.Courses_Subtotal__c as number,
+            priorLines,
+          );
+          let entryId = chosen?.pricebookEntryId;
+          if (!entryId) {
+            if (fallbackEntryId === undefined) {
+              fallbackEntryId =
+                (await findPricebookEntryByProductName(
+                  sfBase,
+                  sfToken,
+                  orderBook.id,
+                  fallbackName,
+                )) ?? "";
+            }
+            entryId = fallbackEntryId || undefined;
+            dropFallback++;
+          }
+          if (!entryId) continue;
+          const item = mapToDropItem(order, entryId, chosen?.courseOfferingId);
+          if (item) dropItems.push(item);
+        }
+        logger.info(
+          `[Registration Import][Drop] ${dropCandidates.length} Draft drop Order(s) in this window; ` +
+            `${needLine.length} have no enrollment line; ${dropItems.length} drop line(s) to send ` +
+            `(${dropFallback} without a single prior course → "${fallbackName}")`,
+        );
+        if (dropFallback > 0 && !fallbackEntryId) {
+          logger.warn(
+            `[Registration Import][Drop] No active PricebookEntry for Product2.Name "${fallbackName}" in ` +
+              `"${orderBook.name}" — ${dropFallback} drop line(s) NOT created. Create the product (or set ` +
+              `${COURSE_DROP_PRODUCT_CONFIG_VAR}) and re-run round 2.`,
+          );
+        }
+        if (dropItems.length > 0) {
+          dropResult = await upsertInBatches(
+            dropItems,
+            SF_ORDER_ITEM,
+            sfBase,
+            sfToken,
+            logger,
+            "[Registration Import][Drop OrderItem]",
+          );
+          // Orders that now have a line can be activated in this same run.
+          const loaded = parseSuccessfulSfIds(
+            dropResult.successfulCsv,
+            EXT_ID_FIELD,
+          );
+          for (const item of dropItems) {
+            if (!loaded.has(item[EXT_ID_FIELD] as string)) continue;
+            const st = existingOrders.get(
+              item["Order.External_ID_4D__c"] as string,
+            );
+            if (st) st.hasItems = true;
+          }
+        }
+      }
+    }
+
+    const rawPlan = planOrderActivation(orders, existingOrders, activateOrders);
+    const mappedByExtId = new Map(
+      orders.map((o) => [o[EXT_ID_FIELD] as string, o] as const),
+    );
+    const plan = {
+      ...rawPlan,
+      toUpsert: rawPlan.toUpsert.map((rec) => {
+        const upload = stripOrderTempKeys(rec);
+        const mapped = mappedByExtId.get(rec[EXT_ID_FIELD] as string);
+        const priorSfId = mapped
+          ? priorRegistrationOrderId(mapped, priorOrderIdByExtId)
+          : undefined;
+        if (priorSfId) upload[PRIOR_REGISTRATION_FIELD] = priorSfId;
+        return upload;
+      }),
+    };
+    logger.info(
+      `[Registration Import][Order] to send=${plan.toUpsert.length} (activating=${plan.activating}), ` +
+        `already Activated (skipped)=${plan.alreadyActivated.size}, ` +
+        `Draft without line items (left Draft)=${plan.draftWithoutItems.length}`,
+    );
+    if (plan.draftWithoutItems.length > 0) {
+      logger.warn(
+        `[Registration Import][Order] ${plan.draftWithoutItems.length} Draft Order(s) have no OrderItems ` +
+          `and were NOT activated — run Registration Item Import first. e.g. ${plan.draftWithoutItems
+            .slice(0, 10)
+            .join(", ")}`,
+      );
+    }
+
+    if (plan.toUpsert.length > 0) {
       logger.info(
-        `[Registration Import] Upserting ${orders.length} Order record(s)…`,
+        `[Registration Import] Upserting ${plan.toUpsert.length} Order record(s)…`,
       );
       const r = await upsertInBatches(
-        orders,
+        plan.toUpsert,
         SF_ORDER,
         sfBase,
         sfToken,
@@ -1251,15 +1874,191 @@ export const registrationImport = flow({
       orderFailedCsv = r.failedCsv;
     }
 
+    // ── Phase 2b: Registration fee OrderItem (round 1 only) ──────────────────
+    // One FEE-{id} line per Order that just loaded as Draft and has a
+    // non-zero Reg_Fee. Skipped in round 2: line items cannot be added to an
+    // Activated Order, and round 1 already created them.
+    const feeProductName =
+      String(configVars[REGISTRATION_FEE_PRODUCT_CONFIG_VAR] ?? "").trim() ||
+      DEFAULT_REGISTRATION_FEE_PRODUCT;
+    const feeItems: SfRecord[] = [];
+    let feeResult = {
+      processed: 0,
+      failed: 0,
+      successfulCsv: "",
+      failedCsv: "",
+    };
+    if (!activateOrders) {
+      const loadedOrderExtIds = new Set(
+        parseSuccessfulSfIds(orderSuccessfulCsv, EXT_ID_FIELD).keys(),
+      );
+      const withFee = orders.filter(
+        (o) =>
+          loadedOrderExtIds.has(o[EXT_ID_FIELD] as string) &&
+          typeof o.Registration_Fee__c === "number" &&
+          o.Registration_Fee__c !== 0,
+      );
+      if (withFee.length > 0) {
+        const escapedName = feeProductName
+          .replace(/\\/g, "\\\\")
+          .replace(/'/g, "\\'");
+        const feeEntries = await sfQueryAll<{ Id: string }>(
+          sfBase,
+          sfToken,
+          `SELECT Id FROM PricebookEntry WHERE Pricebook2Id = '${orderBook.id}' ` +
+            `AND IsActive = true AND Product2.Name = '${escapedName}' LIMIT 1`,
+        );
+        const feeEntryId = feeEntries[0]?.Id;
+        if (!feeEntryId) {
+          logger.warn(
+            `[Registration Import][Fee] No active PricebookEntry for Product2.Name "${feeProductName}" in ` +
+              `"${orderBook.name}" — ${withFee.length} fee line(s) NOT created. Create the product and its ` +
+              `entry (or set the ${REGISTRATION_FEE_PRODUCT_CONFIG_VAR} config var), then re-run round 1.`,
+          );
+        } else {
+          for (const order of withFee) {
+            const item = mapToRegistrationFeeItem(order, feeEntryId);
+            if (item) feeItems.push(item);
+          }
+          logger.info(
+            `[Registration Import] Upserting ${feeItems.length} registration fee OrderItem(s) ("${feeProductName}")…`,
+          );
+          feeResult = await upsertInBatches(
+            feeItems,
+            SF_ORDER_ITEM,
+            sfBase,
+            sfToken,
+            logger,
+            "[Registration Import][Fee OrderItem]",
+          );
+        }
+      }
+    }
+
+    // ── Phase 2c: STAP OrderItem (round 1 only) ──────────────────────────────
+    const stapProductName =
+      String(configVars[STAP_PRODUCT_CONFIG_VAR] ?? "").trim() ||
+      DEFAULT_STAP_PRODUCT;
+    const stapItems: SfRecord[] = [];
+    let stapResult = {
+      processed: 0,
+      failed: 0,
+      successfulCsv: "",
+      failedCsv: "",
+    };
+    if (!activateOrders) {
+      const loadedOrderExtIds = new Set(
+        parseSuccessfulSfIds(orderSuccessfulCsv, EXT_ID_FIELD).keys(),
+      );
+      const withStap = orders.filter(
+        (o) =>
+          loadedOrderExtIds.has(o[EXT_ID_FIELD] as string) &&
+          mapToStapItem(o, "x") !== null,
+      );
+      if (withStap.length > 0) {
+        const stapEntryId = await findPricebookEntryByProductName(
+          sfBase,
+          sfToken,
+          orderBook.id,
+          stapProductName,
+        );
+        if (!stapEntryId) {
+          logger.warn(
+            `[Registration Import][STAP] No active PricebookEntry for Product2.Name "${stapProductName}" in ` +
+              `"${orderBook.name}" — ${withStap.length} STAP line(s) NOT created. Create the product and its ` +
+              `entry (or set the ${STAP_PRODUCT_CONFIG_VAR} config var), then re-run round 1.`,
+          );
+        } else {
+          for (const order of withStap) {
+            const item = mapToStapItem(order, stapEntryId);
+            if (item) stapItems.push(item);
+          }
+          logger.info(
+            `[Registration Import] Upserting ${stapItems.length} STAP OrderItem(s) ("${stapProductName}")…`,
+          );
+          stapResult = await upsertInBatches(
+            stapItems,
+            SF_ORDER_ITEM,
+            sfBase,
+            sfToken,
+            logger,
+            "[Registration Import][STAP OrderItem]",
+          );
+        }
+      }
+    }
+
+    // ── Phase 2d: Registration adjustment OrderItem (round 1 only) ───────────
+    const adjustmentProductName =
+      String(configVars[REGISTRATION_ADJUSTMENT_PRODUCT_CONFIG_VAR] ?? "").trim() ||
+      DEFAULT_REGISTRATION_ADJUSTMENT_PRODUCT;
+    const adjustmentItems: SfRecord[] = [];
+    let adjustmentResult = {
+      processed: 0,
+      failed: 0,
+      successfulCsv: "",
+      failedCsv: "",
+    };
+    if (!activateOrders) {
+      const loadedOrderExtIds = new Set(
+        parseSuccessfulSfIds(orderSuccessfulCsv, EXT_ID_FIELD).keys(),
+      );
+      const withAdjustment = orders.filter(
+        (o) =>
+          loadedOrderExtIds.has(o[EXT_ID_FIELD] as string) &&
+          mapToRegistrationAdjustmentItem(o, "x") !== null,
+      );
+      if (withAdjustment.length > 0) {
+        const adjustmentEntryId = await findPricebookEntryByProductName(
+          sfBase,
+          sfToken,
+          orderBook.id,
+          adjustmentProductName,
+        );
+        if (!adjustmentEntryId) {
+          logger.warn(
+            `[Registration Import][Adjustment] No active PricebookEntry for Product2.Name "${adjustmentProductName}" in ` +
+              `"${orderBook.name}" — ${withAdjustment.length} adjustment line(s) NOT created, so those Order totals ` +
+              `will not match. Create the product and its entry (or set the ${REGISTRATION_ADJUSTMENT_PRODUCT_CONFIG_VAR} ` +
+              "config var), then re-run round 1.",
+          );
+        } else {
+          for (const order of withAdjustment) {
+            const item = mapToRegistrationAdjustmentItem(order, adjustmentEntryId);
+            if (item) adjustmentItems.push(item);
+          }
+          logger.info(
+            `[Registration Import] Upserting ${adjustmentItems.length} adjustment OrderItem(s) ("${adjustmentProductName}")…`,
+          );
+          adjustmentResult = await upsertInBatches(
+            adjustmentItems,
+            SF_ORDER_ITEM,
+            sfBase,
+            sfToken,
+            logger,
+            "[Registration Import][Adjustment OrderItem]",
+          );
+        }
+      }
+    }
+
     // ── Phase 3: PaymentGroup ─────────────────────────────────────────────────
     // One per successfully-upserted Order: SourceObjectId = that Order's real
     // Salesforce Id (pulled from Order's successfulResults, not re-queried).
-    // Upserted on External_ID_4D__c = Registration.ID, same as every other
+    // Upserted on External_ID_4D__c = "REG-" + Registration.ID (the Order's
+    // own key, reused), same as every other
     // object here — re-running the flow updates the same PaymentGroup instead
     // of creating a duplicate, which is what the workbook's "reuse if one
     // already exists for this Order" instruction asks for. See OPEN ITEMS re:
     // this field's existence on PaymentGroup.
     const orderSfIds = parseSuccessfulSfIds(orderSuccessfulCsv, EXT_ID_FIELD);
+    // Orders skipped this run still exist — keep their PaymentGroup upserts.
+    for (const [extId, sfId] of plan.alreadyActivated)
+      orderSfIds.set(extId, sfId);
+    for (const extId of plan.draftWithoutItems) {
+      const current = existingOrders.get(extId);
+      if (current) orderSfIds.set(extId, current.id);
+    }
     const paymentGroups: SfRecord[] = [];
     for (const [registrationId, orderSfId] of orderSfIds) {
       paymentGroups.push({
@@ -1343,6 +2142,31 @@ export const registrationImport = flow({
       paymentFailedCsv = r.failedCsv;
     }
 
+    // ── Phase 5: Refund (negative CC_Amt rows) ───────────────────────────────
+    let refundMissingGroup = 0;
+    for (const refund of refunds) {
+      const pgId = paymentGroupSfIds.get(refund[EXT_ID_FIELD] as string);
+      if (pgId) refund.PaymentGroupId = pgId;
+      else refundMissingGroup++;
+    }
+    if (refundMissingGroup > 0) {
+      logger.warn(
+        `[Registration Import][Refund] ${refundMissingGroup} record(s) missing PaymentGroupId — ` +
+          "their PaymentGroup (or its parent Order) did not succeed",
+      );
+    }
+    const refundResult =
+      refunds.length > 0
+        ? await upsertInBatches(
+            refunds,
+            SF_REFUND,
+            sfBase,
+            sfToken,
+            logger,
+            "[Registration Import][Refund]",
+          )
+        : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
+
     // ── Results sheet ─────────────────────────────────────────────────────────
     try {
       const sheet = await createPerObjectResultsSheet({
@@ -1359,15 +2183,44 @@ export const registrationImport = flow({
             failedCsv: orderFailedCsv,
           },
           {
+            objectName: `${SF_ORDER_ITEM} (Registration Fee)`,
+            successfulCsv: feeResult.successfulCsv,
+            failedCsv: feeResult.failedCsv,
+          },
+          {
+            objectName: `${SF_ORDER_ITEM} (STAP)`,
+            successfulCsv: stapResult.successfulCsv,
+            failedCsv: stapResult.failedCsv,
+          },
+          {
+            objectName: `${SF_ORDER_ITEM} (Adjustment)`,
+            successfulCsv: adjustmentResult.successfulCsv,
+            failedCsv: adjustmentResult.failedCsv,
+          },
+          {
+            objectName: `${SF_ORDER_ITEM} (Drop)`,
+            successfulCsv: dropResult.successfulCsv,
+            failedCsv: dropResult.failedCsv,
+          },
+          {
             objectName: SF_PAYMENT_GROUP,
             successfulCsv: pgSuccessfulCsv,
             failedCsv: pgFailedCsv,
           },
-          {
-            objectName: SF_PAYMENT,
-            successfulCsv: paymentSuccessfulCsv,
-            failedCsv: paymentFailedCsv,
-          },
+          ...(ORDER_FLOWS_CREATE_PAYMENTS
+            ? [
+                {
+                  objectName: SF_PAYMENT,
+                  successfulCsv: paymentSuccessfulCsv,
+                  failedCsv: paymentFailedCsv,
+                },
+                {
+                  objectName: SF_REFUND,
+                  successfulCsv: refundResult.successfulCsv,
+                  failedCsv: refundResult.failedCsv,
+                },
+              ]
+            : []),
         ],
         accessToken: gdToken,
         folderId: failedFolderId,
@@ -1384,9 +2237,17 @@ export const registrationImport = flow({
       `[Registration Import] Window ${windowNumber} complete —` +
         `\n  Window rows:               ${rowsInWindow}` +
         `\n  CardPaymentMethod submitted: ${cardPaymentMethods.length}, processed: ${cpmProcessed}, failed: ${cpmFailed}` +
-        `\n  Order submitted:             ${orders.length}, processed: ${orderProcessed}, failed: ${orderFailed}` +
+        `\n  Order mapped:                ${orders.length}, sent: ${plan.toUpsert.length}, activating: ${plan.activating}, ` +
+        `already Activated: ${plan.alreadyActivated.size}, Draft w/o items: ${plan.draftWithoutItems.length}` +
+        `\n  Order submitted:             ${plan.toUpsert.length}, processed: ${orderProcessed}, failed: ${orderFailed}` +
+        `\n  Fee OrderItem submitted:     ${feeItems.length}, processed: ${feeResult.processed}, failed: ${feeResult.failed}` +
+        `\n  STAP OrderItem submitted:    ${stapItems.length}, processed: ${stapResult.processed}, failed: ${stapResult.failed}` +
+        `\n  Adjustment OrderItem submitted: ${adjustmentItems.length}, processed: ${adjustmentResult.processed}, failed: ${adjustmentResult.failed}` +
+        `\n  Drop OrderItem submitted:    ${dropItems.length}, processed: ${dropResult.processed}, failed: ${dropResult.failed}` +
+        `\n  Prior registration:          ${withPrior.length} with ID, ${priorNotInOrg} not in Salesforce (unlinked)` +
         `\n  PaymentGroup submitted:      ${paymentGroups.length}, processed: ${pgProcessed}, failed: ${pgFailed}` +
-        `\n  Payment submitted:           ${payments.length}, processed: ${paymentProcessed}, failed: ${paymentFailed}`,
+        `\n  Payment submitted:           ${payments.length}, processed: ${paymentProcessed}, failed: ${paymentFailed}` +
+        `\n  Refund submitted:            ${refunds.length}, processed: ${refundResult.processed}, failed: ${refundResult.failed}`,
     );
 
     // ── Invoke next window if more rows remain ───────────────────────────────
@@ -1426,14 +2287,36 @@ export const registrationImport = flow({
         cardPaymentMethodsProcessed: cpmProcessed,
         cardPaymentMethodsFailed: cpmFailed,
         orders: orders.length,
+        activateOrders,
+        ordersActivating: plan.activating,
+        ordersAlreadyActivated: plan.alreadyActivated.size,
+        ordersDraftWithoutItems: plan.draftWithoutItems.length,
         ordersProcessed: orderProcessed,
         ordersFailed: orderFailed,
+        feeOrderItems: feeItems.length,
+        feeOrderItemsProcessed: feeResult.processed,
+        feeOrderItemsFailed: feeResult.failed,
+        stapOrderItems: stapItems.length,
+        stapOrderItemsProcessed: stapResult.processed,
+        stapOrderItemsFailed: stapResult.failed,
+        adjustmentOrderItems: adjustmentItems.length,
+        adjustmentOrderItemsProcessed: adjustmentResult.processed,
+        adjustmentOrderItemsFailed: adjustmentResult.failed,
+        dropOrderItems: dropItems.length,
+        dropOrderItemsProcessed: dropResult.processed,
+        dropOrderItemsFailed: dropResult.failed,
+        dropOrderItemsFallbackProduct: dropFallback,
+        ordersWithPriorRegistration: withPrior.length,
+        priorRegistrationNotInOrg: priorNotInOrg,
         paymentGroups: paymentGroups.length,
         paymentGroupsProcessed: pgProcessed,
         paymentGroupsFailed: pgFailed,
         payments: payments.length,
         paymentsProcessed: paymentProcessed,
         paymentsFailed: paymentFailed,
+        refunds: refunds.length,
+        refundsProcessed: refundResult.processed,
+        refundsFailed: refundResult.failed,
       },
     };
   },

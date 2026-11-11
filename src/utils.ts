@@ -1217,15 +1217,103 @@ export interface BulkJobPollResult extends BulkJobResult {
   errorMessage?: string;
 }
 
-/** Recursively polls the job every POLL_INTERVAL_MS until a terminal state. */
+/** Retries per Salesforce call when the connection drops or Salesforce is busy. */
+export const TRANSIENT_RETRY_ATTEMPTS = 5;
+
+/**
+ * True for errors worth retrying: no HTTP response at all (socket hang up,
+ * ECONNRESET, ETIMEDOUT), HTTP 429, or HTTP 5xx. A 4xx such as 401 or 404 is
+ * not transient and is returned to the caller straight away.
+ */
+export function isTransientHttpError(err: unknown): boolean {
+  const e = err as { response?: { status?: number }; code?: string } | null;
+  if (!e || typeof e !== "object") return false;
+  if (!e.response) return true;
+  const status = e.response.status ?? 0;
+  return status === 429 || status >= 500;
+}
+
+/**
+ * Runs fn, retrying transient errors with exponential backoff (2s, 4s, 8s…,
+ * capped at 30s). Gives up early if the next wait would pass deadlineMs.
+ */
+export async function withTransientRetry<T>(
+  fn: () => Promise<T>,
+  options: {
+    attempts?: number;
+    baseDelayMs?: number;
+    deadlineMs?: number;
+    onRetry?: (attempt: number, err: unknown, delayMs: number) => void;
+  } = {},
+): Promise<T> {
+  const attempts = options.attempts ?? TRANSIENT_RETRY_ATTEMPTS;
+  const baseDelayMs = options.baseDelayMs ?? 2_000;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      if (!isTransientHttpError(err) || attempt >= attempts) throw err;
+      const delayMs = Math.min(baseDelayMs * 2 ** (attempt - 1), 30_000);
+      if (
+        options.deadlineMs !== undefined &&
+        Date.now() + delayMs >= options.deadlineMs
+      ) {
+        throw err;
+      }
+      options.onRetry?.(attempt, err, delayMs);
+      await new Promise<void>((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
+/** Short description of an axios error for log lines. */
+export function describeHttpError(err: unknown): string {
+  const e = err as {
+    response?: { status?: number };
+    code?: string;
+    message?: string;
+  };
+  if (e?.response?.status) return `HTTP ${e.response.status}`;
+  return e?.code ?? e?.message ?? String(err);
+}
+
+/**
+ * Recursively polls the job every POLL_INTERVAL_MS until a terminal state.
+ * Waits indefinitely — callers that run close to the execution time limit
+ * should use pollJobUntil instead.
+ */
 export async function pollJobRecursively(
   instanceUrl: string,
   accessToken: string,
   jobId: string,
 ): Promise<BulkJobPollResult> {
-  const { data } = await axios.get(
-    `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
+  const result = await pollJobUntil(instanceUrl, accessToken, jobId);
+  // No deadline was passed, so pollJobUntil only returns once the job ends.
+  return result!;
+}
+
+/**
+ * Polls the job every POLL_INTERVAL_MS until it reaches a terminal state, or
+ * until Date.now() passes deadlineMs. Returns null when the deadline passes
+ * first — the job keeps running in Salesforce and can be polled again later
+ * by job Id. With no deadline it waits indefinitely.
+ */
+export async function pollJobUntil(
+  instanceUrl: string,
+  accessToken: string,
+  jobId: string,
+  deadlineMs?: number,
+  onRetry?: (attempt: number, err: unknown, delayMs: number) => void,
+): Promise<BulkJobPollResult | null> {
+  // A dropped connection on one status check must not end the execution:
+  // the job is still running in Salesforce, so retry the check.
+  const { data } = await withTransientRetry(
+    () =>
+      axios.get(
+        `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      ),
+    { deadlineMs, onRetry },
   );
 
   const state = data.state as string;
@@ -1242,12 +1330,19 @@ export async function pollJobRecursively(
     };
   }
 
+  // Stop before the next wait would carry us past the deadline.
+  if (deadlineMs !== undefined && Date.now() + POLL_INTERVAL_MS >= deadlineMs) {
+    return null;
+  }
   await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS));
-  return pollJobRecursively(instanceUrl, accessToken, jobId);
+  return pollJobUntil(instanceUrl, accessToken, jobId, deadlineMs, onRetry);
 }
 
-/** Runs the full Bulk API 2.0 lifecycle for a batch of records and logs results. */
-export async function runBulkJob(
+/**
+ * Creates a Bulk API 2.0 upsert job, uploads the records and closes it.
+ * Returns the job Id; Salesforce processes the job from here on.
+ */
+export async function submitBulkJob(
   instanceUrl: string,
   accessToken: string,
   objectName: string,
@@ -1259,7 +1354,7 @@ export async function runBulkJob(
     error: (m: string) => void;
   },
   logPrefix: string,
-): Promise<BulkJobResult> {
+): Promise<string> {
   logger.info(
     `${logPrefix} Creating Bulk API 2.0 upsert job for ${objectName}…`,
   );
@@ -1309,11 +1404,52 @@ export async function runBulkJob(
     throw err;
   }
 
+  return jobId;
+}
+
+/**
+ * Waits for a submitted Bulk API 2.0 job and fetches its result CSVs.
+ * Returns null if deadlineMs passes before the job finishes (the job keeps
+ * running in Salesforce; call again with the same jobId to resume).
+ */
+export async function collectBulkJobResults(
+  instanceUrl: string,
+  accessToken: string,
+  jobId: string,
+  externalIdFieldName: string,
+  logger: {
+    info: (m: string) => void;
+    warn: (m: string) => void;
+    error: (m: string) => void;
+  },
+  logPrefix: string,
+  deadlineMs?: number,
+): Promise<BulkJobResult | null> {
   logger.info(`${logPrefix} Polling job ${jobId} for completion…`);
-  let result: BulkJobResult;
+  let polled: BulkJobPollResult | null;
   try {
-    result = await pollJobRecursively(instanceUrl, accessToken, jobId);
+    polled = await pollJobUntil(
+      instanceUrl,
+      accessToken,
+      jobId,
+      deadlineMs,
+      (attempt, err, delayMs) =>
+        logger.warn(
+          `${logPrefix} Status check for job ${jobId} failed (${describeHttpError(err)}); ` +
+            `retry ${attempt} of ${TRANSIENT_RETRY_ATTEMPTS - 1} in ${delayMs / 1000}s.`,
+        ),
+    );
   } catch (err: unknown) {
+    if (deadlineMs !== undefined && isTransientHttpError(err)) {
+      // Still a connection problem after the retries. The job keeps running
+      // in Salesforce, so treat it like "not finished yet" and let the
+      // caller hand the job Id to the next execution instead of failing.
+      logger.warn(
+        `${logPrefix} Could not reach Salesforce to check job ${jobId} ` +
+          `(${describeHttpError(err)}) after ${TRANSIENT_RETRY_ATTEMPTS} attempts.`,
+      );
+      return null;
+    }
     const e = err as { response?: { status?: number; data?: unknown } };
     logger.error(
       `${logPrefix} Error while polling job ${jobId}.\n` +
@@ -1322,6 +1458,13 @@ export async function runBulkJob(
     );
     throw err;
   }
+  if (!polled) {
+    logger.warn(
+      `${logPrefix} Job ${jobId} is still running in Salesforce at the time limit for this execution.`,
+    );
+    return null;
+  }
+  const result: BulkJobResult = polled;
 
   logger.info(
     `${logPrefix} Job ${result.jobId} finished — ` +
@@ -1351,12 +1494,14 @@ export async function runBulkJob(
   // Always fetch both result endpoints so callers can build reports
   // regardless of how many records succeeded or failed.
   try {
-    const { data: successCsvRaw } = await axios.get<string>(
-      `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/successfulResults`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        responseType: "text",
-      },
+    const { data: successCsvRaw } = await withTransientRetry(() =>
+      axios.get<string>(
+        `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/successfulResults`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          responseType: "text",
+        },
+      ),
     );
     result.successfulCsv = successCsvRaw;
   } catch (err: unknown) {
@@ -1373,12 +1518,14 @@ export async function runBulkJob(
       `${logPrefix} ${result.numberRecordsFailed} record(s) failed. Fetching error details…`,
     );
     try {
-      const { data: failedCsvRaw } = await axios.get<string>(
-        `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/failedResults`,
-        {
-          headers: { Authorization: `Bearer ${accessToken}` },
-          responseType: "text",
-        },
+      const { data: failedCsvRaw } = await withTransientRetry(() =>
+        axios.get<string>(
+          `${instanceUrl}/services/data/${SF_API_VERSION}/jobs/ingest/${jobId}/failedResults`,
+          {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            responseType: "text",
+          },
+        ),
       );
       result.failedCsv = failedCsvRaw;
 
@@ -1405,4 +1552,39 @@ export async function runBulkJob(
   }
 
   return result;
+}
+
+/** Runs the full Bulk API 2.0 lifecycle for a batch of records and logs results. */
+export async function runBulkJob(
+  instanceUrl: string,
+  accessToken: string,
+  objectName: string,
+  externalIdFieldName: string,
+  records: Record<string, unknown>[],
+  logger: {
+    info: (m: string) => void;
+    warn: (m: string) => void;
+    error: (m: string) => void;
+  },
+  logPrefix: string,
+): Promise<BulkJobResult> {
+  const jobId = await submitBulkJob(
+    instanceUrl,
+    accessToken,
+    objectName,
+    externalIdFieldName,
+    records,
+    logger,
+    logPrefix,
+  );
+  // No deadline, so this only returns once the job has finished.
+  const result = await collectBulkJobResults(
+    instanceUrl,
+    accessToken,
+    jobId,
+    externalIdFieldName,
+    logger,
+    logPrefix,
+  );
+  return result!;
 }
