@@ -42,10 +42,13 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** blocked — I changed nothing.
+**Status:** at risk — Code review complete. Five actionable findings; two decisions needed before build. Price update logic and name matching gaps identified.
 
 **Done this session**
-- I changed nothing. Here are the six points, checked against `purchaseInventoryFlow.ts` and `purchaseItemFlow.ts` on the `stanford-csp-orchestrate` branch. ## 1. Why prices never update on re-run This is a limitation of how the flow was bui…
+- Reviewed purchaseInventoryFlow.ts, purchaseItemFlow.ts, commerceShared.ts on stanford-csp-orchestrate
+- Confirmed PricebookEntry external ID exists in UAT org; upsert is viable
+- Identified three name-matching gaps: case sensitivity, IsActive filter, product name collision risk
+- Mapped nine inventory items to Purchase Item product names; no gaps found in file
 
 **Open items**
 - Team: attempt CSV load to UAT; report FIELD_INTEGRITY_EXCEPTION or duplicate rule errors
@@ -54,8 +57,8 @@
 - Admin: mark External_ID_4D__c as External ID on PaymentGroup, Refund, Product2
 - Admin: create STAP, Course Drop, Registration Fee products in UAT ($0 price, both price books)
 - Dev: refactor section 1a code to use CSP_Storefront_Base_URL label
-- Confirm: delete 12 zeroed Hypercare - Stan:ContEd records or leave as-is
-- Obtain usable content from 2026-11-09 screen recording (wait, describe, screenshots, or re-record with narration)
+- Decide: PricebookEntry external key format ({inventory ID}-STD, {inventory ID}-CSP, or {inventory ID}-{Pricebook2Id})
+- Decide: make Product2.Name match case-insensitive and filter on IsActive = true
 
 **Decisions**
 - Keep site API names (StanfordContinuingStudies); change display name and URL path only
@@ -65,19 +68,21 @@
 - CSV uses real 003 Contact IDs and 001 Account IDs (no fallback needed)
 - Update existing records in org rather than insert new ones (keep Id column in CSV)
 - Jason's hours consolidated to single workstream record per week (not split evenly)
+- File prices will overwrite hand-edited prices in Salesforce (no hand-edit protection)
 
 **Blockers**
+- PricebookEntry key format undecided; blocks upsert refactor
+- Name-match case sensitivity and IsActive filter undecided; blocks code change
 - Grade_Option__c picklist labels unconfirmed against org schema
 - Duplicate rule on student + offering may block CSV load if active
 - Required UAT fields (Prior_Registration__c, BalanceDue__c, Transcript_Request__c, External_ID_4D__c) not yet verified/created
-- Screen recording (2026-11-09) unprocessable; no transcript or usable content extracted
 
 **Next**
-- Verify Price Books setting in deployed Prismatic instance matches code default
-- Confirm StanfordContinuingStudies Price Book exists and is active in UAT org
-- Check org automation doesn't duplicate entries for inventory products
-- Decide on screen recording: wait for reprocessing, describe content, share screenshots, or re-record with narration
-- Team: attempt CSV load to UAT; report any errors to unblock field confirmation
+- Decide PricebookEntry external key format and provide to Build session
+- Decide whether to make Product2.Name match case-insensitive and add IsActive = true filter
+- Build session: refactor purchaseInventoryFlow to upsert PricebookEntry; add two PricebookEntry result tabs
+- Build session: add case-insensitive, IsActive-filtered name lookup to purchaseItemFlow
+- Test in UAT: run Purchase Inventory twice to confirm PricebookEntry upsert handles non-updatable fields correctly
 
 **Checked live on 2026-11-11:** the repository
 ### Last session — 2026-11-11
@@ -89,20 +94,15 @@
 | Name | Stanford-Data-Migration-Purchase-Flows |
 | Session | `37d53c41-f101-4747-94db-b73400d5256e` |
 **In its own words (excerpt):**
-I changed nothing. Here are the six points, checked against `purchaseInventoryFlow.ts` and `purchaseItemFlow.ts` on the `stanford-csp-orchestrate` branch.
+I changed nothing. I read `purchaseItemFlow.ts`, `purchaseInventoryFlow.ts` and `commerceShared.ts` on the `stanford-csp-orchestrate` branch.
 
-## 1. Why prices never update on re-run
-This is a limitation of how the flow was built. It isn't a business rule.
-- The code comment says the workbook gives PricebookEntry no External ID. Product2 has `External_ID_4D__c`, so it can be upserted. PricebookEntry has no such key, so the flow can only insert it.
-- On a re-run the flow queries each price book first. If the product already has an entry there, it skips it. That avoids duplicate-entry errors, but it also means a changed price in the file is ignored.
-- A skip is not a conflict. The price could be updated by looking up the existing entry's Id and sending an update. That is not written today.
+## 1. Update prices from the file using External_ID_4D__c
+PricebookEntry already has the external ID in your org, so the flow can upsert it instead of skipping existing entries.
 
-If you want prices to follow the file, I can add an update step for existing entries. The catch is that it would overwrite any price someone edited by hand in Salesforce. Do you want that, or should hand edits win?
-
-## 2 and 3. Order of runs and the UAT prerequisite
-Noted. Purchase Inventory runs before Purchase Item Import, and `External_ID_4D__c` already exists on Product2 in UAT.
-
-
+- **Change:** upsert PricebookEntry through the same bulk upsert helper used for Product2. Drop the "query existing, then skip" step and the insert-only composite call.
+- **Key format:** the file has one Unit_Price per product, but each product gets two entries (Standard and StanfordContinuingStudies). So the key can't be just the inventory ID. I suggest `{inventory ID}-STD` and `{inventory ID}-CSP`, or `{inventory ID}-{Pricebook2Id}`. Which do you prefer?
+- **Product link:** the upsert can reference the product by its external ID (`Product2.External_ID_4D__c` column). It then doesn't depend on a successful Product2 result.
+- **Risk to test in UAT first:** `Product2Id` and `Pricebook2Id` can't be changed on an existing PricebookEntry. If they are sent on the update, Salesforce may reject those rows. I haven't tested this. The check is to run it twice in UAT. If the 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
