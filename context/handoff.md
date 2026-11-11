@@ -42,10 +42,13 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** blocked — I re-read the Purchase, Purchase Item and Purchase Inventory tabs.
+**Status:** at risk — Sheet updated with conversion logic; four mapping rows still unresolved, org checks still blocked
 
 **Done this session**
-- I re-read the Purchase, Purchase Item and Purchase Inventory tabs. The Purchase tab and the Purchase Inventory tab match the settled decisions, and so does most of the Purchase Item tab. I changed nothing. Four rows still don't match what…
+- Updated Purchase, Purchase Item, Purchase Inventory tabs with conversion logic notes (13 writes, 17 cells)
+- Clarified Product2Id lookup uses External_ID_4D__c on Product2
+- Confirmed 'per 1,000 words' is valid picklist value
+- Documented Purchase Item run order: Purchase round 1 → Purchase Item → Purchase round 2
 
 **Open items**
 - Code: Map Check_Amt to Check_Amount__c in mapToOrder
@@ -55,7 +58,7 @@
 - Code: Switch TEST_MODE off in Purchase and Purchase Item flows
 - Org check: Confirm existing PricebookEntry records carry External_ID_4D__c field
 - Org check: Verify no duplicate product names between nine inventory items and course products
-- Org check: Test upsert behavior sending Product2Id and Pricebook2Id on existing entries
+- Sheet: Fill SA Reviewed By and Script Status columns on all three tabs
 
 **Decisions**
 - PricebookEntry external ID key format: STD-{ID} for Standard, {ID} for StanfordContinuingStudies
@@ -65,6 +68,7 @@
 - Use real API names from org describe; ParticipationStatus replaces placeholder Status
 - CSV uses real 003 Contact IDs and 001 Account IDs; update existing records, keep Id column
 - File prices overwrite hand-edited prices in Salesforce (no hand-edit protection)
+- Check_Number__c is not loaded (no Check_No column in source)
 
 **Blockers**
 - Org access needed to verify existing PricebookEntry records have External_ID_4D__c populated
@@ -72,12 +76,12 @@
 - UAT org must be attached to Build session for five pre-build checks to run
 
 **Next**
+- Obtain client decision on exact 2-year date cutoff rule for Purchase tab
+- Verify CC_Transaction_ID mapping against Registration flow
 - Start Build session with UAT org attached
 - Apply 9 code changes (Check_Amt mapping, OrderItem.Type default, case-insensitive name match, PricebookEntry upsert, success/failure tabs, TEST_MODE off)
 - Run 5 pre-build checks in org (price entry fields, ID overlap, upsert behavior, duplicate names, Price Books setting)
-- Obtain client decision on Check_No → Check_Number__c mapping
 - Test UAT with real data files; check for scientific notation in large IDs and unexpected Item_Type values
-- Document in runbook: Purchase Item cannot add lines to Orders already activated by Purchase round 2
 
 **Checked live on 2026-11-11:** Google Workspace
 ### Last session — 2026-11-11
@@ -89,24 +93,26 @@
 | Name | Stanford-Data-Migration-Purchase-Inventory |
 | Session | `37d53c41-f101-4747-94db-b73400d5256e` |
 **In its own words (excerpt):**
-I re-read the Purchase, Purchase Item and Purchase Inventory tabs. The Purchase tab and the Purchase Inventory tab match the settled decisions, and so does most of the Purchase Item tab. I changed nothing. Four rows still don't match what the flows actually do, and the SA Reviewed By column is still empty.
+I updated the sheet. The code is untouched, and I didn't read the cells back this turn. Each write returned a success count (13 writes, 17 cells), so it's worth a quick look at the sheet.
 
-## Rows that now match the decisions
+## The Product2Id row, in plain words
 
-| Tab | Row | Current value |
+This is the Purchase Inventory row where the target is `PricebookEntry.Product2Id`. A price entry is a product's price in one price book, so it has to point at its product.
+
+The sheet's old note said the entry "will need a lookup to the newly created Product". It didn't say how the flow finds that product. The flow finds it by the 4D inventory ID, which is stored in `Product2.External_ID_4D__c`.
+
+I changed the note to say that. The row's label and type stay as they were.
+
+## What I wrote
+
+Everything below is in the Conversion Logic column unless I say otherwise.
+
+| Tab | Row | Edit |
 |---|---|---|
-| Purchase | ID | `External_ID_4D__c`, loaded as `PUR-<ID>` |
-| Purchase | Status | Default Value, Draft, 4D value not loaded |
-| Purchase | Subtotal | Do Not Map, TotalAmount is read-only |
-| Purchase | Check_Amt | Direct Map to `Check_Amount__c` (Currency) |
-| Purchase | Reconciliation_ID, Student_Country | Do Not Map |
-| Purchase Item | ID | Loaded as `PIT-<ID>` |
-| Purchase Item | Item_Type | Matched on product name, ignoring capitals, against active price entries in the StanfordContinuingStudies Price Book. OrderItem stores the PricebookEntryId. |
-| Purchase Item | Type | Default Value, Order Product |
-| Purchase Item | Extended_Amount | Do Not Map |
-| Purchase Item | Ref_Table_Number | Do Not Map |
-| Purchase Inventory | ID | Raw 4D ID, no prefix |
-| Purchase Inventory | PricebookEntry `Price
+| Purchase | Purchase_Date | Source has no blank dates, and the flow skips a row without one. |
+| Purchase | Notes and Message | Both rows now say they are joined into one Description. |
+| Purchase | CC_Last_Four | The target is a Number field, so leading zeros are not kept. |
+| Purchase | CC_Exp_Date (both rows) | Map Type is now "Conversion". The note says the so
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
