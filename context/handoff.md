@@ -42,10 +42,11 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** at risk — Purchase code committed & pushed; Prismatic publish & three org checks needed before load can run
+**Status:** at risk — Code complete & pushed; Prismatic publish + 3 org checks + Trevor Q&A needed before UAT load
 
 **Done this session**
-- Confirmed code committed to stanford-csp-orchestrate (ce43697) and pushed to GitHub
+- Compiled all open questions from code review and architecture notes
+- Identified 14 items for Trevor approval (Century Club V1/V2, 5 missing discount types, course+fee pricing, date filters, course code meanings, adjustment lines, STAP/drop details, order type distinction, historical order state, payment fie…
 
 **Open items**
 - Publish branch to Prismatic: run npm run import and move UAT instance to new version
@@ -55,7 +56,7 @@
 - Verify Student load has completed in UAT (Purchase needs Student_ID_4D__c)
 - Resolve PR #1 merge/close decision to separate Course Import and Purchase reviews
 - Run Purchase load sequence in UAT after Prismatic publish and org checks pass
-- Fill SA Reviewed By and Script Status columns on all three sheet tabs
+- Trevor approval: 14 questions on Century Club versions, discount type mappings, course+fee pricing, date filters, course codes, adjustment/STAP/drop handling, order type field, historical order state, payment field names, check number type…
 
 **Decisions**
 - Purchase cutoff is fixed 2024-10-06, not rolling two-year window
@@ -70,14 +71,15 @@
 **Blockers**
 - Code not yet published to Prismatic; flows still run old version
 - Org access needed to verify three pre-deploy checks (field existence, product name duplicates, price book setting)
+- Trevor must answer 14 open questions before UAT load can proceed
 
 **Next**
+- Send Trevor the 14 questions (with blank answer column) for approval
 - Run npm run import to build and publish branch as new Prismatic integration version
 - Move UAT instance to the new Prismatic version
 - Run three org checks in UAT (field writability, product name duplicates, price book setting)
 - Confirm Student load completed in UAT
 - Run Purchase load sequence: Inventory → Purchase round 1 → Item → Purchase round 2
-- Resolve PR #1 (merge or close) to enable separate Purchase code review
 
 **Checked live on 2026-11-11:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-11
@@ -86,20 +88,23 @@
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Purchase-Related-build |
-| Session | `2cb154f7-df0b-4f6d-b07b-4304c80b818e` |
+| Name | Stanford-Data-Migration-Registration-Enhancements- Build |
+| Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-**Not yet.** The code is on GitHub, but the purchase flows run from the integration in Prismatic, and that integration doesn't have the new code yet. If you run them now you get the old behaviour: test mode on, no `Check_Amount__c`, an exact-case product match, and price entries that are never updated on a re-run.
+I've put together everything still open for Trevor. It comes from this session's review and the open-item notes in the code and `ARCHITECTURE.md` on `stanford-csp-orchestrate`. Earlier parts of this session were shortened, so a question from those turns that never made it into the code or docs may be missing.
 
-**Before you run:**
-1. **Publish the branch to Prismatic.** Run `npm run import`, which builds the code and imports it as a new integration version. Then move the UAT instance to that version. Nothing has been published yet.
-2. **Do three quick checks in UAT.** I couldn't run these because this session has no org attached:
-   - `Check_Amount__c` on Order and `External_ID_4D__c` on Product2 and PricebookEntry exist, and the integration user can edit them.
-   - No two products have names that differ only by capitalisation. If two do, Purchase Item uses whichever it finds first and logs a warning.
-   - The instance's "Price Books" setting lists `StanfordContinuingStudies Price Book`.
+## A. New from this week's review
 
-   You don't need to fill in keys on existing price entries yourself. Purchase Inventory gives an entry its `STD-{ID}` / `{ID}` key on the first run.
-3. **Make sure Student has been loaded.** 
+**1. Century Club: V1 or V2?** 4D has only "Century Club", but the picklist has V1 and V2. It affects 3 sample rows, e.g. 592420720.
+
+**2. Five discount types aren't on the picklist:** `Staff, No STAP` (10 rows), `Other` (5), `Pro-Rated Late Add` (4), `Financial Aid` (4) and `Post-Doc` (2). For each one: add a picklist value, map it to an existing value, or leave it blank?
+
+**3. Course with a fee: how should the course line be priced?** E.g. 592420276 / 930195 (ART 132): Tuition 590 + Fee 15.
+- One line at 605 (my recommendation)
+- 590 plus a +15 "discount"
+- 590 plus a separate fee line
+
+**4. One date filter for Registration, Enrollment and Course.** Today Registration uses `Registration_Date` ≥ 2024-10-06, but Course and Enrollment use fall 2024 – summer 2026 terms. Fall 2024 sign-ups made before 6 Oct are lost. Should Payments and Purchas
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
