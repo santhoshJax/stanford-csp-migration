@@ -42,12 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** at risk — Build brief complete; 9 code changes + 5 UAT checks ready; org access needed for pre-build verification
+**Status:** blocked — I re-read the Purchase, Purchase Item and Purchase Inventory tabs.
 
 **Done this session**
-- Build brief written with settled decisions, 9 code changes, 5 UAT checks, and runbook notes
-- PIT- prefix collision risk closed; confirmed no overlap with Registration prefixes (ENR-, ADJ-, FEE-, STAP-, DROP-)
-- Check_Amt mapping pattern confirmed from Registration flow (Check_Amt → Check_Amount__c)
+- I re-read the Purchase, Purchase Item and Purchase Inventory tabs. The Purchase tab and the Purchase Inventory tab match the settled decisions, and so does most of the Purchase Item tab. I changed nothing. Four rows still don't match what…
 
 **Open items**
 - Code: Map Check_Amt to Check_Amount__c in mapToOrder
@@ -81,7 +79,7 @@
 - Test UAT with real data files; check for scientific notation in large IDs and unexpected Item_Type values
 - Document in runbook: Purchase Item cannot add lines to Orders already activated by Purchase round 2
 
-**Checked live on 2026-11-11:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-11-11:** Google Workspace
 ### Last session — 2026-11-11
 | | |
 |---|---|
@@ -91,18 +89,24 @@
 | Name | Stanford-Data-Migration-Purchase-Inventory |
 | Session | `37d53c41-f101-4747-94db-b73400d5256e` |
 **In its own words (excerpt):**
-The Build brief is written, and the deliverable has been attached to this session as **D01 – Purchase Build Brief**. I changed no code, the repository, or the org.
+I re-read the Purchase, Purchase Item and Purchase Inventory tabs. The Purchase tab and the Purchase Inventory tab match the settled decisions, and so does most of the Purchase Item tab. I changed nothing. Four rows still don't match what the flows actually do, and the SA Reviewed By column is still empty.
 
-The brief contains:
-- The settled decisions, including the price-entry key format (`STD-{ID}` for Standard, `{ID}` for StanfordContinuingStudies).
-- Nine code changes across the Purchase Inventory, Purchase and Purchase Item flows, plus the tests for them.
-- Five checks to run in UAT before the build.
-- Run notes for the runbook.
-- The workbook items still open and the acceptance criteria.
+## Rows that now match the decisions
 
-Two things need your input:
-- **Check_No:** Registration also loads `Check_No` into `Check_Number__c`. The workbook doesn't say whether Purchase should. I flagged it in the brief as a question for the client.
-- **Org for the Build session:** Attach the UAT org when you start it, or the five pre-build checks can't run.
+| Tab | Row | Current value |
+|---|---|---|
+| Purchase | ID | `External_ID_4D__c`, loaded as `PUR-<ID>` |
+| Purchase | Status | Default Value, Draft, 4D value not loaded |
+| Purchase | Subtotal | Do Not Map, TotalAmount is read-only |
+| Purchase | Check_Amt | Direct Map to `Check_Amount__c` (Currency) |
+| Purchase | Reconciliation_ID, Student_Country | Do Not Map |
+| Purchase Item | ID | Loaded as `PIT-<ID>` |
+| Purchase Item | Item_Type | Matched on product name, ignoring capitals, against active price entries in the StanfordContinuingStudies Price Book. OrderItem stores the PricebookEntryId. |
+| Purchase Item | Type | Default Value, Order Product |
+| Purchase Item | Extended_Amount | Do Not Map |
+| Purchase Item | Ref_Table_Number | Do Not Map |
+| Purchase Inventory | ID | Raw 4D ID, no prefix |
+| Purchase Inventory | PricebookEntry `Price
 
-Sources: engagement context (`context/handoff.md`, session records) · checked live: nothing this turn · not checked: repository, org, workbook.
+_[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
