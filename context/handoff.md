@@ -42,10 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** blocked — The review isn't finished yet.
+**Status:** blocked — The flows mostly match the two tabs, and where they don't, the code usually follows a later decision that the workbook hasn't been updated…
 
 **Done this session**
-- The review isn't finished yet. This session hit its size guide, so I stopped at a checkpoint. I haven't compared the code against the mapping yet and I've changed no code. **What I've done so far:** - **Mapping workbook:** I exported the […
+- The flows mostly match the two tabs, and where they don't, the code usually follows a later decision that the workbook hasn't been updated for. Checked against real rows, the amounts add up for 98% of registrations. The gaps are registrati…
 
 **Open items**
 - Decide: Order Status and Subtotal — update workbook or add custom fields to hold 4D values
@@ -79,7 +79,7 @@
 - Update workbook index and all four tabs to reflect actual flow mappings and external ID format
 - Provide corrected workbook and six decisions to Build session before refactoring flows
 
-**Checked live on 2026-11-11:** Google Workspace, the repository
+**Checked live on 2026-11-11:** Google Workspace
 ### Last session — 2026-11-11
 | | |
 |---|---|
@@ -89,14 +89,13 @@
 | Name | Stanford-Data-Migration-Registration-Enhancements- Build |
 | Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-The review isn't finished yet. This session hit its size guide, so I stopped at a checkpoint. I haven't compared the code against the mapping yet and I've changed no code.
+The flows mostly match the two tabs, and where they don't, the code usually follows a later decision that the workbook hasn't been updated for. Checked against real rows, the amounts add up for 98% of registrations. The gaps are registration-level adjustments, 9 discount types that load blank, and course fees being labelled as discounts. I changed no code.
 
-**What I've done so far:**
-- **Mapping workbook:** I exported the [CSP Data Migration Mapping Workbook](https://docs.google.com/spreadsheets/d/1VddUqjvnXZr4BHHwiwSV44X1FO2ZuJH67YznOb1dhjA/edit) and pulled out the Registration and Enrollment tabs.
-  - Since my last copy, the Payment rows have been removed from the Registration tab. That fits Payments Import now being the only source of payments.
-  - The tab still says **Order Status "Default to Activated"**, still has Prior_Registration_ID as **"Do Not Map"**, and still says `Balance_Due__c`. The code doesn't match any of these three: Orders load as Draft and are activated in round 2, `Prior_Registration__c` is filled in, and it writes `BalanceDue__c`.
-  - The Enrollment tab maps to Course Offering Participant, which the Enrollment flow loads. The course lines (Order Items) are mapped on the Registration tab.
-- **Source data:** the two .txt files are still too big for me to open. I found Google Sheet copies I can read: [Registration](https://docs.google.com/sprea
+I checked every row of the Registration and Enrollment tabs against the code on `stanford-csp-orchestrate` (code last changed at `4612381`). For real data I used the Google Sheet copies of the source files (April 1 extract): 1,997 Registration rows dated Sep 2025 – Feb 2026, and 1,497 Enrollment rows. The .txt files are still too big for me to open.
+
+## Registration tab vs the code
+
+**Matches:** the card record fields (CC_ address, card type, expiry, last four, holder name) and the Order fields (address, `Adjustment__c`, `Check_Amount__c`, `Check_Number__c`, `Courses_Subtotal__c`, `Discount_Amount__c`, `Description`, `Registration_Fee__c`, `Registration_Date__c`, `OrderReferenceNumber`, `PoDate`). The 2-year cutoff on `Registration_Date` also matches. The "Do Not Map" columns are left out. The card values in the data all convert
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
