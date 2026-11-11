@@ -42,13 +42,12 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** at risk — Sheet updated with conversion logic; four mapping rows still unresolved, org checks still blocked
+**Status:** at risk — Purchase cutoff date confirmed as fixed 2024-10-06, not rolling 2yr. Awaiting client decision on exact cutoff.
 
 **Done this session**
-- Updated Purchase, Purchase Item, Purchase Inventory tabs with conversion logic notes (13 writes, 17 cells)
-- Clarified Product2Id lookup uses External_ID_4D__c on Product2
-- Confirmed 'per 1,000 words' is valid picklist value
-- Documented Purchase Item run order: Purchase round 1 → Purchase Item → Purchase round 2
+- Confirmed Purchase flow uses fixed cutoff date 2024-10-06, not rolling two-year window
+- Verified cutoff is shared with Registration and Payments flows
+- Identified assumption: Purchase_Date used without architect confirmation of no cutoff column
 
 **Open items**
 - Code: Map Check_Amt to Check_Amount__c in mapToOrder
@@ -74,16 +73,16 @@
 - Org access needed to verify existing PricebookEntry records have External_ID_4D__c populated
 - Org access needed to confirm no duplicate product names between inventory and course products
 - UAT org must be attached to Build session for five pre-build checks to run
+- Client decision required: confirm 2024-10-06 cutoff or provide exact date (affects Purchase, Registration, Payments)
 
 **Next**
-- Obtain client decision on exact 2-year date cutoff rule for Purchase tab
+- Obtain client decision on whether 2024-10-06 is correct cutoff or if exact two-year rolling window is required
+- If cutoff changes, update COMMERCE_TWO_YEAR_CUTOFF constant in commerceShared.ts (one-line change)
+- Add confirmed cutoff rule to Purchase_Date Conversion Logic cell on sheet
 - Verify CC_Transaction_ID mapping against Registration flow
-- Start Build session with UAT org attached
-- Apply 9 code changes (Check_Amt mapping, OrderItem.Type default, case-insensitive name match, PricebookEntry upsert, success/failure tabs, TEST_MODE off)
-- Run 5 pre-build checks in org (price entry fields, ID overlap, upsert behavior, duplicate names, Price Books setting)
-- Test UAT with real data files; check for scientific notation in large IDs and unexpected Item_Type values
+- Start Build session with UAT org attached for five pre-build checks
 
-**Checked live on 2026-11-11:** Google Workspace
+**Checked live on 2026-11-11:** the repository
 ### Last session — 2026-11-11
 | | |
 |---|---|
@@ -93,26 +92,19 @@
 | Name | Stanford-Data-Migration-Purchase-Inventory |
 | Session | `37d53c41-f101-4747-94db-b73400d5256e` |
 **In its own words (excerpt):**
-I updated the sheet. The code is untouched, and I didn't read the cells back this turn. Each write returned a success count (13 writes, 17 cells), so it's worth a quick look at the sheet.
+Yes. The Purchase flow cuts on `Purchase_Date`, but the cutoff is a fixed date, not a rolling two years. I read `purchaseFlow.ts` and `commerceShared.ts` on `stanford-csp-orchestrate` to confirm. I changed nothing.
 
-## The Product2Id row, in plain words
+## The rule in the code
 
-This is the Purchase Inventory row where the target is `PricebookEntry.Product2Id`. A price entry is a product's price in one price book, so it has to point at its product.
+- **Cutoff date:** `COMMERCE_TWO_YEAR_CUTOFF = "2024-10-06"`. A row is loaded only if `Purchase_Date` is on or after that date.
+- **Rows dropped:** a row with no parseable `Purchase_Date`, or one before the cutoff, is counted as `filteredOut(2yr scope)` in the log. It is not loaded.
+- **Source of the date:** it is the same fixed date Registration uses, from an architect decision on 2026-10-06. So Purchase and Registration are cut at the same point.
+- **Assumption in the code:** the code comment says the Purchase tab has no cutoff column. Using `Purchase_Date` is an assumption that was never confirmed with the architect.
 
-The sheet's old note said the entry "will need a lookup to the newly created Product". It didn't say how the flow finds that product. The flow finds it by the 4D inventory ID, which is stored in `Product2.External_ID_4D__c`.
+## What this means
 
-I changed the note to say that. The row's label and type stay as they were.
-
-## What I wrote
-
-Everything below is in the Conversion Logic column unless I say otherwise.
-
-| Tab | Row | Edit |
-|---|---|---|
-| Purchase | Purchase_Date | Source has no blank dates, and the flow skips a row without one. |
-| Purchase | Notes and Message | Both rows now say they are joined into one Description. |
-| Purchase | CC_Last_Four | The target is a Number field, so leading zeros are not kept. |
-| Purchase | CC_Exp_Date (both rows) | Map Type is now "Conversion". The note says the so
+- **Not a rolling window:** today is 2026-11-11, so a true two-year window would start about 2024-11-11. This cutoff is about five weeks earlier. If the client wants exactly two years back from the load date, the constant needs changing.
+- **Purchase Item:** it has no date filter of its own. It looks up the O
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
