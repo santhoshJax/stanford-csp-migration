@@ -42,13 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** at risk — Workbook-flow mismatch found: 14 columns unmapped, 6 decisions needed before build. External ID naming inconsistent.
+**Status:** blocked — The review isn't finished yet.
 
 **Done this session**
-- Compared all four purchase/payment tabs against flows on stanford-csp-orchestrate
-- Identified 14 source columns not loaded; mapped status of each
-- Found workbook index errors: nonexistent combined tab, wrong external ID name, undocumented prefixes
-- Flagged six decisions needed: Order Status/Subtotal, Check_Amt/Reconciliation_ID/Student_Country, OrderItem.Type, Ref_Table_Number, Payment_Type/Sub_Type/Freeze, negative Sales_Amount handling
+- The review isn't finished yet. This session hit its size guide, so I stopped at a checkpoint. I haven't compared the code against the mapping yet and I've changed no code. **What I've done so far:** - **Mapping workbook:** I exported the […
 
 **Open items**
 - Decide: Order Status and Subtotal — update workbook or add custom fields to hold 4D values
@@ -82,33 +79,24 @@
 - Update workbook index and all four tabs to reflect actual flow mappings and external ID format
 - Provide corrected workbook and six decisions to Build session before refactoring flows
 
-**Checked live on 2026-11-11:** the Salesforce org, the repository, Google Workspace
+**Checked live on 2026-11-11:** Google Workspace, the repository
 ### Last session — 2026-11-11
 | | |
 |---|---|
-| Type | REVIEW |
+| Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Purchase-Inventory |
-| Session | `37d53c41-f101-4747-94db-b73400d5256e` |
+| Name | Stanford-Data-Migration-Registration-Enhancements- Build |
+| Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-I changed nothing. I checked the four purchase-related tabs (Purchase, Purchase Item, Purchase Inventory, Payments) against `purchaseFlow.ts`, `purchaseItemFlow.ts`, `purchaseInventoryFlow.ts` and `paymentsFlow.ts` on `stanford-csp-orchestrate`.
+The review isn't finished yet. This session hit its size guide, so I stopped at a checkpoint. I haven't compared the code against the mapping yet and I've changed no code.
 
-Most rows are handled. About 14 source columns are not loaded as the workbook says, and several of them have no sign-off. The "Script Status" and "SA Reviewed By" columns are empty on all four tabs.
-
-## Workbook-level issues
-- The index tab says Purchase, Purchase Item and Payment are "handled via 'Purchase & Payments' combined mapping tab". No such tab exists. The workbook has four separate tabs.
-- The index lists `OrderPaymentSummary` as a Purchase target. No flow creates it.
-- The workbook names the external ID `External_Id_4D`. The flows write `External_ID_4D__c`.
-- The flows add prefixes to external IDs that the workbook doesn't show: `PUR-`, `PIT-` and `PAY-`. Inventory IDs have no prefix.
-
-## Purchase → `purchaseFlow.ts`
-
-| Source column | Workbook target | In the flow |
-|---|---|---|
-| ID | Order external ID | Mapped, with the `PUR-` prefix |
-| Student_ID | Order.AccountId | Mapped through `Account.Student_ID_4D__c` |
-| Purchase_Da
+**What I've done so far:**
+- **Mapping workbook:** I exported the [CSP Data Migration Mapping Workbook](https://docs.google.com/spreadsheets/d/1VddUqjvnXZr4BHHwiwSV44X1FO2ZuJH67YznOb1dhjA/edit) and pulled out the Registration and Enrollment tabs.
+  - Since my last copy, the Payment rows have been removed from the Registration tab. That fits Payments Import now being the only source of payments.
+  - The tab still says **Order Status "Default to Activated"**, still has Prior_Registration_ID as **"Do Not Map"**, and still says `Balance_Due__c`. The code doesn't match any of these three: Orders load as Draft and are activated in round 2, `Prior_Registration__c` is filled in, and it writes `BalanceDue__c`.
+  - The Enrollment tab maps to Course Offering Participant, which the Enrollment flow loads. The course lines (Order Items) are mapped on the Registration tab.
+- **Source data:** the two .txt files are still too big for me to open. I found Google Sheet copies I can read: [Registration](https://docs.google.com/sprea
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
