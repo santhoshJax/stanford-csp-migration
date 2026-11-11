@@ -343,6 +343,16 @@ export const configPages = {
           "-415, or +610 on a drop) to each Draft Order whose discount type is STAP Benefit. Needs an " +
           "active PricebookEntry in the order price book.",
       }),
+      "Registration Adjustment Product": configVar({
+        stableKey: "radj2026-1111-4c06-8c20-1b2c3d4e5f16",
+        dataType: "string",
+        default: "Adjustment",
+        description:
+          "Product2.Name of the registration adjustment product. Round 1 of Registration Import adds one " +
+          "OrderItem (REGADJ-{Registration ID}, UnitPrice = Adjustment as signed in the file, e.g. -575 on a " +
+          "waived registration) to each Draft Order with a non-zero Adjustment, so the Order total matches what " +
+          "the student owed. Needs an active PricebookEntry in the order price book.",
+      }),
       "Course Drop Product": configVar({
         stableKey: "rdrp2026-1109-4c05-8c20-1b2c3d4e5f15",
         dataType: "string",

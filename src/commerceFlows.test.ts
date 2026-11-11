@@ -19,6 +19,8 @@ import {
   mapToRegistrationFeeItem,
   mapToPayment as mapRegistrationPayment,
   mapToStapItem,
+  mapToRegistrationAdjustmentItem,
+  resolveTaDiscountType,
   mapToDropItem,
   chooseDropLineEntry,
   priorRegistrationOrderId,
@@ -732,6 +734,52 @@ describe("Registration Import — prior registration, STAP and drop lines (2026-
     expect(
       sum([mapToDropItem(drop(), "d")?.UnitPrice as number, mapToStapItem(drop(), "s")?.UnitPrice as number]),
     ).toBe(0);
+  });
+});
+
+describe("Registration Import — adjustment line and discount names (2026-11-11)", () => {
+  const log = { warn: jest.fn() };
+  const reg = (o: Record<string, string>) =>
+    mapRegistrationOrder(
+      { Student_ID: "62234924", Registration_Date: "10/15/2025", ...o },
+      log,
+      "01sORDERBOOK",
+    )!;
+
+  it("adds an adjustment line so waived 592420813 totals $0, not $575", () => {
+    // Real row: Courses_Subtotal 540 (BUS 187), Reg_Fee 35, Adjustment -575, CC_Amt 0 (NOFEE)
+    const order = reg({ ID: "592420813", Courses_Subtotal: "540", Reg_Fee: "35", Adjustment: "-575" });
+    expect(order.Adjustment__c).toBe(-575);
+    expect(mapToRegistrationAdjustmentItem(order, "01uADJ")).toEqual({
+      External_ID_4D__c: "REGADJ-592420813",
+      "Order.External_ID_4D__c": "REG-592420813",
+      PricebookEntryId: "01uADJ",
+      UnitPrice: -575,
+      Quantity: 1,
+      Type: "Order Product",
+      "Student__r.Student_ID_4D__c": "62234924",
+    });
+    const total =
+      540 +
+      (mapToRegistrationFeeItem(order, "f")?.UnitPrice as number) +
+      (mapToRegistrationAdjustmentItem(order, "a")?.UnitPrice as number);
+    expect(total).toBe(0);
+  });
+
+  it("no adjustment line when Adjustment is 0 or blank", () => {
+    expect(mapToRegistrationAdjustmentItem(reg({ ID: "1", Adjustment: "0" }), "a")).toBeNull();
+    expect(mapToRegistrationAdjustmentItem(reg({ ID: "2" }), "a")).toBeNull();
+  });
+
+  it("translates SBSAA and PROMO- codes to existing picklist values", () => {
+    expect(resolveTaDiscountType("SBSAA")).toBe("SBSAA Member");
+    expect(resolveTaDiscountType("PROMO-J2h2PM3vlw")).toBe("Promo Code");
+    expect(resolveTaDiscountType("Medical Center")).toBe("Stanford Healthcare");
+    expect(resolveTaDiscountType("Teacher")).toBe("Teacher");
+    // Still no picklist value: loads blank
+    expect(resolveTaDiscountType("Staff, No STAP")).toBeUndefined();
+    expect(resolveTaDiscountType("Financial Aid")).toBeUndefined();
+    expect(resolveTaDiscountType("Century Club")).toBeUndefined();
   });
 });
 

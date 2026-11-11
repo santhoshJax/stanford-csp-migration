@@ -458,11 +458,21 @@ const TA_DISCOUNT_TYPE_ALIASES = new Map<string, string>([
   // Confirmed 2026-11-09: Medical Center is the same as Stanford Healthcare.
   ["medical center", "Stanford Healthcare"],
   ["stanford medical center", "Stanford Healthcare"],
+  // Added 2026-11-11 (user confirmed the picklist values exist): the source
+  // writes the short name of an existing option.
+  ["sbsaa", "SBSAA Member"],
 ]);
 
-function resolveTaDiscountType(raw: string): string | undefined {
-  const alias = TA_DISCOUNT_TYPE_ALIASES.get(raw.toLowerCase());
+// Promotion codes arrive as "PROMO-<code>" (e.g. "PROMO-J2h2PM3vlw"); every
+// one loads as the "Promo Code" picklist value (added 2026-11-11).
+const PROMO_CODE_PREFIX = "promo-";
+const PROMO_CODE_TYPE = "Promo Code";
+
+export function resolveTaDiscountType(raw: string): string | undefined {
+  const lower = raw.toLowerCase();
+  const alias = TA_DISCOUNT_TYPE_ALIASES.get(lower);
   if (alias) return alias;
+  if (lower.startsWith(PROMO_CODE_PREFIX)) return PROMO_CODE_TYPE;
   return VALID_TA_DISCOUNT_TYPES.has(raw) ? raw : undefined;
 }
 
@@ -999,6 +1009,38 @@ export function mapToStapItem(
   const amount = order.Discount_Amount__c;
   if (typeof amount !== "number" || amount === 0) return null;
   return registrationLine(order, STAP_EXT_PREFIX, pricebookEntryId, amount);
+}
+
+// ── Registration adjustment line (decided 2026-11-11) ────────────────────────
+// Registration.Adjustment (a staff write-off, no-fee waiver or correction,
+// signed like Discount_Amt) becomes its own OrderItem so the Order total
+// matches what the student owed: e.g. 592420813 = $540 course + $35 fee −
+// $575 adjustment = $0. Without it the Order showed $575 (27 of 1,394
+// matched sample registrations were wrong). Adjustment__c is still written.
+
+/** Text config var: Product2.Name of the registration adjustment product. */
+export const REGISTRATION_ADJUSTMENT_PRODUCT_CONFIG_VAR =
+  "Registration Adjustment Product";
+export const DEFAULT_REGISTRATION_ADJUSTMENT_PRODUCT = "Adjustment";
+/** OrderItem key prefix for the adjustment line: REGADJ-{Registration.ID}. */
+export const REGISTRATION_ADJUSTMENT_EXT_PREFIX = "REGADJ-";
+
+/**
+ * Adjustment line for one mapped Order: UnitPrice = Adjustment as signed in
+ * the file, or null when it is blank or 0. Pure — tested directly.
+ */
+export function mapToRegistrationAdjustmentItem(
+  order: SfRecord,
+  pricebookEntryId: string,
+): SfRecord | null {
+  const amount = order.Adjustment__c;
+  if (typeof amount !== "number" || amount === 0) return null;
+  return registrationLine(
+    order,
+    REGISTRATION_ADJUSTMENT_EXT_PREFIX,
+    pricebookEntryId,
+    amount,
+  );
 }
 
 /** A course (ENR-) line already on the prior registration's Order. */
@@ -1946,6 +1988,60 @@ export const registrationImport = flow({
       }
     }
 
+    // ── Phase 2d: Registration adjustment OrderItem (round 1 only) ───────────
+    const adjustmentProductName =
+      String(configVars[REGISTRATION_ADJUSTMENT_PRODUCT_CONFIG_VAR] ?? "").trim() ||
+      DEFAULT_REGISTRATION_ADJUSTMENT_PRODUCT;
+    const adjustmentItems: SfRecord[] = [];
+    let adjustmentResult = {
+      processed: 0,
+      failed: 0,
+      successfulCsv: "",
+      failedCsv: "",
+    };
+    if (!activateOrders) {
+      const loadedOrderExtIds = new Set(
+        parseSuccessfulSfIds(orderSuccessfulCsv, EXT_ID_FIELD).keys(),
+      );
+      const withAdjustment = orders.filter(
+        (o) =>
+          loadedOrderExtIds.has(o[EXT_ID_FIELD] as string) &&
+          mapToRegistrationAdjustmentItem(o, "x") !== null,
+      );
+      if (withAdjustment.length > 0) {
+        const adjustmentEntryId = await findPricebookEntryByProductName(
+          sfBase,
+          sfToken,
+          orderBook.id,
+          adjustmentProductName,
+        );
+        if (!adjustmentEntryId) {
+          logger.warn(
+            `[Registration Import][Adjustment] No active PricebookEntry for Product2.Name "${adjustmentProductName}" in ` +
+              `"${orderBook.name}" — ${withAdjustment.length} adjustment line(s) NOT created, so those Order totals ` +
+              `will not match. Create the product and its entry (or set the ${REGISTRATION_ADJUSTMENT_PRODUCT_CONFIG_VAR} ` +
+              "config var), then re-run round 1.",
+          );
+        } else {
+          for (const order of withAdjustment) {
+            const item = mapToRegistrationAdjustmentItem(order, adjustmentEntryId);
+            if (item) adjustmentItems.push(item);
+          }
+          logger.info(
+            `[Registration Import] Upserting ${adjustmentItems.length} adjustment OrderItem(s) ("${adjustmentProductName}")…`,
+          );
+          adjustmentResult = await upsertInBatches(
+            adjustmentItems,
+            SF_ORDER_ITEM,
+            sfBase,
+            sfToken,
+            logger,
+            "[Registration Import][Adjustment OrderItem]",
+          );
+        }
+      }
+    }
+
     // ── Phase 3: PaymentGroup ─────────────────────────────────────────────────
     // One per successfully-upserted Order: SourceObjectId = that Order's real
     // Salesforce Id (pulled from Order's successfulResults, not re-queried).
@@ -2097,6 +2193,11 @@ export const registrationImport = flow({
             failedCsv: stapResult.failedCsv,
           },
           {
+            objectName: `${SF_ORDER_ITEM} (Adjustment)`,
+            successfulCsv: adjustmentResult.successfulCsv,
+            failedCsv: adjustmentResult.failedCsv,
+          },
+          {
             objectName: `${SF_ORDER_ITEM} (Drop)`,
             successfulCsv: dropResult.successfulCsv,
             failedCsv: dropResult.failedCsv,
@@ -2141,6 +2242,7 @@ export const registrationImport = flow({
         `\n  Order submitted:             ${plan.toUpsert.length}, processed: ${orderProcessed}, failed: ${orderFailed}` +
         `\n  Fee OrderItem submitted:     ${feeItems.length}, processed: ${feeResult.processed}, failed: ${feeResult.failed}` +
         `\n  STAP OrderItem submitted:    ${stapItems.length}, processed: ${stapResult.processed}, failed: ${stapResult.failed}` +
+        `\n  Adjustment OrderItem submitted: ${adjustmentItems.length}, processed: ${adjustmentResult.processed}, failed: ${adjustmentResult.failed}` +
         `\n  Drop OrderItem submitted:    ${dropItems.length}, processed: ${dropResult.processed}, failed: ${dropResult.failed}` +
         `\n  Prior registration:          ${withPrior.length} with ID, ${priorNotInOrg} not in Salesforce (unlinked)` +
         `\n  PaymentGroup submitted:      ${paymentGroups.length}, processed: ${pgProcessed}, failed: ${pgFailed}` +
@@ -2197,6 +2299,9 @@ export const registrationImport = flow({
         stapOrderItems: stapItems.length,
         stapOrderItemsProcessed: stapResult.processed,
         stapOrderItemsFailed: stapResult.failed,
+        adjustmentOrderItems: adjustmentItems.length,
+        adjustmentOrderItemsProcessed: adjustmentResult.processed,
+        adjustmentOrderItemsFailed: adjustmentResult.failed,
         dropOrderItems: dropItems.length,
         dropOrderItemsProcessed: dropResult.processed,
         dropOrderItemsFailed: dropResult.failed,
