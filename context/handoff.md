@@ -42,11 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** at risk — Cutoff date 2024-10-06 documented on sheet. Awaiting client confirmation & Build session start with UAT org.
+**Status:** blocked — These four items need a decision or a code fix before the full load.
 
 **Done this session**
-- Added Purchase_Date cutoff rule (2024-10-06, fixed not rolling) to sheet Conversion Logic cell
-- Verified cutoff saved on Purchase tab
+- These four items need a decision or a code fix before the full load. Each example below is a real row from the source data samples (the April 1 extract). I didn't change any code. ## 1. The registration `Adjustment` is left out of the Orde…
 
 **Open items**
 - Code: Map Check_Amt to Check_Amount__c in mapToOrder
@@ -81,35 +80,39 @@
 - Fill SA Reviewed By and Script Status columns on all three sheet tabs
 - Verify CC_Transaction_ID mapping against Registration flow before Build runs
 
-**Checked live on 2026-11-11:** Google Workspace
+**Checked live on 2026-11-11:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-11
 | | |
 |---|---|
-| Type | REVIEW |
+| Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Purchase-Inventory |
-| Session | `37d53c41-f101-4747-94db-b73400d5256e` |
+| Name | Stanford-Data-Migration-Registration-Enhancements- Build |
+| Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
-I added the 2024-10-06 cutoff to the sheet and read the cell back to confirm it saved. I changed no code.
+These four items need a decision or a code fix before the full load. Each example below is a real row from the source data samples (the April 1 extract). I didn't change any code.
 
-## What I wrote
+## 1. The registration `Adjustment` is left out of the Order total
 
-On the **Purchase** tab, the Purchase_Date row (row 7) now has this in Conversion Logic: only rows with `Purchase_Date` on or after 2024-10-06 are loaded. It is a fixed cutoff shared with Registration and Payments, not a rolling two years, and earlier rows are filtered out. The note about blank dates is kept.
+**What happens:** a registration can have an `Adjustment` amount, usually a staff write-off or a no-fee waiver. The code saves it in `Order.Adjustment__c`, but no line is created for it. The Order total is just the sum of its lines, so the adjustment never counts.
 
-Nothing in the code changes, since the flow already uses that date.
+**Real example: registration 592420813**
 
-## How to start a Build session
+| Source column | Value |
+|---|---|
+| Courses_Subtotal | 540 (one course, BUS 187) |
+| Reg_Fee | 35 |
+| Adjustment | −575 |
+| Paid (CC_Amt) | 0 · transaction "NOFEE" |
 
-I can't start one from inside this Review session. You start it yourself from the web app, the same place you started this one.
+- What the student owed: 540 + 35 − 575 = **$0**
+- What the Order totals in Salesforce: course line $540 + fee line $35 = **$575**
 
-1. Open **New session** and choose the **Build** type.
-2. Select the repository `santhoshJax/stanford-csp-migration`.
-3. Set the working branch to `stanford-csp-orchestrate`. The code changes should go on that branch, not on `main`.
-4. Attach the **UAT org** on the new-session form. Without it, the five pre-build checks can't run.
-5. Paste the goal: ask it to implement the Purchase Build Brief (D01) and to run the five pre-build org checks first. You can attach D01 or paste its contents.
+So Salesforce shows $575 owed on a registration that was waived. In the sample, 27 Orders come out wrong this way.
 
-The Build session will show you its pla
+**Fix:** add an "Adjustment" line at −$575, the same way the fee and STAP lines work. That needs one more product, "Adjustment", with a $0 price. **Decision:** add the line, or accept that these Orders won't add up.
+
+## 2. Nin
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
