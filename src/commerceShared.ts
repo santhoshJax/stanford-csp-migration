@@ -10,7 +10,12 @@
  */
 
 import axios from "axios";
-import { parse as papaParse, type ParseResult, type Parser } from "papaparse";
+import {
+  parse as papaParse,
+  unparse as papaUnparse,
+  type ParseResult,
+  type Parser,
+} from "papaparse";
 import { Transform } from "stream";
 import { str, runBulkJob, SF_API_VERSION } from "./utils";
 import {
@@ -699,4 +704,74 @@ export function paymentToRefund(payment: SfRecord): SfRecord {
     if (payment[key] !== undefined) refund[key] = payment[key];
   }
   return refund;
+}
+
+// ── PricebookEntry helpers (Purchase Build Brief D01, 2026-11-11) ─────────────
+
+/** One record's outcome from updateViaComposite. */
+export interface CompositeUpdateOutcome {
+  id: string;
+  success: boolean;
+  error?: string;
+}
+
+/**
+ * Updates records by Id through the REST sObject Collections API (PATCH,
+ * allOrNone=false, 200 per call). Each record needs `attributes.type` and
+ * `Id`. Returns one outcome per record, in input order. For small sets only —
+ * large volumes belong in a Bulk job.
+ */
+export async function updateViaComposite(
+  records: SfRecord[],
+  sfBase: string,
+  sfToken: string,
+  logger: Logger,
+  logPrefix: string,
+): Promise<CompositeUpdateOutcome[]> {
+  const outcomes: CompositeUpdateOutcome[] = [];
+  for (let i = 0; i < records.length; i += 200) {
+    const chunk = records.slice(i, i + 200);
+    const { data } = await axios.patch<
+      { id?: string; success: boolean; errors?: { message: string }[] }[]
+    >(
+      `${sfBase}/services/data/${SF_API_VERSION}/composite/sobjects`,
+      { allOrNone: false, records: chunk },
+      { headers: { Authorization: `Bearer ${sfToken}` } },
+    );
+    data.forEach((r, idx) => {
+      const id = String(chunk[idx].Id);
+      if (r.success) {
+        outcomes.push({ id, success: true });
+        return;
+      }
+      const msg = (r.errors ?? []).map((e) => e.message).join("; ");
+      logger.error(`${logPrefix} update ${id}: ${msg}`);
+      outcomes.push({ id, success: false, error: msg });
+    });
+  }
+  return outcomes;
+}
+
+/**
+ * Concatenates Bulk result CSVs whose columns differ (e.g. a create job and an
+ * update job on the same object) into one CSV over the union of the columns,
+ * in first-seen order. Blank inputs are ignored. Pure — tested directly.
+ */
+export function mergeResultCsvs(...csvs: string[]): string {
+  const parts = csvs.filter((c) => c?.trim());
+  if (parts.length === 0) return "";
+  if (parts.length === 1) return parts[0];
+  const columns: string[] = [];
+  const rows: Record<string, string>[] = [];
+  for (const csv of parts) {
+    const parsed = papaParse<Record<string, string>>(csv, {
+      header: true,
+      skipEmptyLines: true,
+    });
+    for (const f of parsed.meta.fields ?? []) {
+      if (!columns.includes(f)) columns.push(f);
+    }
+    rows.push(...parsed.data);
+  }
+  return papaUnparse(rows, { columns });
 }

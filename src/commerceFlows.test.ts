@@ -35,7 +35,11 @@ import {
   mapToCardPaymentMethod,
   planOrderActivation,
 } from "./purchaseFlow";
-import { mapToOrderItem, newSkips } from "./purchaseItemFlow";
+import {
+  mapToOrderItem,
+  newSkips,
+  buildPricebookEntryNameMap,
+} from "./purchaseItemFlow";
 import {
   mapToPayment,
   newPaymentSkips,
@@ -252,7 +256,9 @@ describe("Purchase → Order / Payment / CardPaymentMethod", () => {
 
 describe("Purchase Item → OrderItem", () => {
   const caches = {
-    pricebookEntryByProductName: new Map([["Transcript", "01u000000000001"]]),
+    pricebookEntryByProductName: buildPricebookEntryNameMap([
+      { Id: "01u000000000001", Product2: { Name: "Transcript" } },
+    ]).map,
     existingOrderExtIds: new Set(["PUR-68"]),
   };
   const row = {
@@ -667,17 +673,25 @@ describe("Registration Import — prior registration, STAP and drop lines (2026-
 
   it("no STAP line for other discount types or a zero amount", () => {
     expect(
-      mapToStapItem(reg({ ID: "1", Discount_Amt: "-50", Discount_Type: "65+" }), "x"),
+      mapToStapItem(
+        reg({ ID: "1", Discount_Amt: "-50", Discount_Type: "65+" }),
+        "x",
+      ),
     ).toBeNull();
     expect(
-      mapToStapItem(reg({ ID: "2", Discount_Amt: "0", Discount_Type: "STAP" }), "x"),
+      mapToStapItem(
+        reg({ ID: "2", Discount_Amt: "0", Discount_Type: "STAP" }),
+        "x",
+      ),
     ).toBeNull();
   });
 
   it("carries Prior_Registration_ID as a temp key that never uploads", () => {
     const order = drop();
     expect(order[TEMP_PRIOR_REGISTRATION_KEY]).toBe("592434586");
-    expect(stripOrderTempKeys(order)).not.toHaveProperty(TEMP_PRIOR_REGISTRATION_KEY);
+    expect(stripOrderTempKeys(order)).not.toHaveProperty(
+      TEMP_PRIOR_REGISTRATION_KEY,
+    );
     expect(add()).not.toHaveProperty(TEMP_PRIOR_REGISTRATION_KEY);
     expect(reg({ ID: "3", Prior_Registration_ID: "0" })).not.toHaveProperty(
       TEMP_PRIOR_REGISTRATION_KEY,
@@ -693,9 +707,15 @@ describe("Registration Import — prior registration, STAP and drop lines (2026-
 
   it("drop line = Courses_Subtotal (-610) with the prior course's product", () => {
     const chosen = chooseDropLineEntry(-610, [
-      { pricebookEntryId: "01uCOM02", unitPrice: 610, courseOfferingId: "a0CCOM" },
+      {
+        pricebookEntryId: "01uCOM02",
+        unitPrice: 610,
+        courseOfferingId: "a0CCOM",
+      },
     ]);
-    expect(mapToDropItem(drop(), chosen!.pricebookEntryId, chosen!.courseOfferingId)).toEqual({
+    expect(
+      mapToDropItem(drop(), chosen!.pricebookEntryId, chosen!.courseOfferingId),
+    ).toEqual({
       External_ID_4D__c: "DROP-592436118",
       "Order.External_ID_4D__c": "REG-592436118",
       PricebookEntryId: "01uCOM02",
@@ -725,14 +745,22 @@ describe("Registration Import — prior registration, STAP and drop lines (2026-
   });
 
   it("sample Orders total as Trevor described", () => {
-    const sum = (xs: (number | undefined)[]) => xs.reduce<number>((a, b) => a + (b ?? 0), 0);
+    const sum = (xs: (number | undefined)[]) =>
+      xs.reduce<number>((a, b) => a + (b ?? 0), 0);
     // 592434586: course 610 (ENR- line) + fee 35 + STAP -645 = 0
     expect(
-      sum([610, mapToRegistrationFeeItem(add(), "f")?.UnitPrice as number, mapToStapItem(add(), "s")?.UnitPrice as number]),
+      sum([
+        610,
+        mapToRegistrationFeeItem(add(), "f")?.UnitPrice as number,
+        mapToStapItem(add(), "s")?.UnitPrice as number,
+      ]),
     ).toBe(0);
     // 592436118: drop -610 + STAP +610 = 0
     expect(
-      sum([mapToDropItem(drop(), "d")?.UnitPrice as number, mapToStapItem(drop(), "s")?.UnitPrice as number]),
+      sum([
+        mapToDropItem(drop(), "d")?.UnitPrice as number,
+        mapToStapItem(drop(), "s")?.UnitPrice as number,
+      ]),
     ).toBe(0);
   });
 });
@@ -818,7 +846,10 @@ describe("Payments source (decided 2026-11-08)", () => {
       logger,
       "load",
     );
-    expect(m?.payment).toMatchObject({ External_ID_4D__c: "PAY-77", Amount: 20 });
+    expect(m?.payment).toMatchObject({
+      External_ID_4D__c: "PAY-77",
+      Amount: 20,
+    });
     expect(m?.payment).not.toHaveProperty("PaymentGroup.External_ID_4D__c");
     expect(s.purchasePaymentGroupMissing).toBe(1);
   });
@@ -895,7 +926,12 @@ describe("Registration Import — Order balance and discount type (decided 2026-
   const log = { warn: jest.fn() };
   const order = (o: Record<string, string>) =>
     mapRegistrationOrder(
-      { ID: "592436117", Student_ID: "91055730", Registration_Date: "04/01/2026", ...o },
+      {
+        ID: "592436117",
+        Student_ID: "91055730",
+        Registration_Date: "04/01/2026",
+        ...o,
+      },
       log,
       "01sORDERBOOK",
     )!;
@@ -916,7 +952,13 @@ describe("Registration Import — Order balance and discount type (decided 2026-
   });
 
   it("still sends the 5 values the admin adds to the picklist", () => {
-    for (const v of ["MLA", "SAA onetime", "Teacher", "Faculty", "World Affairs Council"]) {
+    for (const v of [
+      "MLA",
+      "SAA onetime",
+      "Teacher",
+      "Faculty",
+      "World Affairs Council",
+    ]) {
       expect(order({ Discount_Type: v }).TA_Discount_Type__c).toBe(v);
     }
   });

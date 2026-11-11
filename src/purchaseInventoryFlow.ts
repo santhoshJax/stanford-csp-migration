@@ -12,12 +12,19 @@
  *                        "Price Books" config var (comma-separated). The
  *                        Standard Price Book is always loaded first, because
  *                        Salesforce rejects a custom-book entry for a product
- *                        with no standard entry. Created via the REST sObject
- *                        Collections API (insert only). The workbook gives
- *                        PricebookEntry no External ID, so re-runs query each
- *                        price book first and skip products that already have
- *                        an entry there (an existing entry's price is NOT
- *                        updated).
+ *                        with no standard entry.
+ *                        Bulk-upserted on External_ID_4D__c (D01, 2026-11-11):
+ *                          Standard Price Book → "STD-" + Purchase Inventory.ID
+ *                          custom price book   → Purchase Inventory.ID
+ *                        The file is the source of truth: on a re-run an
+ *                        existing entry's UnitPrice and IsActive are
+ *                        overwritten with the file values.
+ *                        Pricebook2Id / Product2Id cannot be changed on an
+ *                        existing entry, so they are sent on NEW entries only;
+ *                        existing entries get a key + UnitPrice + IsActive
+ *                        upsert. An existing entry with no key (loaded before
+ *                        D01) is given its key first by an update on its Id.
+ *                        See planPricebookEntries.
  *
  * The catalogue is small (a few dozen rows), so this runs as a single pass —
  * no windowing / self-invoke.
@@ -49,21 +56,29 @@
  *     "Price Books" config var (blank = Standard Price Book only). A name
  *     that matches no active Pricebook2 stops the run before any entry is
  *     written.
+ *   - The key format gives every custom book the same key ({ID}), so it only
+ *     supports ONE custom price book. More than one in the config var stops
+ *     the run before anything is written.
+ *
+ * Results sheet: Product2 Success/Errors, one Success/Errors pair PER PRICE
+ * BOOK ("PricebookEntry <book name> - …"), and a "PricebookEntry - Skipped"
+ * tab for entries not sent (no price, key conflict, key backfill failed).
  */
 
 import { flow, type Connection } from "@prismatic-io/spectral";
+import { str, toBool, getAccessToken, getSfInstanceUrl } from "./utils";
 import {
-  str,
-  toBool,
-  getAccessToken,
-  getSfInstanceUrl,
-} from "./utils";
-import { createPerObjectResultsSheet } from "./reportResults";
+  createPerObjectResultsSheet,
+  SKIP_REASON_COLUMN,
+  type ObjectResultData,
+} from "./reportResults";
 import {
   EXT_ID_FIELD,
   type SfRecord,
+  type ResolvedPricebook,
   PRICE_BOOKS_CONFIG_VAR,
-  insertViaComposite,
+  mergeResultCsvs,
+  updateViaComposite,
   parseCurrency,
   resolveConfiguredPricebooks,
   parseSuccessfulSfIds,
@@ -83,11 +98,208 @@ export const VALID_QUANTITY_UNITS = new Set<string>([
   "per course",
 ]);
 
+const SF_PRICEBOOK_ENTRY = "PricebookEntry";
+
+/** Key prefix for Standard Price Book entries (D01). Custom-book keys are the raw ID. */
+export const STANDARD_PBE_KEY_PREFIX = "STD-";
+
+/** PricebookEntry.External_ID_4D__c for one inventory item in one price book. */
+export function pricebookEntryExtId(
+  book: Pick<ResolvedPricebook, "isStandard">,
+  inventoryId: string,
+): string {
+  return book.isStandard
+    ? `${STANDARD_PBE_KEY_PREFIX}${inventoryId}`
+    : inventoryId;
+}
+
+/**
+ * The key format gives every custom book the key {ID}, so two custom books
+ * would collide on External_ID_4D__c. Throws before anything is written.
+ */
+export function assertSupportedPricebooks(
+  books: Pick<ResolvedPricebook, "name" | "isStandard">[],
+): void {
+  const custom = books.filter((b) => !b.isStandard);
+  if (custom.length > 1) {
+    throw new Error(
+      `Purchase Inventory supports one custom price book, but the "${PRICE_BOOKS_CONFIG_VAR}" config var ` +
+        `names ${custom.length}: ${custom.map((b) => `"${b.name}"`).join(", ")}. ` +
+        "Custom-book PricebookEntry keys are the raw inventory ID, so a second custom book would " +
+        "collide on External_ID_4D__c. Nothing was written.",
+    );
+  }
+}
+
+/** Results-sheet object name for one price book (tab-safe characters only). */
+export function pricebookResultObjectName(
+  book: Pick<ResolvedPricebook, "name">,
+): string {
+  const safe = book.name
+    .replace(/[^A-Za-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return `${SF_PRICEBOOK_ENTRY} ${safe || "Price Book"}`;
+}
+
+/** A PricebookEntry already in Salesforce (from the pre-load query). */
+export interface ExistingPricebookEntry {
+  Id: string;
+  Pricebook2Id: string;
+  Product2Id: string;
+  External_ID_4D__c: string | null;
+}
+
+/** One inventory item ready for pricing. */
+export interface InventoryPriceInput {
+  extId: string;
+  product2Id: string;
+  unitPrice?: number;
+  isActive: boolean;
+}
+
+export interface PricebookEntrySkip {
+  extId: string;
+  product2Id: string;
+  reason: string;
+}
+
+export interface PricebookEntryPlan {
+  /** New entries — full record, upserted on External_ID_4D__c. */
+  toCreate: SfRecord[];
+  /** Existing entries — key + UnitPrice + IsActive only, upserted on External_ID_4D__c. */
+  toUpdate: SfRecord[];
+  /** Existing entries with no key — composite update by Id that sets the key, BEFORE toUpdate. */
+  toBackfill: SfRecord[];
+  skipped: PricebookEntrySkip[];
+}
+
+/**
+ * Decides, for one price book, what this run sends for each inventory item.
+ * Pure — tested directly. `existing` holds the entries in this book plus any
+ * entry (in any book) that already uses one of this book's keys.
+ *   - No parseable Unit_Price                       → skipped.
+ *   - Entry for the product in this book:
+ *       key matches                                 → update price/active.
+ *       no key, and no other entry holds the key    → backfill key, then update.
+ *       no key, but another entry holds the key     → skipped (conflict).
+ *       a different key                             → skipped (conflict, not overwritten).
+ *   - No entry for the product in this book:
+ *       key free                                    → create.
+ *       key used by another entry                   → skipped (conflict).
+ */
+export function planPricebookEntries(
+  book: Pick<ResolvedPricebook, "id" | "isStandard">,
+  inputs: InventoryPriceInput[],
+  existing: ExistingPricebookEntry[],
+): PricebookEntryPlan {
+  const plan: PricebookEntryPlan = {
+    toCreate: [],
+    toUpdate: [],
+    toBackfill: [],
+    skipped: [],
+  };
+  const inBookByProduct = new Map<string, ExistingPricebookEntry>();
+  const byKey = new Map<string, ExistingPricebookEntry>();
+  for (const e of existing) {
+    if (e.Pricebook2Id === book.id && !inBookByProduct.has(e.Product2Id)) {
+      inBookByProduct.set(e.Product2Id, e);
+    }
+    if (e.External_ID_4D__c) byKey.set(e.External_ID_4D__c, e);
+  }
+
+  for (const input of inputs) {
+    const skip = (reason: string) =>
+      plan.skipped.push({
+        extId: input.extId,
+        product2Id: input.product2Id,
+        reason,
+      });
+    if (input.unitPrice === undefined) {
+      skip("No parseable Unit_Price — PricebookEntry.UnitPrice is required");
+      continue;
+    }
+    const key = pricebookEntryExtId(book, input.extId);
+    const update: SfRecord = {
+      [EXT_ID_FIELD]: key,
+      UnitPrice: input.unitPrice,
+      IsActive: input.isActive,
+    };
+    const current = inBookByProduct.get(input.product2Id);
+    const holder = byKey.get(key);
+
+    if (current) {
+      const currentKey = current.External_ID_4D__c;
+      if (currentKey === key) {
+        plan.toUpdate.push(update);
+      } else if (!currentKey) {
+        if (holder && holder.Id !== current.Id) {
+          skip(
+            `Existing entry ${current.Id} has no key, but key "${key}" is already on PricebookEntry ${holder.Id}`,
+          );
+        } else {
+          plan.toBackfill.push({
+            attributes: { type: SF_PRICEBOOK_ENTRY },
+            Id: current.Id,
+            [EXT_ID_FIELD]: key,
+          });
+          plan.toUpdate.push(update);
+        }
+      } else {
+        skip(
+          `Existing entry ${current.Id} has External_ID_4D__c "${currentKey}", expected "${key}" — not overwritten`,
+        );
+      }
+    } else if (holder) {
+      skip(
+        `Key "${key}" is already on PricebookEntry ${holder.Id} (another product or price book)`,
+      );
+    } else {
+      plan.toCreate.push({
+        [EXT_ID_FIELD]: key,
+        Pricebook2Id: book.id,
+        Product2Id: input.product2Id,
+        UnitPrice: input.unitPrice,
+        IsActive: input.isActive,
+      });
+    }
+  }
+  return plan;
+}
+
+/** Drops toUpdate records whose key backfill failed, moving them to skipped. */
+export function applyBackfillFailures(
+  plan: PricebookEntryPlan,
+  failedIds: Map<string, string>,
+): void {
+  if (failedIds.size === 0) return;
+  const failedKeys = new Map<string, string>();
+  for (const b of plan.toBackfill) {
+    const err = failedIds.get(String(b.Id));
+    if (err !== undefined)
+      failedKeys.set(String(b[EXT_ID_FIELD]), `${String(b.Id)}: ${err}`);
+  }
+  plan.toUpdate = plan.toUpdate.filter((u) => {
+    const key = String(u[EXT_ID_FIELD]);
+    const err = failedKeys.get(key);
+    if (err === undefined) return true;
+    plan.skipped.push({
+      extId: key.startsWith(STANDARD_PBE_KEY_PREFIX)
+        ? key.slice(STANDARD_PBE_KEY_PREFIX.length)
+        : key,
+      product2Id: "",
+      reason: `Could not set the key on existing entry ${err}`,
+    });
+    return false;
+  });
+}
+
 interface PricebookLoadSummary {
   pricebook: string;
   created: number;
+  updated: number;
   failed: number;
-  alreadyExisted: number;
+  skipped: number;
 }
 
 export interface RawPurchaseInventoryRow {
@@ -215,6 +427,7 @@ export const purchaseInventoryImport = flow({
       configVars[PRICE_BOOKS_CONFIG_VAR] as unknown as string | undefined,
       logger,
     );
+    assertSupportedPricebooks(pricebooks);
     logger.info(
       `[Purchase Inventory][PricebookEntry] Price books (load order): ` +
         pricebooks.map((b) => `"${b.name}"`).join(", "),
@@ -235,71 +448,120 @@ export const purchaseInventoryImport = flow({
 
     // ── Phase 2: PricebookEntry — one per product per configured price book ─
     // Standard Price Book first (Salesforce requires it before any custom
-    // entry), then each custom book from the "Price Books" config var.
+    // entry), then the custom book. Upserted on External_ID_4D__c; see
+    // planPricebookEntries for the create / update / backfill split.
     const productSfIds = parseSuccessfulSfIds(productResult.successfulCsv);
+    const inputs: InventoryPriceInput[] = [...productSfIds].map(
+      ([extId, sfId]) => ({
+        extId,
+        product2Id: sfId,
+        unitPrice: unitPriceByExtId.get(extId),
+        isActive: activeByExtId.get(extId) ?? true,
+      }),
+    );
 
-    const noPriceExtIds = new Set<string>();
     const perBook: PricebookLoadSummary[] = [];
+    const bookResults: ObjectResultData[] = [];
+    const skippedRows: string[][] = [];
     let pbeCreated = 0;
+    let pbeUpdated = 0;
     let pbeFailed = 0;
-    let alreadyHadEntry = 0;
     for (const book of pricebooks) {
-      const existing = await sfQueryAll<{ Product2Id: string }>(
+      const prefix = `[Purchase Inventory][PricebookEntry][${book.name}]`;
+      const keys = inputs.map((i) => pricebookEntryExtId(book, i.extId));
+      const keyFilter =
+        keys.length > 0
+          ? ` OR External_ID_4D__c IN (${keys
+              .map((k) => `'${k.replace(/'/g, "\\'")}'`)
+              .join(", ")})`
+          : "";
+      const existing = await sfQueryAll<ExistingPricebookEntry>(
         sfBase,
         sfToken,
-        `SELECT Product2Id FROM PricebookEntry WHERE Pricebook2Id = '${book.id}'`,
+        "SELECT Id, Pricebook2Id, Product2Id, External_ID_4D__c FROM PricebookEntry " +
+          `WHERE Pricebook2Id = '${book.id}'${keyFilter}`,
       );
-      const hasEntry = new Set(existing.map((e) => e.Product2Id));
+      const plan = planPricebookEntries(book, inputs, existing);
+      logger.info(
+        `${prefix} plan — create=${plan.toCreate.length}, update=${plan.toUpdate.length} ` +
+          `(key backfill=${plan.toBackfill.length}), skipped=${plan.skipped.length}`,
+      );
 
-      const entries: SfRecord[] = [];
-      let bookExisting = 0;
-      for (const [extId, sfId] of productSfIds) {
-        if (hasEntry.has(sfId)) {
-          bookExisting++;
-          continue;
+      if (plan.toBackfill.length > 0) {
+        const outcomes = await updateViaComposite(
+          plan.toBackfill,
+          sfBase,
+          sfToken,
+          logger,
+          `${prefix}[key backfill]`,
+        );
+        const failedIds = new Map<string, string>();
+        for (const o of outcomes) {
+          if (!o.success) failedIds.set(o.id, o.error ?? "update failed");
         }
-        const price = unitPriceByExtId.get(extId);
-        if (price === undefined) {
-          noPriceExtIds.add(extId);
-          continue;
-        }
-        entries.push({
-          attributes: { type: "PricebookEntry" },
-          Pricebook2Id: book.id,
-          Product2Id: sfId,
-          UnitPrice: price,
-          IsActive: activeByExtId.get(extId) ?? true,
-        });
+        applyBackfillFailures(plan, failedIds);
       }
 
-      const result =
-        entries.length > 0
-          ? await insertViaComposite(
-              entries,
+      const empty = {
+        processed: 0,
+        failed: 0,
+        successfulCsv: "",
+        failedCsv: "",
+      };
+      const created =
+        plan.toCreate.length > 0
+          ? await upsertInBatches(
+              plan.toCreate,
+              SF_PRICEBOOK_ENTRY,
               sfBase,
               sfToken,
               logger,
-              `[Purchase Inventory][PricebookEntry][${book.name}]`,
+              `${prefix}[create]`,
             )
-          : { created: 0, failed: 0 };
+          : empty;
+      const updated =
+        plan.toUpdate.length > 0
+          ? await upsertInBatches(
+              plan.toUpdate,
+              SF_PRICEBOOK_ENTRY,
+              sfBase,
+              sfToken,
+              logger,
+              `${prefix}[update]`,
+            )
+          : empty;
+
+      for (const sk of plan.skipped) {
+        skippedRows.push([book.name, sk.extId, sk.product2Id, sk.reason]);
+      }
+      if (plan.skipped.length > 0) {
+        logger.warn(
+          `${prefix} ${plan.skipped.length} entr(ies) not sent — see the "PricebookEntry - Skipped" tab`,
+        );
+      }
+
+      const failed = created.failed + updated.failed;
       perBook.push({
         pricebook: book.name,
-        created: result.created,
-        failed: result.failed,
-        alreadyExisted: bookExisting,
+        created: created.processed - created.failed,
+        updated: updated.processed - updated.failed,
+        failed,
+        skipped: plan.skipped.length,
       });
-      pbeCreated += result.created;
-      pbeFailed += result.failed;
-      alreadyHadEntry += bookExisting;
-    }
-    if (noPriceExtIds.size > 0) {
-      logger.warn(
-        `[Purchase Inventory][PricebookEntry] ${noPriceExtIds.size} product(s) have no parseable Unit_Price — ` +
-          "no PricebookEntry created in any price book",
-      );
+      bookResults.push({
+        objectName: pricebookResultObjectName(book),
+        successfulCsv: mergeResultCsvs(
+          created.successfulCsv,
+          updated.successfulCsv,
+        ),
+        failedCsv: mergeResultCsvs(created.failedCsv, updated.failedCsv),
+      });
+      pbeCreated += created.processed - created.failed;
+      pbeUpdated += updated.processed - updated.failed;
+      pbeFailed += failed;
     }
 
-    // ── Results sheet (Product2 only — PricebookEntry has no Bulk CSVs) ──────
+    // ── Results sheet: Product2 + one tab pair per price book + Skipped ──────
     try {
       const sheet = await createPerObjectResultsSheet({
         flowName: "Purchase Inventory Import",
@@ -309,7 +571,21 @@ export const purchaseInventoryImport = flow({
             successfulCsv: productResult.successfulCsv,
             failedCsv: productResult.failedCsv,
           },
+          ...bookResults,
         ],
+        skipped:
+          skippedRows.length > 0
+            ? {
+                tabName: "PricebookEntry - Skipped",
+                headers: [
+                  "Price Book",
+                  "Inventory ID",
+                  "Product2Id",
+                  SKIP_REASON_COLUMN,
+                ],
+                rows: skippedRows,
+              }
+            : undefined,
         accessToken: gdToken,
         folderId: failedFolderId,
       });
@@ -326,7 +602,7 @@ export const purchaseInventoryImport = flow({
         perBook
           .map(
             (b) =>
-              `\n  PricebookEntry [${b.pricebook}] created: ${b.created}, failed: ${b.failed}, already existed: ${b.alreadyExisted}`,
+              `\n  PricebookEntry [${b.pricebook}] created: ${b.created}, updated: ${b.updated}, failed: ${b.failed}, skipped: ${b.skipped}`,
           )
           .join(""),
     );
@@ -337,8 +613,9 @@ export const purchaseInventoryImport = flow({
         productsProcessed: productResult.processed,
         productsFailed: productResult.failed,
         pricebookEntriesCreated: pbeCreated,
+        pricebookEntriesUpdated: pbeUpdated,
         pricebookEntriesFailed: pbeFailed,
-        pricebookEntriesAlreadyExisted: alreadyHadEntry,
+        pricebookEntriesSkipped: skippedRows.length,
         pricebookEntriesByPricebook: perBook,
       },
     };

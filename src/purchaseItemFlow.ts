@@ -12,9 +12,13 @@
  * (Prefixed so a later Registration OrderItem load can't collide with it.)
  *
  * Pre-flight caches (built once per window, before the Bulk job):
- *   - Product name → PricebookEntry Id (order price book). Item_Type is
- *     resolved by Product2.Name, as the workbook says ("Product2Id will need
- *     to be found by the name of the Product"). OrderItem takes the
+ *   - Product name → PricebookEntry Id (order price book, ACTIVE entries
+ *     only). Item_Type is resolved by Product2.Name, as the workbook says
+ *     ("Product2Id will need to be found by the name of the Product"). The
+ *     match ignores case and surrounding spaces (D01, 2026-11-11), so
+ *     "transcript" finds "Transcript"; two products whose names differ only
+ *     by case are ambiguous — the first wins and a warning is logged.
+ *     OrderItem takes the
  *     PricebookEntryId (which implies the Product2); Product2Id is derived by
  *     Salesforce and is not written.
  *   - Set of PUR-… Order External IDs that exist. A line whose parent Purchase
@@ -29,9 +33,10 @@
  *   - Extended_Amount → TotalPrice: OrderItem.TotalPrice is calculated
  *     (UnitPrice × Quantity) and not writable. Not mapped. (Extended_Amount is
  *     still compared to UnitPrice × Quantity and mismatches are logged.)
- *   - Item_Type (classification) → OrderItem.Type: Type is a restricted
- *     standard picklist, and the source value ("Transcript") is a product
- *     category, not a valid Type. Gated behind MAP_ORDER_ITEM_TYPE (off).
+ *   - OrderItem.Type: always "Order Product" (D01, 2026-11-11). Type is a
+ *     restricted standard picklist; the source "Item_Type (classification)"
+ *     ("Transcript") is a product category, not a valid Type, so it is not
+ *     mapped.
  *   - Description: OrderItem.Description is 255 chars; longer text is truncated.
  *   - Quantity must be > 0; zero/negative lines are skipped with a warning.
  *   - Ref_Table_Number: Do Not Map.
@@ -39,7 +44,8 @@
  * Skipped rows: every row not sent (and why) is written to a "Skipped" tab on
  * the results sheet — the source columns plus "Skip Reason".
  *
- * Windowed execution / TEST_MODE: same model as Registration; TEST_MODE is ON.
+ * Windowed execution / TEST_MODE: same model as Registration; TEST_MODE is OFF
+ * (full file) since D01, 2026-11-11.
  */
 
 import { flow, type Connection } from "@prismatic-io/spectral";
@@ -70,12 +76,51 @@ const FLOW_NAME = "Purchase Item Import";
 export const ORDER_ITEM_EXT_PREFIX = "PIT-";
 
 const MAX_ROWS = 25_000;
-const TEST_MODE = true;
+// OFF since D01 (2026-11-11). Set to true to load one window of TEST_LIMIT lines.
+export const TEST_MODE = false;
 const TEST_LIMIT = 50;
 const TEST_SKIP = 0;
 
-/** OrderItem.Type is a restricted picklist; see header. Flip on after a describe. */
-const MAP_ORDER_ITEM_TYPE = false;
+/** OrderItem.Type written on every line (standard restricted picklist value). */
+export const DEFAULT_ORDER_ITEM_TYPE = "Order Product";
+
+/** Product-name key used for the Item_Type → PricebookEntry match: trimmed, lower case. */
+export function normalizeProductName(name: string | undefined | null): string {
+  return str(name ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Builds the name → PricebookEntry Id cache from the query rows. Keys are
+ * normalised (see normalizeProductName). When two entries normalise to the
+ * same key the first is kept and the clash is returned, so the flow can log it.
+ * Pure — tested directly.
+ */
+export function buildPricebookEntryNameMap(
+  entries: { Id: string; Product2: { Name: string } | null }[],
+): { map: Map<string, string>; duplicates: string[] } {
+  const map = new Map<string, string>();
+  const duplicates: string[] = [];
+  for (const e of entries) {
+    const name = e.Product2?.Name;
+    if (!name) continue;
+    const key = normalizeProductName(name);
+    if (!key) continue;
+    if (map.has(key)) duplicates.push(name);
+    else map.set(key, e.Id);
+  }
+  return { map, duplicates };
+}
+
+/** SOQL for the order-price-book cache: active entries on migrated products only. */
+export function pricebookEntryCacheSoql(pricebookId: string): string {
+  return (
+    "SELECT Id, Product2.Name FROM PricebookEntry " +
+    `WHERE Pricebook2Id = '${pricebookId}' AND IsActive = true ` +
+    "AND Product2.External_ID_4D__c != null"
+  );
+}
 
 export interface RawPurchaseItemRow {
   ID?: string;
@@ -93,7 +138,7 @@ export interface RawPurchaseItemRow {
 }
 
 export interface PurchaseItemCaches {
-  /** Product2.Name → order-price-book PricebookEntry.Id */
+  /** normalizeProductName(Product2.Name) → active order-price-book PricebookEntry.Id */
   pricebookEntryByProductName: Map<string, string>;
   /** External IDs ("PUR-…") of Orders that exist in the org */
   existingOrderExtIds: Set<string>;
@@ -154,14 +199,16 @@ export function mapToOrderItem(
   }
 
   const itemType = str(raw.Item_Type).trim();
-  const pbeId = caches.pricebookEntryByProductName.get(itemType);
+  const pbeId = caches.pricebookEntryByProductName.get(
+    normalizeProductName(itemType),
+  );
   if (!pbeId) {
     skips.unmatchedProducts.set(
       itemType || "(blank)",
       (skips.unmatchedProducts.get(itemType || "(blank)") ?? 0) + 1,
     );
     return skip(
-      `No Product2.Name "${itemType || "(blank)"}" with an active entry in the order price book`,
+      `No Product2.Name "${itemType || "(blank)"}" (case-insensitive) with an active entry in the order price book`,
     );
   }
 
@@ -204,10 +251,8 @@ export function mapToOrderItem(
     PricebookEntryId: pbeId,
     UnitPrice: unitPrice,
     Quantity: quantity,
+    Type: DEFAULT_ORDER_ITEM_TYPE,
   };
-
-  const classification = str(raw["Item_Type (classification)"]).trim();
-  if (MAP_ORDER_ITEM_TYPE && classification) record.Type = classification;
 
   const description = str(raw.Description)
     .replace(/_4DNL_/g, "\n")
@@ -273,7 +318,7 @@ export const purchaseItemImport = flow({
       sfQueryAll<{ Id: string; Product2: { Name: string } | null }>(
         sfBase,
         sfToken,
-        `SELECT Id, Product2.Name FROM PricebookEntry WHERE Pricebook2Id = '${orderBook.id}' AND Product2.External_ID_4D__c != null`,
+        pricebookEntryCacheSoql(orderBook.id),
         logger,
       ),
       sfQueryAll<{ External_ID_4D__c: string }>(
@@ -283,23 +328,24 @@ export const purchaseItemImport = flow({
         logger,
       ),
     ]);
+    const nameMap = buildPricebookEntryNameMap(entries);
+    if (nameMap.duplicates.length > 0) {
+      logger.warn(
+        `[Purchase Item Import] ${nameMap.duplicates.length} product name(s) in "${orderBook.name}" match another ` +
+          `product when case is ignored — the first entry wins: ${nameMap.duplicates.slice(0, 10).join(", ")}`,
+      );
+    }
     const caches: PurchaseItemCaches = {
-      pricebookEntryByProductName: new Map(),
+      pricebookEntryByProductName: nameMap.map,
       existingOrderExtIds: new Set(orders.map((o) => o.External_ID_4D__c)),
     };
-    for (const e of entries) {
-      const name = e.Product2?.Name;
-      if (name && !caches.pricebookEntryByProductName.has(name)) {
-        caches.pricebookEntryByProductName.set(name, e.Id);
-      }
-    }
     logger.info(
       `[Purchase Item Import] Caches — products with an entry in "${orderBook.name}"=${caches.pricebookEntryByProductName.size}, ` +
         `PUR- orders=${caches.existingOrderExtIds.size}`,
     );
     if (caches.pricebookEntryByProductName.size === 0) {
       throw new Error(
-        `No Product2/PricebookEntry rows with External_ID_4D__c found in "${orderBook.name}" — ` +
+        `No active PricebookEntry on a Product2 with External_ID_4D__c found in "${orderBook.name}" — ` +
           "run Purchase Inventory Import first (with this price book in the Price Books config var).",
       );
     }

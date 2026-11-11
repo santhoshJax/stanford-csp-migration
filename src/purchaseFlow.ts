@@ -29,7 +29,8 @@
  * Purchase Item can attach OrderItems from that same book later.
  *
  * Windowed execution / TEST_MODE: identical model to registrationFlow.ts
- * (byte-offset cursor, MAX_ROWS per window, self-invoke). TEST_MODE is ON.
+ * (byte-offset cursor, MAX_ROWS per window, self-invoke). TEST_MODE is OFF
+ * (full file, all windows) since the Purchase Build Brief (D01, 2026-11-11).
  *
  * Differences from the workbook that the review flagged — each is a decision
  * for the architect, none is silent:
@@ -58,8 +59,11 @@
  *     workbook; not verified in UAT.
  *   - CC_Exp_Date: workbook says "Direct Map" into ExpiryMonth/ExpiryYear but
  *     the source is packed ("1020"); the Registration unpacking is reused.
- *   - Check_Amt, Reconciliation_ID, Student_Country: marked Direct Map with NO
- *     target in the workbook. Not mapped.
+ *   - Check_Amt → Order.Check_Amount__c (Purchase Build Brief D01,
+ *     2026-11-11). Parsed as currency; blank / unparseable is left unset.
+ *     Field existence on Order is an org check listed in the PR.
+ *   - Reconciliation_ID, Student_Country: marked Direct Map with NO target in
+ *     the workbook. Not mapped.
  *   - Order.BillToContact: not on this tab (it is on Registration). Not mapped.
  *   - Order.EffectiveDate (← Purchase_Date): required on Order. A row with no
  *     parseable Purchase_Date is out of scope.
@@ -112,7 +116,9 @@ const FLOW_NAME = "Purchase Import";
 export const PURCHASE_EXT_PREFIX = "PUR-";
 
 const MAX_ROWS = 25_000;
-const TEST_MODE = true; // process one window only, no self-invoke
+// OFF since D01 (2026-11-11): process the whole file, self-invoking per window.
+// Set to true to process one window of TEST_LIMIT records only.
+export const TEST_MODE = false;
 const TEST_LIMIT = 50;
 const TEST_SKIP = 0;
 
@@ -235,6 +241,7 @@ export interface RawPurchaseRow {
   CC_Transaction_ID_Date_Entered?: string;
   CC_Card_Type?: string;
   CC_Amt?: string;
+  Check_Amt?: string;
   Subtotal?: string;
   Balance_Due?: string;
   [key: string]: string | undefined;
@@ -257,7 +264,7 @@ function billingAddressFields(raw: RawPurchaseRow) {
 
 export function mapToCardPaymentMethod(
   raw: RawPurchaseRow,
-  unknownCardTypes: Map<string, number> = new Map(),
+  unknownCardTypes = new Map<string, number>(),
 ): SfRecord | null {
   const id = str(raw.ID).trim();
   if (!id) return null;
@@ -354,6 +361,10 @@ export function mapToOrder(
 
   const balanceDue = parseCurrency(raw.Balance_Due);
   if (balanceDue !== undefined) record.BalanceDue__c = balanceDue;
+
+  // Check_Amt → Check_Amount__c (D01). Only written when the source has a value.
+  const checkAmount = parseCurrency(raw.Check_Amt);
+  if (checkAmount !== undefined) record.Check_Amount__c = checkAmount;
 
   return record;
 }
