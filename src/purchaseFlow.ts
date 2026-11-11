@@ -56,7 +56,11 @@
  *     Registration used OrderReferenceNumber for the same source column — the
  *     two tabs disagree. Field is not among the ones verified in UAT.
  *   - CardPaymentMethod.GatewayDate (← CC_Transaction_ID_Date_Entered): per
- *     workbook; not verified in UAT.
+ *     workbook. GatewayDate is a DateTime field — UAT rejected a bare
+ *     "2024-10-14" with "not a valid value for the type xsd:dateTime"
+ *     (2026-11-11). The source has a date only, so it is sent as midnight
+ *     UTC ("2024-10-14T00:00:00.000Z"), the same convention as
+ *     RegistrationDateTime in the Enrollment flow.
  *   - CC_Exp_Date: workbook says "Direct Map" into ExpiryMonth/ExpiryYear but
  *     the source is packed ("1020"); the Registration unpacking is reused.
  *   - Check_Amt → Order.Check_Amount__c (Purchase Build Brief D01,
@@ -319,8 +323,10 @@ export function mapToCardPaymentMethod(
   const lastName = str(raw.CC_Billing_Last_Name);
   if (lastName) record.CardHolderLastName = lastName;
 
+  // GatewayDate is DateTime, not Date: a bare YYYY-MM-DD fails the Bulk
+  // load with "not a valid value for the type xsd:dateTime".
   const gatewayDate = toDate(raw.CC_Transaction_ID_Date_Entered);
-  if (gatewayDate) record.GatewayDate = gatewayDate;
+  if (gatewayDate) record.GatewayDate = `${gatewayDate}T00:00:00.000Z`;
 
   return record;
 }

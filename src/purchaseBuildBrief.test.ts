@@ -9,7 +9,11 @@
  * No network — axios is mocked where a helper calls Salesforce.
  */
 import axios from "axios";
-import { mapToOrder, TEST_MODE as PURCHASE_TEST_MODE } from "./purchaseFlow";
+import {
+  mapToCardPaymentMethod,
+  mapToOrder,
+  TEST_MODE as PURCHASE_TEST_MODE,
+} from "./purchaseFlow";
 import {
   buildPricebookEntryNameMap,
   DEFAULT_ORDER_ITEM_TYPE,
@@ -416,5 +420,27 @@ describe("C6 — TEST_MODE off", () => {
   });
   it("Purchase Item Import processes the full file", () => {
     expect(PURCHASE_ITEM_TEST_MODE).toBe(false);
+  });
+});
+
+// ── CardPaymentMethod.GatewayDate is DateTime ────────────────────────────────
+describe("CardPaymentMethod.GatewayDate", () => {
+  const card = { ID: "9001", CC_Card_Type: "Visa", CC_Last_Four: "1234" };
+
+  it("sends a full ISO DateTime, not a bare date (UAT xsd:dateTime error)", () => {
+    const rec = mapToCardPaymentMethod({
+      ...card,
+      CC_Transaction_ID_Date_Entered: "10/14/2024",
+    } as never);
+    expect(rec?.GatewayDate).toBe("2024-10-14T00:00:00.000Z");
+  });
+
+  it("leaves GatewayDate unset when the source date is blank", () => {
+    const rec = mapToCardPaymentMethod({
+      ...card,
+      CC_Transaction_ID_Date_Entered: "",
+    } as never);
+    expect(rec).not.toBeNull();
+    expect(rec).not.toHaveProperty("GatewayDate");
   });
 });
