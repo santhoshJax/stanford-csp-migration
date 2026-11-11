@@ -42,13 +42,13 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** at risk — Workbook updated with prefixes & mappings; 6 code changes + TEST_MODE switch still pending Build
+**Status:** at risk — Workbook finalized; PIT- prefix safe; 6 code changes + TEST_MODE ready for Build; org checks needed
 
 **Done this session**
-- Updated Purchase tab: External_ID_4D__c field API with PUR- prefix note
-- Updated Purchase Item tab: External_ID_4D__c with PIT- prefix note, Type default to Order Product, Item_Type case-insensitive match
-- Updated Purchase Inventory tab: External_ID_4D__c raw 4D ID, added PricebookEntry rows with STD-/no-prefix logic
-- Verified all workbook edits saved by read-back
+- Confirmed PIT- prefix has no collision with Registration flow prefixes (ENR-, ADJ-, FEE-, STAP-, DROP-)
+- Verified Registration uses Check_Amt → Check_Amount__c mapping; Purchase must copy this pattern
+- Confirmed Registration sets OrderItem.Type = 'Order Product' as constant; Purchase should match
+- Confirmed Registration filters PricebookEntry with IsActive=true AND Product2.Name match
 
 **Open items**
 - Code: Map Check_Amt to Check_Amount__c in mapToOrder
@@ -56,32 +56,31 @@
 - Code: Apply case-insensitive product name match and IsActive=true filter to PricebookEntry query
 - Code: Upsert PricebookEntry on External_ID_4D__c with success/failure tabs
 - Code: Switch TEST_MODE off in Purchase and Purchase Item flows
-- Verify: Registration flow OrderItem prefix to confirm PIT- collision avoidance
-- Decide: PricebookEntry external ID key format ({ID}-STD / {ID}-CSP) — blocks upsert refactor
-- Decide: Six workbook-flow decisions from prior session (Order Status, Subtotal, Check_Amt, Reconciliation_ID, Student_Country, OrderItem.Type, Ref_Table_Number, Payment_Type, Payment_Sub_Type, Freeze, negative Sales_Amount)
+- Org check: Confirm existing PricebookEntry records carry External_ID_4D__c field
+- Org check: Verify no duplicate product names between nine inventory items and course products
+- Org check: Test upsert behavior sending Product2Id and Pricebook2Id on existing entries
 
 **Decisions**
+- PricebookEntry external ID key format: {ID}-STD for standard, {ID}-CSP for CSP (no unprefixed fallback)
 - Keep site API names (StanfordContinuingStudies); change display name and URL path only
 - Move hardcoded portal URLs to CSP_Storefront_Base_URL label
 - Split ParticipantId into ParticipantContactId and ParticipantAccountId columns
 - Use real API names from org describe; ParticipationStatus replaces placeholder Status
-- CSV uses real 003 Contact IDs and 001 Account IDs (no fallback needed)
-- Update existing records in org rather than insert new ones (keep Id column in CSV)
-- Jason's hours consolidated to single workstream record per week
-- File prices will overwrite hand-edited prices in Salesforce (no hand-edit protection)
+- CSV uses real 003 Contact IDs and 001 Account IDs; update existing records, keep Id column
+- File prices overwrite hand-edited prices in Salesforce (no hand-edit protection)
 
 **Blockers**
-- PricebookEntry external ID key format undecided; blocks upsert refactor
-- Six workbook-flow decisions unmade; blocks accurate Build requirements
-- Workbook external ID format now documented but code changes still pending
+- Org access needed to verify existing PricebookEntry records have External_ID_4D__c populated
+- Org access needed to confirm no duplicate product names between inventory and course products
 
 **Next**
-- Build session: apply 6 code changes (Check_Amt, OrderItem.Type, name-match, PricebookEntry upsert, success/failure tabs, TEST_MODE off)
-- Verify Registration flow OrderItem prefix before full load
-- Test UAT with Product2Id and Pricebook2Id on existing entries
-- Confirm PricebookEntry key format decision with stakeholder
+- Build session: apply 6 code changes (Check_Amt mapping, OrderItem.Type default, case-insensitive name match, PricebookEntry upsert, success/failure tabs, TEST_MODE off)
+- Attach org to Build session for checks 1–4 (price entry fields, ID overlap, upsert behavior, duplicate names)
+- Verify Price Books setting still reads 'Standard Price Book,StanfordContinuingStudies Price Book'
+- Test UAT with real data files; check for scientific notation in large IDs and unexpected Item_Type values
+- Document in runbook: Purchase Item cannot add lines to Orders already activated by Purchase round 2
 
-**Checked live on 2026-11-11:** Google Workspace
+**Checked live on 2026-11-11:** the repository
 ### Last session — 2026-11-11
 | | |
 |---|---|
@@ -91,20 +90,26 @@
 | Name | Stanford-Data-Migration-Purchase-Inventory |
 | Session | `37d53c41-f101-4747-94db-b73400d5256e` |
 **In its own words (excerpt):**
-I wrote the workbook edits to the three tabs and read every changed cell back to confirm it saved. I changed no code, because this is a Review session. I did not touch the index tab or the Payments tab.
+The `PIT-` prefix is safe, and the confirmed price-entry key format settles the open decision. I changed nothing. I read the Registration flows and shared helpers on `stanford-csp-orchestrate`, in the clone at commit `409bdff`.
 
-## What changed in the workbook
+## PIT- and the Registration flow
 
-| Tab | Row | Change |
+Registration writes `OrderItem.External_ID_4D__c` with five prefixes of its own:
+
+| Flow | Prefix | Where |
 |---|---|---|
-| Purchase | 5, ID | Field API is now `External_ID_4D__c`, with the note that it loads as `PUR-<ID>`. |
-| Purchase | 8, Status | Map Type is now "Default Value": Draft, same as Registration. |
-| Purchase | 26, Subtotal | Map Type is now "Do Not Map", because TotalAmount is read-only and calculated from the Order Items. |
-| Purchase Item | 5, ID | Added the note that it loads as `PIT-<ID>`. |
-| Purchase Item | 7, Item_Type | Note now says it matches the product name, ignoring capitals, against active price entries in the StanfordContinuingStudies Price Book. OrderItem stores the PricebookEntryId. |
-| Purchase Item | 8, Type | Map Type is now "Default Value": Order Product, same as Registration. |
-| Purchase Item | 11, Extended_Amount | Map Type is now "Do Not Map", because TotalPrice is read-only and calculated. |
-| Purchase Inventory | 5, ID | Field API is now `External_ID_4D__c`, with the note that it uses the r
+| Registration Item (course lines) | `ENR-` | `registrationItemFlow.ts` |
+| Registration Item (adjustment lines) | `ADJ-` | `registrationItemFlow.ts` |
+| Registration (fee line) | `FEE-` | `registrationFlow.ts` |
+| Registration (STAP line) | `STAP-` | `registrationFlow.ts` |
+| Registration (drop line) | `DROP-` | `registrationFlow.ts` |
+| **Purchase Item** | **`PIT-`** | `purchaseItemFlow.ts` |
+
+None of the Registration prefixes is `PIT-`, so `PIT-` can't collide with them. A comment in `registrationItemFlow.ts` already notes that Purchase Item uses `PIT-` on the same object. That doubt is closed.
+
+## Other things the Registration flow settled
+
+- **Check_Amt:** Registration does `parseCurrency(raw.Check_Amt)` and writes `Check_Amount__c`. It does the same for `Check_No`, which goes to `Check_Number__c`.
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
