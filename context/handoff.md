@@ -42,12 +42,12 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** at risk — GatewayDate fix pushed; 18 Trevor questions identified (14 must-answer + 4 org-check); Prismatic publish & UAT checks still blocked
+**Status:** at risk — Purchase transaction ID mapping settled; code committed but not yet published to Prismatic. 17 Trevor questions remain open.
 
 **Done this session**
-- Extracted all open questions from import flow comments on stanford-csp-orchestrate branch
-- Identified 18 questions: 14 requiring Trevor approval, 4 requiring UAT org checks
-- Documented questions by category: discount/line handling, payment methods, field names, date cutoffs, other flows
+- Settled transaction ID field mapping: CC_Transaction_ID → Order.OrderReferenceNumber (question 8 resolved)
+- Committed and pushed Purchase change to stanford-csp-orchestrate branch (commit d905c5e)
+- Verified 193/198 tests pass; 5 Student Import failures pre-existing
 
 **Open items**
 - Publish branch to Prismatic: run npm run import and move UAT instance to new version
@@ -55,9 +55,8 @@
 - Org check: Verify no duplicate product names (case-insensitive) exist in UAT
 - Org check: Confirm StanfordContinuingStudies Price Book exists in UAT instance settings
 - Verify Student load has completed in UAT (Purchase needs Student_ID_4D__c)
-- Resolve PR #1 merge/close decision to separate Course Import and Purchase reviews
-- Re-run Purchase round 1 with card payment method rows only (after confirming update vs. insert behavior)
-- Send Trevor 14 must-answer questions: discount type mappings, STAP/drop/payment handling, check number field type, order type field, final order state, transaction ID mapping, purchase/payments cutoff date, payment field names, refund setu…
+- Test Purchase round 1 re-run on one order to confirm update vs. insert behavior before full reload
+- Send Trevor 17 must-answer questions (discount type mappings, STAP/drop/payment handling, check number field type, order type field, final order state, purchase/payments cutoff date, payment field names, refund setup, payment method creati…
 
 **Decisions**
 - Purchase cutoff is fixed 2024-10-06, not rolling two-year window
@@ -70,19 +69,19 @@
 - File prices overwrite hand-edited prices in Salesforce
 
 **Blockers**
-- Code not yet published to Prismatic; flows still run old version (bare date, not ISO 8601)
+- Code not yet published to Prismatic; UAT still runs old version (GatewayDate bare date, not ISO 8601; transaction ID in wrong field)
 - Org access needed to verify three pre-deploy checks (field existence, product name duplicates, price book setting)
-- Trevor must answer 14 open questions before UAT load can proceed
+- Trevor must answer 17 remaining open questions before UAT load can proceed
 
 **Next**
-- Format 14 must-answer questions for Trevor with Answer column (ready to send as Word doc or email)
 - Run npm run import to build and publish branch as new Prismatic integration version
 - Move UAT instance to the new Prismatic version
+- Test Purchase round 1 re-run on one order to confirm update vs. insert behavior
 - Run three org checks in UAT (field writability, product name duplicates, price book setting)
 - Confirm Student load completed in UAT
-- Test Purchase round 1 re-run on one order to confirm update vs. insert behavior before full reload
+- Send Trevor 17 must-answer questions formatted with Answer column
 
-**Checked live on 2026-11-11:** nothing — the status above is as recorded, not re-checked
+**Checked live on 2026-11-11:** the repository
 ### Last session — 2026-11-11
 | | |
 |---|---|
@@ -92,14 +91,21 @@
 | Name | Stanford-Data-Migration-Purchase-Related-build |
 | Session | `2cb154f7-df0b-4f6d-b07b-4304c80b818e` |
 **In its own words (excerpt):**
-I couldn't find the "14 questions" list from earlier written down anywhere: the project notes only name the topics. So I went through the comments in every import flow on `stanford-csp-orchestrate` (latest commit) and pulled out each question that is still open. I found 18. I left out anything the code marks as decided or confirmed.
+━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
+• Code committed: yes (branch stanford-csp-orchestrate)
+• Pushed to GitHub: yes
+• Validated (sf deploy validate): NOT verified
+• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
+Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## Must answer before the UAT load (Registration and Purchase orders)
+I've committed and pushed the change to `stanford-csp-orchestrate` as commit `d905c5e`, and GitHub shows it as the branch's latest commit. I didn't open a new PR, so it shows up in PR #1 along with the earlier Purchase commits.
 
-1. **Discount names that still load blank.** These source values match nothing in `Order.TA_Discount_Type__c`: `Century Club`, `Staff, No STAP`, `Other`, `Pro-Rated Late Add`, `Financial Aid`, `Post-Doc`. For each one, should it go to an existing value or a new picklist value? For `Century Club`, should it be V1 or V2?
-2. **STAP line.** We use `Discount_Amt` exactly as the file signs it (for example −415 on 592436117 and +610 on drop 592436118), on a product named "STAP". Is that the right column and the right product?
-3. **Drop line.** A drop Order's line amount is `Courses_Subtotal`. Is that the right column?
-4. **Registrations paid by cash, check or SNAP.** These rows have no card details, but we still create a CardPaymentMethod for every registration. Should we skip it for these
+**What changed:** Purchase now loads `CC_Transaction_ID` into `Order.OrderReferenceNumber`, the same field Registration uses. It no longer writes `Payment_Transaction_Id__c`. If the source value is blank, the field is left out.
+
+**Tests:** 193 of 198 pass, including the 2 new ones for this mapping, and the type check passes. The 5 failures are the same Student Import tests that were failing before; this change didn't cause them.
+
+**This settles question 8** on the Trevor list (whic
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
