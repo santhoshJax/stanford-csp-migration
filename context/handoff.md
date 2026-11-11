@@ -41,66 +41,67 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-11-10
-**Status:** at risk — Code complete; UAT setup blocked on 11 config items + price book verification. Session clarified product requirements.
+### Engagement state — 2026-11-11
+**Status:** on track — Purchase Inventory flow reviewed; no changes made. Screen recording still unprocessable; awaiting decision on next steps.
 
 **Done this session**
-- Clarified that Registration Fee, STAP, and Course Drop products need $0 price in both Standard and StanfordContinuingStudies price books
-- Confirmed product names must match exactly (spelling and capitals) in UAT config boxes
+- Reviewed purchaseInventoryFlow.ts and commerceShared.ts; documented flow logic, prerequisites, and known risks
 
 **Open items**
-- Admin: create STAP product in UAT with $0 price, active status in both price books
-- Admin: create Course Drop product in UAT with $0 price, active status in both price books
-- Admin: create Registration Fee product in UAT with $0 price, active status in both price books
-- Verify Order.Prior_Registration__c lookup field exists on Order in UAT
-- Verify Order.BalanceDue__c field exists in UAT
-- Create Payment.Transcript_Request__c lookup to CSP_Transcript_Request__c
-- Mark External_ID_4D__c as External ID on PaymentGroup and Refund
-- Verify Product2.External_ID_4D__c exists and is marked as External ID in UAT
+- Team: attempt CSV load to UAT; report FIELD_INTEGRITY_EXCEPTION or duplicate rule errors
+- Team: confirm Grade_Option__c picklist labels match CSV values (Letter Grade, CR/NC, NGR, blank)
+- Admin: verify/create Order.Prior_Registration__c, Order.BalanceDue__c, Payment.Transcript_Request__c lookups in UAT
+- Admin: mark External_ID_4D__c as External ID on PaymentGroup, Refund, Product2
+- Admin: create STAP, Course Drop, Registration Fee products in UAT ($0 price, both price books)
+- Dev: refactor section 1a code to use CSP_Storefront_Base_URL label
+- Confirm: delete 12 zeroed Hypercare - Stan:ContEd records or leave as-is
+- Obtain usable content from 2026-11-09 screen recording (wait, describe, screenshots, or re-record with narration)
 
 **Decisions**
-- Flow run order: Student → Courses → Transcript Request → Purchase Inventory → Registration R1 (Draft) → Registration Item → Registration R2 (Activate) → Purchase flows → Payments
-- STAP and Course Drop products use $0 price; UnitPrice overridden by file data
-- Payments Import is sole payment source; Registration/Purchase no longer create Payment/Refund
-- Prior_Registration__c filled in round 1 if prior Order exists; round 2 backfills missing
-- BalanceDue__c is unified balance field across Registration and Purchase
-- Purchase Inventory prices only added if not already present; price updates require manual intervention
-- StanfordContinuingStudies Price Book is the order price book; all order line items must use prices from this book
+- Keep site API names (StanfordContinuingStudies); change display name and URL path only
+- Move hardcoded portal URLs to CSP_Storefront_Base_URL label
+- Split ParticipantId into ParticipantContactId and ParticipantAccountId columns
+- Use real API names from org describe; ParticipationStatus replaces placeholder Status
+- CSV uses real 003 Contact IDs and 001 Account IDs (no fallback needed)
+- Update existing records in org rather than insert new ones (keep Id column in CSV)
+- Jason's hours consolidated to single workstream record per week (not split evenly)
 
 **Blockers**
-- STAP, Course Drop, and Registration Fee products not yet created in UAT
-- Required fields (Prior_Registration__c, BalanceDue__c, Transcript_Request__c, External_ID_4D__c) not yet verified/created in UAT
-- Product2.External_ID_4D__c not yet verified as External ID in UAT
-- StanfordContinuingStudies Price Book not verified to exist and be active in UAT
-- TEST_MODE still on in commerce flows
+- Grade_Option__c picklist labels unconfirmed against org schema
+- Duplicate rule on student + offering may block CSV load if active
+- Required UAT fields (Prior_Registration__c, BalanceDue__c, Transcript_Request__c, External_ID_4D__c) not yet verified/created
+- Screen recording (2026-11-09) unprocessable; no transcript or usable content extracted
 
 **Next**
-- Admin: create STAP, Course Drop, and Registration Fee products in UAT with exact names, $0 price, active status in both Standard and StanfordContinuingStudies price books
-- Admin: verify StanfordContinuingStudies Price Book exists and is active in UAT
-- Admin: verify/create Order.Prior_Registration__c, Order.BalanceDue__c, Payment.Transcript_Request__c lookups
-- Admin: mark External_ID_4D__c as External ID on PaymentGroup, Refund, and Product2
-- Run test import in UAT with test mode on to validate setup
-- Turn off TEST_MODE in commerce flows when ready for full load
+- Decide on screen recording: wait for reprocessing, describe content, share screenshots, or re-record with narration
+- Team: attempt CSV load to UAT; report any errors to unblock field confirmation
+- Admin: complete UAT product and field setup in parallel with CSV load attempt
+- Team: confirm Grade_Option__c picklist labels from Setup → Object Manager → Course Offering Participant
 
-**Checked live on 2026-11-10:** nothing — the status above is as recorded, not re-checked
-### Last session — 2026-11-10
+**Checked live on 2026-11-11:** the repository
+### Last session — 2026-11-11
 | | |
 |---|---|
-| Type | BUILD |
+| Type | REVIEW |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Registration-Enhancements- Build |
-| Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
+| Name | Stanford-Data-Migration-Purchase-Inventory |
+| Session | `37d53c41-f101-4747-94db-b73400d5256e` |
 **In its own words (excerpt):**
-Each of the three boxes takes the **exact name of a Salesforce product** (`Product2.Name`) that already exists in UAT. Nothing else goes in them: no IDs and no prices.
+I read the flow in `src/purchaseInventoryFlow.ts` on branch `stanford-csp-orchestrate`, plus the shared helpers it calls in `src/commerceShared.ts`. I changed nothing.
 
-| Box | What to enter | Why it's needed |
-|---|---|---|
-| **Registration Fee Product** | `Registration Fee`, or whatever the fee product is called in UAT | Each registration with a fee gets a fee line on its Order, such as $35. Salesforce won't create a line without a product, so this tells the import which product to use. |
-| **STAP Product** | `STAP` | Each STAP registration gets a discount line, such as −$415, or +$610 on a drop. This names the product for that line. |
-| **Course Drop Product** | `Course Drop` | A drop Order with no enrollment row gets a drop line, such as −$610. The import first tries the original course's product. It only uses this product when it can't find exactly one course. |
+## What it does, in plain words
 
-**Why a product at all:** in Salesforce, every line on an Order has to point to a product that has an active price in the Order's price book. These three products just label what kind of line it is. The amount on each line comes from the file (`Reg_Fee`, `Discount_Amt`, `Courses_Subtotal`), so the price you give the p
+Purchase Inventory is 4D's menu of things a student can buy, such as Transcript, Manuscript Surcharge, Registration Fee or Course Drop. This flow turns that menu into products and prices in Salesforce. The Purchase Item import later uses those products to attach "what was bought" to each order.
+
+**Step 0: Read the file.** It reads the Purchase Inventory TSV from Google Drive (the "Purchase Inventory File ID" setting). The file is only a few dozen rows, so it is processed in a single pass.
+
+**Step 1: Check the setup before writing anything.**
+- It looks up the price books named in the "Price Books" setting. The Standard Price Book is always included and is loaded first.
+- If a named price book doesn't exist or isn't active, the run stops before any data is written. That avoids a half-finished load.
+- Per the handoff notes, the other book here is "StanfordContinuingStudies Price Book".
+
+**Step 2: Create or update the products (Product2).** Each row becomes one product, matched on `Exte
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
