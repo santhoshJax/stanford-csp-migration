@@ -42,22 +42,20 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** at risk — Purchase code committed & pushed; org checks & deploy still needed before load can run
+**Status:** at risk — Purchase code committed & pushed; Prismatic publish & three org checks needed before load can run
 
 **Done this session**
-- Committed six Purchase fixes to stanford-csp-orchestrate (ce43697): Check_Amount__c mapping, OrderItem.Type default, case-insensitive product match, PricebookEntry upsert on External_ID_4D__c, success/failure tabs, TEST_MODE off
-- Added unit tests for all six changes; 189 of 194 tests pass (5 pre-existing Student Import failures unrelated)
-- Pushed to GitHub; commit now visible in open PR #1
+- Confirmed code committed to stanford-csp-orchestrate (ce43697) and pushed to GitHub
 
 **Open items**
-- Code: Validate deploy (sf deploy validate) before shipping
-- Code: Resolve PR #1 merge/close decision to avoid mixing Course Import and Purchase reviews
-- Org check: Confirm existing PricebookEntry records have External_ID_4D__c populated
-- Org check: Verify no duplicate product names (case-insensitive) between nine inventory items and course products
-- Org check: Confirm Check_Amount__c and External_ID_4D__c fields exist and are writable
-- Deploy: Run Deploy session to ship code to UAT org
-- Load: Run Purchase load against UAT after deploy and org checks pass
-- Sheet: Fill SA Reviewed By and Script Status columns on all three tabs
+- Publish branch to Prismatic: run npm run import and move UAT instance to new version
+- Org check: Confirm Check_Amount__c on Order and External_ID_4D__c on Product2/PricebookEntry exist and are writable
+- Org check: Verify no duplicate product names (case-insensitive) exist in UAT
+- Org check: Confirm StanfordContinuingStudies Price Book exists in UAT instance settings
+- Verify Student load has completed in UAT (Purchase needs Student_ID_4D__c)
+- Resolve PR #1 merge/close decision to separate Course Import and Purchase reviews
+- Run Purchase load sequence in UAT after Prismatic publish and org checks pass
+- Fill SA Reviewed By and Script Status columns on all three sheet tabs
 
 **Decisions**
 - Purchase cutoff is fixed 2024-10-06, not rolling two-year window
@@ -70,19 +68,18 @@
 - File prices overwrite hand-edited prices in Salesforce
 
 **Blockers**
-- Org access needed to verify PricebookEntry External_ID_4D__c is populated and writable
-- Org access needed to confirm no duplicate product names (case-insensitive) exist
-- PR #1 (Course Import) is open on same branch; merge or close before separate Purchase review
+- Code not yet published to Prismatic; flows still run old version
+- Org access needed to verify three pre-deploy checks (field existence, product name duplicates, price book setting)
 
 **Next**
-- Resolve PR #1: merge to main or close, then open new PR for Purchase work alone
-- Run sf deploy validate on stanford-csp-orchestrate branch
-- Attach UAT org and run Deploy session to ship Purchase code
-- In UAT org, run three pre-deploy org checks (External_ID_4D__c, product name duplicates, field writability)
-- Run Purchase load in UAT after deploy and org checks pass
-- Fill SA Reviewed By and Script Status columns on all three sheet tabs
+- Run npm run import to build and publish branch as new Prismatic integration version
+- Move UAT instance to the new Prismatic version
+- Run three org checks in UAT (field writability, product name duplicates, price book setting)
+- Confirm Student load completed in UAT
+- Run Purchase load sequence: Inventory → Purchase round 1 → Item → Purchase round 2
+- Resolve PR #1 (merge or close) to enable separate Purchase code review
 
-**Checked live on 2026-11-11:** the repository
+**Checked live on 2026-11-11:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-11
 | | |
 |---|---|
@@ -92,21 +89,17 @@
 | Name | Stanford-Data-Migration-Purchase-Related-build |
 | Session | `2cb154f7-df0b-4f6d-b07b-4304c80b818e` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch stanford-csp-orchestrate)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**Not yet.** The code is on GitHub, but the purchase flows run from the integration in Prismatic, and that integration doesn't have the new code yet. If you run them now you get the old behaviour: test mode on, no `Check_Amount__c`, an exact-case product match, and price entries that are never updated on a re-run.
 
-I committed and pushed the Purchase changes to `stanford-csp-orchestrate` as commit `ce43697`, and confirmed it's on GitHub. I didn't open a new PR. But PR #1 (Course Import correction mode) is already open from this branch, so this commit now shows up in PR #1 too. If you want the Purchase work reviewed on its own, merge or close PR #1 first.
+**Before you run:**
+1. **Publish the branch to Prismatic.** Run `npm run import`, which builds the code and imports it as a new integration version. Then move the UAT instance to that version. Nothing has been published yet.
+2. **Do three quick checks in UAT.** I couldn't run these because this session has no org attached:
+   - `Check_Amount__c` on Order and `External_ID_4D__c` on Product2 and PricebookEntry exist, and the integration user can edit them.
+   - No two products have names that differ only by capitalisation. If two do, Purchase Item uses whichever it finds first and logs a warning.
+   - The instance's "Price Books" setting lists `StanfordContinuingStudies Price Book`.
 
-**What's in the commit:** six files covering the six changes:
-- the check amount is now saved on the order
-- order lines get the type "Order Product"
-- product names match regardless of capitalisation, using only active prices
-- price entries are matched on keys `STD-{ID}` (Standard) and `{ID}` (StanfordContinuingStudies), so a re-run updates them instead of adding 
+   You don't need to fill in keys on existing price entries yourself. Purchase Inventory gives an entry its `STD-{ID}` / `{ID}` key on the first run.
+3. **Make sure Student has been loaded.** 
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
