@@ -42,12 +42,11 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** at risk — Purchase cutoff date confirmed as fixed 2024-10-06, not rolling 2yr. Awaiting client decision on exact cutoff.
+**Status:** at risk — Cutoff date 2024-10-06 documented on sheet. Awaiting client confirmation & Build session start with UAT org.
 
 **Done this session**
-- Confirmed Purchase flow uses fixed cutoff date 2024-10-06, not rolling two-year window
-- Verified cutoff is shared with Registration and Payments flows
-- Identified assumption: Purchase_Date used without architect confirmation of no cutoff column
+- Added Purchase_Date cutoff rule (2024-10-06, fixed not rolling) to sheet Conversion Logic cell
+- Verified cutoff saved on Purchase tab
 
 **Open items**
 - Code: Map Check_Amt to Check_Amount__c in mapToOrder
@@ -60,6 +59,7 @@
 - Sheet: Fill SA Reviewed By and Script Status columns on all three tabs
 
 **Decisions**
+- Purchase cutoff is fixed 2024-10-06, not rolling two-year window; shared with Registration and Payments
 - PricebookEntry external ID key format: STD-{ID} for Standard, {ID} for StanfordContinuingStudies
 - Keep site API names (StanfordContinuingStudies); change display name and URL path only
 - Move hardcoded portal URLs to CSP_Storefront_Base_URL label
@@ -67,22 +67,21 @@
 - Use real API names from org describe; ParticipationStatus replaces placeholder Status
 - CSV uses real 003 Contact IDs and 001 Account IDs; update existing records, keep Id column
 - File prices overwrite hand-edited prices in Salesforce (no hand-edit protection)
-- Check_Number__c is not loaded (no Check_No column in source)
 
 **Blockers**
 - Org access needed to verify existing PricebookEntry records have External_ID_4D__c populated
 - Org access needed to confirm no duplicate product names between inventory and course products
 - UAT org must be attached to Build session for five pre-build checks to run
-- Client decision required: confirm 2024-10-06 cutoff or provide exact date (affects Purchase, Registration, Payments)
+- Client decision required: confirm 2024-10-06 cutoff is correct or provide exact date if rolling two-year window needed
 
 **Next**
-- Obtain client decision on whether 2024-10-06 is correct cutoff or if exact two-year rolling window is required
-- If cutoff changes, update COMMERCE_TWO_YEAR_CUTOFF constant in commerceShared.ts (one-line change)
-- Add confirmed cutoff rule to Purchase_Date Conversion Logic cell on sheet
-- Verify CC_Transaction_ID mapping against Registration flow
-- Start Build session with UAT org attached for five pre-build checks
+- Obtain final client decision on 2024-10-06 cutoff (if rolling window required, note exact start date)
+- Start Build session: select Build type, repo santhoshJax/stanford-csp-migration, branch stanford-csp-orchestrate, attach UAT org
+- In Build session, paste Purchase Build Brief (D01) goal and request five pre-build org checks
+- Fill SA Reviewed By and Script Status columns on all three sheet tabs
+- Verify CC_Transaction_ID mapping against Registration flow before Build runs
 
-**Checked live on 2026-11-11:** the repository
+**Checked live on 2026-11-11:** Google Workspace
 ### Last session — 2026-11-11
 | | |
 |---|---|
@@ -92,19 +91,25 @@
 | Name | Stanford-Data-Migration-Purchase-Inventory |
 | Session | `37d53c41-f101-4747-94db-b73400d5256e` |
 **In its own words (excerpt):**
-Yes. The Purchase flow cuts on `Purchase_Date`, but the cutoff is a fixed date, not a rolling two years. I read `purchaseFlow.ts` and `commerceShared.ts` on `stanford-csp-orchestrate` to confirm. I changed nothing.
+I added the 2024-10-06 cutoff to the sheet and read the cell back to confirm it saved. I changed no code.
 
-## The rule in the code
+## What I wrote
 
-- **Cutoff date:** `COMMERCE_TWO_YEAR_CUTOFF = "2024-10-06"`. A row is loaded only if `Purchase_Date` is on or after that date.
-- **Rows dropped:** a row with no parseable `Purchase_Date`, or one before the cutoff, is counted as `filteredOut(2yr scope)` in the log. It is not loaded.
-- **Source of the date:** it is the same fixed date Registration uses, from an architect decision on 2026-10-06. So Purchase and Registration are cut at the same point.
-- **Assumption in the code:** the code comment says the Purchase tab has no cutoff column. Using `Purchase_Date` is an assumption that was never confirmed with the architect.
+On the **Purchase** tab, the Purchase_Date row (row 7) now has this in Conversion Logic: only rows with `Purchase_Date` on or after 2024-10-06 are loaded. It is a fixed cutoff shared with Registration and Payments, not a rolling two years, and earlier rows are filtered out. The note about blank dates is kept.
 
-## What this means
+Nothing in the code changes, since the flow already uses that date.
 
-- **Not a rolling window:** today is 2026-11-11, so a true two-year window would start about 2024-11-11. This cutoff is about five weeks earlier. If the client wants exactly two years back from the load date, the constant needs changing.
-- **Purchase Item:** it has no date filter of its own. It looks up the O
+## How to start a Build session
+
+I can't start one from inside this Review session. You start it yourself from the web app, the same place you started this one.
+
+1. Open **New session** and choose the **Build** type.
+2. Select the repository `santhoshJax/stanford-csp-migration`.
+3. Set the working branch to `stanford-csp-orchestrate`. The code changes should go on that branch, not on `main`.
+4. Attach the **UAT org** on the new-session form. Without it, the five pre-build checks can't run.
+5. Paste the goal: ask it to implement the Purchase Build Brief (D01) and to run the five pre-build org checks first. You can attach D01 or paste its contents.
+
+The Build session will show you its pla
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
