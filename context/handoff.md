@@ -42,13 +42,12 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** at risk — Workbook finalized; PIT- prefix safe; 6 code changes + TEST_MODE ready for Build; org checks needed
+**Status:** at risk — Build brief complete; 9 code changes + 5 UAT checks ready; org access needed for pre-build verification
 
 **Done this session**
-- Confirmed PIT- prefix has no collision with Registration flow prefixes (ENR-, ADJ-, FEE-, STAP-, DROP-)
-- Verified Registration uses Check_Amt → Check_Amount__c mapping; Purchase must copy this pattern
-- Confirmed Registration sets OrderItem.Type = 'Order Product' as constant; Purchase should match
-- Confirmed Registration filters PricebookEntry with IsActive=true AND Product2.Name match
+- Build brief written with settled decisions, 9 code changes, 5 UAT checks, and runbook notes
+- PIT- prefix collision risk closed; confirmed no overlap with Registration prefixes (ENR-, ADJ-, FEE-, STAP-, DROP-)
+- Check_Amt mapping pattern confirmed from Registration flow (Check_Amt → Check_Amount__c)
 
 **Open items**
 - Code: Map Check_Amt to Check_Amount__c in mapToOrder
@@ -61,7 +60,7 @@
 - Org check: Test upsert behavior sending Product2Id and Pricebook2Id on existing entries
 
 **Decisions**
-- PricebookEntry external ID key format: {ID}-STD for standard, {ID}-CSP for CSP (no unprefixed fallback)
+- PricebookEntry external ID key format: STD-{ID} for Standard, {ID} for StanfordContinuingStudies
 - Keep site API names (StanfordContinuingStudies); change display name and URL path only
 - Move hardcoded portal URLs to CSP_Storefront_Base_URL label
 - Split ParticipantId into ParticipantContactId and ParticipantAccountId columns
@@ -72,15 +71,17 @@
 **Blockers**
 - Org access needed to verify existing PricebookEntry records have External_ID_4D__c populated
 - Org access needed to confirm no duplicate product names between inventory and course products
+- UAT org must be attached to Build session for five pre-build checks to run
 
 **Next**
-- Build session: apply 6 code changes (Check_Amt mapping, OrderItem.Type default, case-insensitive name match, PricebookEntry upsert, success/failure tabs, TEST_MODE off)
-- Attach org to Build session for checks 1–4 (price entry fields, ID overlap, upsert behavior, duplicate names)
-- Verify Price Books setting still reads 'Standard Price Book,StanfordContinuingStudies Price Book'
+- Start Build session with UAT org attached
+- Apply 9 code changes (Check_Amt mapping, OrderItem.Type default, case-insensitive name match, PricebookEntry upsert, success/failure tabs, TEST_MODE off)
+- Run 5 pre-build checks in org (price entry fields, ID overlap, upsert behavior, duplicate names, Price Books setting)
+- Obtain client decision on Check_No → Check_Number__c mapping
 - Test UAT with real data files; check for scientific notation in large IDs and unexpected Item_Type values
 - Document in runbook: Purchase Item cannot add lines to Orders already activated by Purchase round 2
 
-**Checked live on 2026-11-11:** the repository
+**Checked live on 2026-11-11:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-11
 | | |
 |---|---|
@@ -90,26 +91,18 @@
 | Name | Stanford-Data-Migration-Purchase-Inventory |
 | Session | `37d53c41-f101-4747-94db-b73400d5256e` |
 **In its own words (excerpt):**
-The `PIT-` prefix is safe, and the confirmed price-entry key format settles the open decision. I changed nothing. I read the Registration flows and shared helpers on `stanford-csp-orchestrate`, in the clone at commit `409bdff`.
+The Build brief is written, and the deliverable has been attached to this session as **D01 – Purchase Build Brief**. I changed no code, the repository, or the org.
 
-## PIT- and the Registration flow
+The brief contains:
+- The settled decisions, including the price-entry key format (`STD-{ID}` for Standard, `{ID}` for StanfordContinuingStudies).
+- Nine code changes across the Purchase Inventory, Purchase and Purchase Item flows, plus the tests for them.
+- Five checks to run in UAT before the build.
+- Run notes for the runbook.
+- The workbook items still open and the acceptance criteria.
 
-Registration writes `OrderItem.External_ID_4D__c` with five prefixes of its own:
+Two things need your input:
+- **Check_No:** Registration also loads `Check_No` into `Check_Number__c`. The workbook doesn't say whether Purchase should. I flagged it in the brief as a question for the client.
+- **Org for the Build session:** Attach the UAT org when you start it, or the five pre-build checks can't run.
 
-| Flow | Prefix | Where |
-|---|---|---|
-| Registration Item (course lines) | `ENR-` | `registrationItemFlow.ts` |
-| Registration Item (adjustment lines) | `ADJ-` | `registrationItemFlow.ts` |
-| Registration (fee line) | `FEE-` | `registrationFlow.ts` |
-| Registration (STAP line) | `STAP-` | `registrationFlow.ts` |
-| Registration (drop line) | `DROP-` | `registrationFlow.ts` |
-| **Purchase Item** | **`PIT-`** | `purchaseItemFlow.ts` |
-
-None of the Registration prefixes is `PIT-`, so `PIT-` can't collide with them. A comment in `registrationItemFlow.ts` already notes that Purchase Item uses `PIT-` on the same object. That doubt is closed.
-
-## Other things the Registration flow settled
-
-- **Check_Amt:** Registration does `parseCurrency(raw.Check_Amt)` and writes `Check_Amount__c`. It does the same for `Check_No`, which goes to `Check_Number__c`.
-
-_[summary truncated — see the session record for the full text]_
+Sources: engagement context (`context/handoff.md`, session records) · checked live: nothing this turn · not checked: repository, org, workbook.
 <!-- orchestrate:session-state:end -->
