@@ -42,13 +42,10 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** on track — Purchase Inventory flow confirmed; price book logic and prerequisites documented. No changes made.
+**Status:** blocked — I changed nothing.
 
 **Done this session**
-- Reviewed purchaseInventoryFlow.ts and commerceShared.ts flow logic in detail
-- Confirmed flow loads to Standard + StanfordContinuingStudies Price Book (no course offering involved)
-- Documented price book resolution, load order, and existing-entry skip behavior
-- Identified what to verify in deployed instance: setting value, exact name match, active status, org automation
+- I changed nothing. Here are the six points, checked against `purchaseInventoryFlow.ts` and `purchaseItemFlow.ts` on the `stanford-csp-orchestrate` branch. ## 1. Why prices never update on re-run This is a limitation of how the flow was bui…
 
 **Open items**
 - Team: attempt CSV load to UAT; report FIELD_INTEGRITY_EXCEPTION or duplicate rule errors
@@ -92,26 +89,20 @@
 | Name | Stanford-Data-Migration-Purchase-Flows |
 | Session | `37d53c41-f101-4747-94db-b73400d5256e` |
 **In its own words (excerpt):**
-The flow already loads into both books, and the custom one is **"StanfordContinuingStudies Price Book"**. I changed nothing.
+I changed nothing. Here are the six points, checked against `purchaseInventoryFlow.ts` and `purchaseItemFlow.ts` on the `stanford-csp-orchestrate` branch.
 
-## Where the custom book comes from
+## 1. Why prices never update on re-run
+This is a limitation of how the flow was built. It isn't a business rule.
+- The code comment says the workbook gives PricebookEntry no External ID. Product2 has `External_ID_4D__c`, so it can be upserted. PricebookEntry has no such key, so the flow can only insert it.
+- On a re-run the flow queries each price book first. If the product already has an entry there, it skips it. That avoids duplicate-entry errors, but it also means a changed price in the file is ignored.
+- A skip is not a conflict. The price could be updated by looking up the existing entry's Id and sending an update. That is not written today.
 
-The name isn't typed into the flow's code. `purchaseInventoryFlow.ts` reads it from a shared setting called **Price Books**. That setting is defined on the Course Configuration page in `src/configPages.ts`, and its default value is:
+If you want prices to follow the file, I can add an update step for existing entries. The catch is that it would overwrite any price someone edited by hand in Salesforce. Do you want that, or should hand edits win?
 
-`Standard Price Book,StanfordContinuingStudies Price Book`
+## 2 and 3. Order of runs and the UAT prerequisite
+Noted. Purchase Inventory runs before Purchase Item Import, and `External_ID_4D__c` already exists on Product2 in UAT.
 
-## How the flow uses it
 
-1. It reads the Price Books setting and looks up each name in Salesforce (`resolveConfiguredPricebooks` in `commerceShared.ts`).
-2. It always adds the Standard Price Book first. Salesforce won't allow an entry in a custom book until the product has a Standard entry.
-3. It allows at most one custom book. If you list two, the run stops before writing anything.
-4. If a listed name doesn't exist or is inactive, the run also stops before writing anything.
-5. The load order is Standard, then StanfordContinuingStudies Price Book.
-6. For every product, it creates one price entry in each of those two books, using the price from the file.
-
-## Against your requirement
-
-- **Two books, Standard plus StanfordContinuingStud
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
