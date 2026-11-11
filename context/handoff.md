@@ -42,13 +42,12 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** at risk — Code complete & pushed with GatewayDate fix; Prismatic publish + org checks + Trevor Q&A still needed before UAT load
+**Status:** at risk — GatewayDate fix pushed; 18 Trevor questions identified (14 must-answer + 4 org-check); Prismatic publish & UAT checks still blocked
 
 **Done this session**
-- Fixed GatewayDate to send ISO 8601 datetime (2024-10-14T00:00:00.000Z) instead of bare date
-- Added GatewayDate tests (191 of 196 pass; 5 pre-existing Student Import failures remain)
-- Committed fix to stanford-csp-orchestrate branch and pushed to GitHub
-- Documented GatewayDate gotcha in project notes
+- Extracted all open questions from import flow comments on stanford-csp-orchestrate branch
+- Identified 18 questions: 14 requiring Trevor approval, 4 requiring UAT org checks
+- Documented questions by category: discount/line handling, payment methods, field names, date cutoffs, other flows
 
 **Open items**
 - Publish branch to Prismatic: run npm run import and move UAT instance to new version
@@ -58,7 +57,7 @@
 - Verify Student load has completed in UAT (Purchase needs Student_ID_4D__c)
 - Resolve PR #1 merge/close decision to separate Course Import and Purchase reviews
 - Re-run Purchase round 1 with card payment method rows only (after confirming update vs. insert behavior)
-- Trevor approval: 14 questions on Century Club versions, discount type mappings, course+fee pricing, date filters, course codes, adjustment/STAP/drop handling, order type field, historical order state, payment field names, check number type
+- Send Trevor 14 must-answer questions: discount type mappings, STAP/drop/payment handling, check number field type, order type field, final order state, transaction ID mapping, purchase/payments cutoff date, payment field names, refund setu…
 
 **Decisions**
 - Purchase cutoff is fixed 2024-10-06, not rolling two-year window
@@ -76,15 +75,14 @@
 - Trevor must answer 14 open questions before UAT load can proceed
 
 **Next**
+- Format 14 must-answer questions for Trevor with Answer column (ready to send as Word doc or email)
 - Run npm run import to build and publish branch as new Prismatic integration version
 - Move UAT instance to the new Prismatic version
 - Run three org checks in UAT (field writability, product name duplicates, price book setting)
 - Confirm Student load completed in UAT
 - Test Purchase round 1 re-run on one order to confirm update vs. insert behavior before full reload
-- Re-run Purchase round 1 with card payment method rows only
-- Send Trevor the 14 questions for approval
 
-**Checked live on 2026-11-11:** the repository
+**Checked live on 2026-11-11:** nothing — the status above is as recorded, not re-checked
 ### Last session — 2026-11-11
 | | |
 |---|---|
@@ -94,21 +92,14 @@
 | Name | Stanford-Data-Migration-Purchase-Related-build |
 | Session | `2cb154f7-df0b-4f6d-b07b-4304c80b818e` |
 **In its own words (excerpt):**
-━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
-• Code committed: yes (branch stanford-csp-orchestrate)
-• Pushed to GitHub: yes
-• Validated (sf deploy validate): NOT verified
-• Deployed to org: no deploy in this session run — if an earlier run deployed, verify in the target org
-Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+I couldn't find the "14 questions" list from earlier written down anywhere: the project notes only name the topics. So I went through the comments in every import flow on `stanford-csp-orchestrate` (latest commit) and pulled out each question that is still open. I found 18. I left out anything the code marks as decided or confirmed.
 
-I committed the GatewayDate fix as `84d809f` and pushed it to `stanford-csp-orchestrate`. GitHub shows it as the branch's latest commit. I didn't open a new PR, so the commit shows up in PR #1 like the last one.
+## Must answer before the UAT load (Registration and Purchase orders)
 
-**The fix:** `GatewayDate` is a date-and-time field in Salesforce, but the flow was sending only the date. It now sends `2024-10-14T00:00:00.000Z`, which is midnight UTC. The Enrollment flow handles `RegistrationDateTime` the same way. If the source date is blank or can't be read, the field is still left out.
-
-**Tests:** 191 of 196 pass, including the 2 new GatewayDate tests. The 5 failures are the same Student Import tests that were failing before this change. The type check and lint both pass.
-
-
+1. **Discount names that still load blank.** These source values match nothing in `Order.TA_Discount_Type__c`: `Century Club`, `Staff, No STAP`, `Other`, `Pro-Rated Late Add`, `Financial Aid`, `Post-Doc`. For each one, should it go to an existing value or a new picklist value? For `Century Club`, should it be V1 or V2?
+2. **STAP line.** We use `Discount_Amt` exactly as the file signs it (for example −415 on 592436117 and +610 on drop 592436118), on a product named "STAP". Is that the right column and the right product?
+3. **Drop line.** A drop Order's line amount is `Courses_Subtotal`. Is that the right column?
+4. **Registrations paid by cash, check or SNAP.** These rows have no card details, but we still create a CardPaymentMethod for every registration. Should we skip it for these
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
