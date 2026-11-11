@@ -42,10 +42,13 @@
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
 ### Engagement state — 2026-11-11
-**Status:** on track — Purchase Inventory flow reviewed; no changes made. Screen recording still unprocessable; awaiting decision on next steps.
+**Status:** on track — Purchase Inventory flow confirmed; price book logic and prerequisites documented. No changes made.
 
 **Done this session**
-- Reviewed purchaseInventoryFlow.ts and commerceShared.ts; documented flow logic, prerequisites, and known risks
+- Reviewed purchaseInventoryFlow.ts and commerceShared.ts flow logic in detail
+- Confirmed flow loads to Standard + StanfordContinuingStudies Price Book (no course offering involved)
+- Documented price book resolution, load order, and existing-entry skip behavior
+- Identified what to verify in deployed instance: setting value, exact name match, active status, org automation
 
 **Open items**
 - Team: attempt CSV load to UAT; report FIELD_INTEGRITY_EXCEPTION or duplicate rule errors
@@ -73,10 +76,11 @@
 - Screen recording (2026-11-09) unprocessable; no transcript or usable content extracted
 
 **Next**
+- Verify Price Books setting in deployed Prismatic instance matches code default
+- Confirm StanfordContinuingStudies Price Book exists and is active in UAT org
+- Check org automation doesn't duplicate entries for inventory products
 - Decide on screen recording: wait for reprocessing, describe content, share screenshots, or re-record with narration
 - Team: attempt CSV load to UAT; report any errors to unblock field confirmation
-- Admin: complete UAT product and field setup in parallel with CSV load attempt
-- Team: confirm Grade_Option__c picklist labels from Setup → Object Manager → Course Offering Participant
 
 **Checked live on 2026-11-11:** the repository
 ### Last session — 2026-11-11
@@ -85,23 +89,29 @@
 | Type | REVIEW |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Purchase-Inventory |
+| Name | Stanford-Data-Migration-Purchase-Flows |
 | Session | `37d53c41-f101-4747-94db-b73400d5256e` |
 **In its own words (excerpt):**
-I read the flow in `src/purchaseInventoryFlow.ts` on branch `stanford-csp-orchestrate`, plus the shared helpers it calls in `src/commerceShared.ts`. I changed nothing.
+The flow already loads into both books, and the custom one is **"StanfordContinuingStudies Price Book"**. I changed nothing.
 
-## What it does, in plain words
+## Where the custom book comes from
 
-Purchase Inventory is 4D's menu of things a student can buy, such as Transcript, Manuscript Surcharge, Registration Fee or Course Drop. This flow turns that menu into products and prices in Salesforce. The Purchase Item import later uses those products to attach "what was bought" to each order.
+The name isn't typed into the flow's code. `purchaseInventoryFlow.ts` reads it from a shared setting called **Price Books**. That setting is defined on the Course Configuration page in `src/configPages.ts`, and its default value is:
 
-**Step 0: Read the file.** It reads the Purchase Inventory TSV from Google Drive (the "Purchase Inventory File ID" setting). The file is only a few dozen rows, so it is processed in a single pass.
+`Standard Price Book,StanfordContinuingStudies Price Book`
 
-**Step 1: Check the setup before writing anything.**
-- It looks up the price books named in the "Price Books" setting. The Standard Price Book is always included and is loaded first.
-- If a named price book doesn't exist or isn't active, the run stops before any data is written. That avoids a half-finished load.
-- Per the handoff notes, the other book here is "StanfordContinuingStudies Price Book".
+## How the flow uses it
 
-**Step 2: Create or update the products (Product2).** Each row becomes one product, matched on `Exte
+1. It reads the Price Books setting and looks up each name in Salesforce (`resolveConfiguredPricebooks` in `commerceShared.ts`).
+2. It always adds the Standard Price Book first. Salesforce won't allow an entry in a custom book until the product has a Standard entry.
+3. It allows at most one custom book. If you list two, the run stops before writing anything.
+4. If a listed name doesn't exist or is inactive, the run also stops before writing anything.
+5. The load order is Standard, then StanfordContinuingStudies Price Book.
+6. For every product, it creates one price entry in each of those two books, using the price from the file.
+
+## Against your requirement
+
+- **Two books, Standard plus StanfordContinuingStud
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->
