@@ -52,9 +52,9 @@
  *     2026-10-31. Registration writes the same field (decided 2026-11-09).
  *   - Order.Description: workbook maps BOTH Notes and Message to Description.
  *     They are concatenated (Notes, blank line, Message).
- *   - Order.Payment_Transaction_Id__c (← CC_Transaction_ID): per workbook.
- *     Registration used OrderReferenceNumber for the same source column — the
- *     two tabs disagree. Field is not among the ones verified in UAT.
+ *   - Order.OrderReferenceNumber (← CC_Transaction_ID): decided 2026-11-11 —
+ *     the mapping moved from Payment_Transaction_Id__c to OrderReferenceNumber,
+ *     the same field Registration writes for this column.
  *   - CardPaymentMethod.GatewayDate (← CC_Transaction_ID_Date_Entered): per
  *     workbook. GatewayDate is a DateTime field — UAT rejected a bare
  *     "2024-10-14" with "not a valid value for the type xsd:dateTime"
@@ -362,8 +362,10 @@ export function mapToOrder(
   const description = [notes, message].filter(Boolean).join("\n\n");
   if (description) record.Description = description.slice(0, 32000);
 
+  // CC_Transaction_ID → OrderReferenceNumber (decided 2026-11-11), same as
+  // Registration. Payment_Transaction_Id__c is no longer written.
   const txnId = str(raw.CC_Transaction_ID);
-  if (txnId) record.Payment_Transaction_Id__c = txnId;
+  if (txnId) record.OrderReferenceNumber = txnId;
 
   const balanceDue = parseCurrency(raw.Balance_Due);
   if (balanceDue !== undefined) record.BalanceDue__c = balanceDue;

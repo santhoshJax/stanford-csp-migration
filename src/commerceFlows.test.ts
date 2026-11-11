@@ -218,6 +218,16 @@ describe("Purchase → Order / Payment / CardPaymentMethod", () => {
     });
     expect(o).not.toHaveProperty("TotalAmount");
   });
+  it("maps CC_Transaction_ID to OrderReferenceNumber, like Registration (2026-11-11)", () => {
+    const o = mapToOrder(row, "x");
+    expect(o).toMatchObject({ OrderReferenceNumber: "36100405" });
+    expect(o).not.toHaveProperty("Payment_Transaction_Id__c");
+  });
+  it("leaves OrderReferenceNumber out when CC_Transaction_ID is blank", () => {
+    expect(
+      mapToOrder({ ...row, CC_Transaction_ID: "" }, "x"),
+    ).not.toHaveProperty("OrderReferenceNumber");
+  });
   it("does not write the old Balance_Due__c field", () => {
     expect(mapToOrder(row, "x")).not.toHaveProperty("Balance_Due__c");
   });
@@ -776,7 +786,12 @@ describe("Registration Import — adjustment line and discount names (2026-11-11
 
   it("adds an adjustment line so waived 592420813 totals $0, not $575", () => {
     // Real row: Courses_Subtotal 540 (BUS 187), Reg_Fee 35, Adjustment -575, CC_Amt 0 (NOFEE)
-    const order = reg({ ID: "592420813", Courses_Subtotal: "540", Reg_Fee: "35", Adjustment: "-575" });
+    const order = reg({
+      ID: "592420813",
+      Courses_Subtotal: "540",
+      Reg_Fee: "35",
+      Adjustment: "-575",
+    });
     expect(order.Adjustment__c).toBe(-575);
     expect(mapToRegistrationAdjustmentItem(order, "01uADJ")).toEqual({
       External_ID_4D__c: "REGADJ-592420813",
@@ -795,7 +810,9 @@ describe("Registration Import — adjustment line and discount names (2026-11-11
   });
 
   it("no adjustment line when Adjustment is 0 or blank", () => {
-    expect(mapToRegistrationAdjustmentItem(reg({ ID: "1", Adjustment: "0" }), "a")).toBeNull();
+    expect(
+      mapToRegistrationAdjustmentItem(reg({ ID: "1", Adjustment: "0" }), "a"),
+    ).toBeNull();
     expect(mapToRegistrationAdjustmentItem(reg({ ID: "2" }), "a")).toBeNull();
   });
 
