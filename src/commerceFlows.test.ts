@@ -599,7 +599,7 @@ describe("Registration Import — registration fee OrderItem", () => {
       Courses_Subtotal: "610",
     });
     expect(mapToRegistrationFeeItem(order, "01uFEE")).toEqual({
-      External_ID_4D__c: "FEE-592434586",
+      External_ID_4D__c: "REG-FEE-592434586",
       "Order.External_ID_4D__c": "REG-592434586",
       PricebookEntryId: "01uFEE",
       UnitPrice: 35,
@@ -659,7 +659,7 @@ describe("Registration Import — prior registration, STAP and drop lines (2026-
 
   it("STAP line = Discount_Amt as signed: -645 on the add, +610 on the drop", () => {
     expect(mapToStapItem(add(), "01uSTAP")).toEqual({
-      External_ID_4D__c: "STAP-592434586",
+      External_ID_4D__c: "REG-STAP-592434586",
       "Order.External_ID_4D__c": "REG-592434586",
       PricebookEntryId: "01uSTAP",
       UnitPrice: -645,
@@ -726,7 +726,7 @@ describe("Registration Import — prior registration, STAP and drop lines (2026-
     expect(
       mapToDropItem(drop(), chosen!.pricebookEntryId, chosen!.courseOfferingId),
     ).toEqual({
-      External_ID_4D__c: "DROP-592436118",
+      External_ID_4D__c: "REG-DROP-592436118",
       "Order.External_ID_4D__c": "REG-592436118",
       PricebookEntryId: "01uCOM02",
       UnitPrice: -610,
@@ -794,7 +794,7 @@ describe("Registration Import — adjustment line and discount names (2026-11-11
     });
     expect(order.Adjustment__c).toBe(-575);
     expect(mapToRegistrationAdjustmentItem(order, "01uADJ")).toEqual({
-      External_ID_4D__c: "REGADJ-592420813",
+      External_ID_4D__c: "REG-ADJ-592420813",
       "Order.External_ID_4D__c": "REG-592420813",
       PricebookEntryId: "01uADJ",
       UnitPrice: -575,

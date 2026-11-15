@@ -26,6 +26,12 @@
  *   Enrollment.Student_ID      → Student__c     (Account.Student_ID_4D__c)
  *   (default)                  → Type = "Order Product"
  *
+ * Course fee line (decided 2026-11-13, Trevor): when Enrollment.Fee > 0, a
+ * second OrderItem ENR-FEE-{Enrollment.ID} on the same Order, product from
+ * "Course Additional Fee Product" (default "Course Additional Fees"),
+ * UnitPrice = Fee, Quantity 1. The discount adjustment is then
+ * Extension − Tuition − Fee, i.e. TA_Discount only.
+ *
  * Upsert key: OrderItem.External_ID_4D__c = "ENR-" + Enrollment.ID. OrderItem
  * is its own object, so this does not collide with the "ENR-" keys on
  * CourseOfferingParticipant; Purchase Item uses "PIT-" on the same object.
@@ -67,7 +73,7 @@
  *     Extension − Tuition and is logged as a mismatch. Loaded as step 2 of
  *     each window, after the OrderItems and only for OrderItems that
  *     succeeded, so it always lands before activation (adjustments cannot be
- *     added to an Activated Order). Key: External_ID_4D__c = "ADJ-" +
+ *     added to an Activated Order). Key: External_ID_4D__c = "ENR-ADJ-" +
  *     Enrollment.ID; parent via OrderItem.External_ID_4D__c = "ENR-" + ID.
  *     No OrderAdjustmentGroup is created (single-item adjustment).
  *     NOT YET RUN AGAINST AN ORG: External_ID_4D__c must exist on
@@ -116,8 +122,13 @@ export const REGISTRATION_ITEM_EXT_PREFIX = "ENR-";
 export const ORDER_ITEM_TYPE = "Order Product";
 
 const SF_ORDER_ITEM_ADJUSTMENT = "OrderItemAdjustmentLineItem";
-/** OrderItemAdjustmentLineItem.External_ID_4D__c = "ADJ-" + Enrollment.ID. */
-export const REGISTRATION_ITEM_ADJUSTMENT_EXT_PREFIX = "ADJ-";
+/** OrderItemAdjustmentLineItem.External_ID_4D__c = "ENR-ADJ-" + Enrollment.ID. */
+export const REGISTRATION_ITEM_ADJUSTMENT_EXT_PREFIX = "ENR-ADJ-";
+/** OrderItem.External_ID_4D__c of the course fee line = "ENR-FEE-" + Enrollment.ID. */
+export const COURSE_FEE_EXT_PREFIX = "ENR-FEE-";
+/** Config var: Product2.Name of the course fee product (decided 2026-11-13). */
+export const COURSE_FEE_PRODUCT_CONFIG_VAR = "Course Additional Fee Product";
+export const DEFAULT_COURSE_FEE_PRODUCT = "Course Additional Fees";
 /** Differences smaller than this (currency rounding) count as equal. */
 const CENT_TOLERANCE = 0.005;
 
@@ -154,6 +165,7 @@ export interface RawEnrollmentRow {
   Tuition?: string;
   Extension?: string;
   TA_Discount?: string;
+  Fee?: string;
   [key: string]: string | undefined;
 }
 
@@ -207,6 +219,65 @@ export interface AdjustmentStats {
   positiveAmount: number;
 }
 
+const roundCents = (n: number): number => Math.round(n * 100) / 100;
+
+/** Course fee lines (ENR-FEE-) mapped or not. */
+export interface CourseFeeStats {
+  /** Fee > 0 — a fee line was mapped. */
+  feeLines: number;
+  /** Fee < 0 — no fee line (Trevor: Fee > 0 only); stays in the adjustment. */
+  negativeFee: number;
+  /** Fee > 0 but no fee product entry — no fee line; stays in the adjustment. */
+  noFeeProduct: number;
+}
+
+export function newCourseFeeStats(): CourseFeeStats {
+  return { feeLines: 0, negativeFee: 0, noFeeProduct: 0 };
+}
+
+/**
+ * The course fee line for one Enrollment row (decided 2026-11-13, Trevor):
+ * when Fee > 0, a separate OrderItem on the same Order with the general
+ * "Course Additional Fees" product, UnitPrice = Fee, Quantity 1. Fee 0 or
+ * blank → no line. Takes the course OrderItem mapToOrderItem built, so the
+ * Order, course offering and student are the same. Returns null when there is
+ * no fee line. Pure.
+ */
+export function mapToCourseFeeItem(
+  raw: RawEnrollmentRow,
+  courseItem: SfRecord,
+  feeEntryId: string | undefined,
+  stats: CourseFeeStats,
+): SfRecord | null {
+  const id = stripDotZero(raw.ID);
+  const fee = parseCurrency(raw.Fee);
+  if (!id || fee === undefined || Math.abs(fee) < CENT_TOLERANCE) return null;
+  if (fee < 0) {
+    stats.negativeFee++;
+    return null;
+  }
+  if (!feeEntryId) {
+    stats.noFeeProduct++;
+    return null;
+  }
+  stats.feeLines++;
+  const record: SfRecord = {
+    [EXT_ID_FIELD]: `${COURSE_FEE_EXT_PREFIX}${id}`,
+    "Order.External_ID_4D__c": courseItem["Order.External_ID_4D__c"],
+    PricebookEntryId: feeEntryId,
+    UnitPrice: roundCents(fee),
+    Quantity: 1,
+    Type: ORDER_ITEM_TYPE,
+    "Course_Offering__r.External_ID_4D__c":
+      courseItem["Course_Offering__r.External_ID_4D__c"],
+  };
+  if (courseItem["Student__r.Student_ID_4D__c"] !== undefined) {
+    record["Student__r.Student_ID_4D__c"] =
+      courseItem["Student__r.Student_ID_4D__c"];
+  }
+  return record;
+}
+
 export function newAdjustmentStats(): AdjustmentStats {
   return {
     noExtension: 0,
@@ -216,15 +287,14 @@ export function newAdjustmentStats(): AdjustmentStats {
   };
 }
 
-const roundCents = (n: number): number => Math.round(n * 100) / 100;
-
 /** Adjustment Name when the Order has no TA_Discount_Type__c. */
 export const DEFAULT_ADJUSTMENT_NAME = "Discount";
 
 /**
- * The discount adjustment for one Enrollment row (option A):
- * Amount = Extension − Tuition, so the OrderItem's adjusted total equals
- * Extension. Returns null when there is nothing to adjust. Call it only for a
+ * The discount adjustment for one Enrollment row:
+ * Amount = Extension − Tuition − (fee on its own ENR-FEE- line), so course
+ * line + adjustment + fee line = Extension. With a fee line this is the
+ * TA_Discount only (workbook row 67). Returns null when there is nothing to adjust. Call it only for a
  * row mapToOrderItem accepted (it assumes ID and Tuition are valid). Pure.
  */
 export function mapToOrderItemAdjustment(
@@ -233,6 +303,8 @@ export function mapToOrderItemAdjustment(
   logger: { warn: (m: string) => void },
   /** The parent Order's TA_Discount_Type__c (decided 2026-11-04). */
   discountType?: string | null,
+  /** UnitPrice of this row's ENR-FEE- line, or 0 when it has none. */
+  feeLineAmount = 0,
 ): SfRecord | null {
   const id = stripDotZero(raw.ID);
   const tuition = parseCurrency(raw.Tuition);
@@ -248,7 +320,7 @@ export function mapToOrderItemAdjustment(
     return null;
   }
 
-  const amount = roundCents(extension - tuition);
+  const amount = roundCents(extension - tuition - feeLineAmount);
   if (Math.abs(amount) < CENT_TOLERANCE) {
     stats.zeroAmount++;
     return null;
@@ -261,8 +333,8 @@ export function mapToOrderItemAdjustment(
   ) {
     stats.discountMismatch++;
     logger.warn(
-      `[${FLOW_NAME}] Enrollment ${id}: Extension − Tuition = ${amount} but TA_Discount = ${taDiscount} — ` +
-        "adjustment loaded as Extension − Tuition; check whether Fee/Other_Costs are inside Extension",
+      `[${FLOW_NAME}] Enrollment ${id}: Extension − Tuition − fee line = ${amount} but TA_Discount = ${taDiscount} — ` +
+        "adjustment loaded as the difference so the total still equals Extension",
     );
   }
   if (amount > 0) stats.positiveAmount++;
@@ -406,8 +478,9 @@ export const registrationItemImport = flow({
   description:
     "Streams the Enrollment TSV from Google Drive one window at a time and " +
     "bulk-upserts one OrderItem (tuition line) per enrollment onto the Draft " +
-    "Orders created by Registration Import, then one discount adjustment " +
-    "(Extension − Tuition) per OrderItem that needs one. Must run after the Course imports " +
+    "Orders created by Registration Import, one course fee line (Fee > 0) per " +
+    "enrollment with a fee, then one discount adjustment " +
+    "(Extension − Tuition − Fee) per OrderItem that needs one. Must run after the Course imports " +
     "and Registration Import; then run Registration Import again with " +
     "Activate Registration Orders = true.",
 
@@ -474,6 +547,25 @@ export const registrationItemImport = flow({
       );
     }
 
+    // ── Course fee product (ENR-FEE- lines, decided 2026-11-13) ──────────────
+    const feeProductName =
+      String(configVars[COURSE_FEE_PRODUCT_CONFIG_VAR] ?? "").trim() ||
+      DEFAULT_COURSE_FEE_PRODUCT;
+    const escapedFeeName = feeProductName
+      .replace(/\\/g, "\\\\")
+      .replace(/'/g, "\\'");
+    const feeEntries = await sfQueryAll<{ Id: string }>(
+      sfBase,
+      sfToken,
+      `SELECT Id FROM PricebookEntry WHERE Pricebook2Id = '${orderBook.id}' ` +
+        `AND IsActive = true AND Product2.Name = '${escapedFeeName}' LIMIT 1`,
+    );
+    const feeEntryId: string | undefined = feeEntries[0]?.Id;
+    logger.info(
+      `[${FLOW_NAME}] Course fee product "${feeProductName}": ` +
+        (feeEntryId ? "active entry found" : `NO active entry in "${orderBook.name}"`),
+    );
+
     // ── Stream this window ───────────────────────────────────────────────────
     const rows: RawEnrollmentRow[] = [];
     const window = await streamTsvWindow(
@@ -524,17 +616,23 @@ export const registrationItemImport = flow({
     let items: SfRecord[] = [];
     const skips = newSkips();
     const adjustmentStats = newAdjustmentStats();
+    const feeStats = newCourseFeeStats();
     // ENR- key of the OrderItem → its discount adjustment (step 2).
     const adjustmentByItemKey = new Map<string, SfRecord>();
+    // ENR- key of the course OrderItem → its ENR-FEE- fee line (step 1b).
+    const feeItemByItemKey = new Map<string, SfRecord>();
     for (const row of rows) {
       const item = mapToOrderItem(row, caches, skips, logger);
       if (!item) continue;
       items.push(item);
+      const feeItem = mapToCourseFeeItem(row, item, feeEntryId, feeStats);
+      if (feeItem) feeItemByItemKey.set(item[EXT_ID_FIELD] as string, feeItem);
       const adjustment = mapToOrderItemAdjustment(
         row,
         adjustmentStats,
         logger,
         discountTypeByRegistrationId.get(stripDotZero(row.Registration_ID)),
+        feeItem ? (feeItem.UnitPrice as number) : 0,
       );
       if (adjustment) {
         adjustmentByItemKey.set(item[EXT_ID_FIELD] as string, adjustment);
@@ -544,8 +642,20 @@ export const registrationItemImport = flow({
       `[${FLOW_NAME}] Discount adjustments mapped: ${adjustmentByItemKey.size} ` +
         `(no adjustment: Extension = Tuition ${adjustmentStats.zeroAmount}, ` +
         `no Extension ${adjustmentStats.noExtension}; positive Amount ${adjustmentStats.positiveAmount}; ` +
-        `Extension − Tuition ≠ TA_Discount ${adjustmentStats.discountMismatch})`,
+        `Extension − Tuition − fee ≠ TA_Discount ${adjustmentStats.discountMismatch})`,
     );
+    logger.info(
+      `[${FLOW_NAME}] Course fee lines mapped: ${feeStats.feeLines} ` +
+        `(negative Fee, kept in adjustment: ${feeStats.negativeFee}; ` +
+        `no fee product, kept in adjustment: ${feeStats.noFeeProduct})`,
+    );
+    if (feeStats.noFeeProduct > 0) {
+      logger.warn(
+        `[${FLOW_NAME}] ${feeStats.noFeeProduct} enrollment(s) have a Fee but "${feeProductName}" has no active ` +
+          `entry in "${orderBook.name}" — no ENR-FEE- lines; the fee stays inside the discount adjustment. ` +
+          `Create the product (or set ${COURSE_FEE_PRODUCT_CONFIG_VAR}) and re-run.`,
+      );
+    }
 
     const unmatched = [...skips.unmatchedCourses.entries()]
       .slice(0, 20)
@@ -591,10 +701,29 @@ export const registrationItemImport = flow({
           )
         : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
 
+    // ── Step 1b: course fee lines, only beside course lines that loaded ──────
+    // Keeps fee and course line together (TEST_MODE cuts or a failed course
+    // line also drop its fee line, so no Order gets a fee without its course).
+    const loadedItemKeys = parseSuccessfulSfIds(result.successfulCsv);
+    const feeItems: SfRecord[] = [];
+    for (const [itemKey, feeItem] of feeItemByItemKey) {
+      if (loadedItemKeys.has(itemKey)) feeItems.push(feeItem);
+    }
+    const feeResult =
+      feeItems.length > 0
+        ? await upsertInBatches(
+            feeItems,
+            SF_ORDER_ITEM,
+            sfBase,
+            sfToken,
+            logger,
+            `[${FLOW_NAME}][OrderItem fee]`,
+          )
+        : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
+
     // ── Step 2: discount adjustments, only on OrderItems that loaded ─────────
     // Same window, before any activation run. An OrderItem that failed (or
     // was cut by TEST_MODE) gets no adjustment, so nothing is orphaned.
-    const loadedItemKeys = parseSuccessfulSfIds(result.successfulCsv);
     const adjustments: SfRecord[] = [];
     for (const [itemKey, adjustment] of adjustmentByItemKey) {
       if (loadedItemKeys.has(itemKey)) adjustments.push(adjustment);
@@ -621,6 +750,11 @@ export const registrationItemImport = flow({
             failedCsv: result.failedCsv,
           },
           {
+            objectName: `${SF_ORDER_ITEM} (course fee)`,
+            successfulCsv: feeResult.successfulCsv,
+            failedCsv: feeResult.failedCsv,
+          },
+          {
             objectName: SF_ORDER_ITEM_ADJUSTMENT,
             successfulCsv: adjustmentResult.successfulCsv,
             failedCsv: adjustmentResult.failedCsv,
@@ -640,6 +774,8 @@ export const registrationItemImport = flow({
     logger.info(
       `[${FLOW_NAME}] Window ${windowNumber} complete — OrderItem submitted: ${items.length}, ` +
         `processed: ${result.processed}, failed: ${result.failed}; ` +
+        `course fee OrderItem submitted: ${feeItems.length}, ` +
+        `processed: ${feeResult.processed}, failed: ${feeResult.failed}; ` +
         `OrderItemAdjustmentLineItem submitted: ${adjustments.length}, ` +
         `processed: ${adjustmentResult.processed}, failed: ${adjustmentResult.failed}`,
     );
@@ -670,6 +806,11 @@ export const registrationItemImport = flow({
         orderItems: items.length,
         orderItemsProcessed: result.processed,
         orderItemsFailed: result.failed,
+        courseFeeItems: feeItems.length,
+        courseFeeItemsProcessed: feeResult.processed,
+        courseFeeItemsFailed: feeResult.failed,
+        courseFeeNegativeFee: feeStats.negativeFee,
+        courseFeeNoProduct: feeStats.noFeeProduct,
         adjustments: adjustments.length,
         adjustmentsProcessed: adjustmentResult.processed,
         adjustmentsFailed: adjustmentResult.failed,

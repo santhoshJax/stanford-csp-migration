@@ -329,7 +329,7 @@ export const configPages = {
         default: "Registration Fee",
         description:
           "Product2.Name of the registration fee product. Round 1 of Registration " +
-          "Import adds one OrderItem (FEE-{Registration ID}, UnitPrice = Reg_Fee) to each " +
+          "Import adds one OrderItem (REG-FEE-{Registration ID}, UnitPrice = Reg_Fee) to each " +
           "Draft registration Order with a non-zero fee. The product needs an active " +
           "PricebookEntry in the order price book (first custom book in Price Books).",
       }),
@@ -339,7 +339,7 @@ export const configPages = {
         default: "STAP",
         description:
           "Product2.Name of the STAP benefit product. Round 1 of Registration Import adds one " +
-          "OrderItem (STAP-{Registration ID}, UnitPrice = Discount_Amt as signed in the file, e.g. " +
+          "OrderItem (REG-STAP-{Registration ID}, UnitPrice = Discount_Amt as signed in the file, e.g. " +
           "-415, or +610 on a drop) to each Draft Order whose discount type is STAP Benefit. Needs an " +
           "active PricebookEntry in the order price book.",
       }),
@@ -349,9 +349,20 @@ export const configPages = {
         default: "Adjustment",
         description:
           "Product2.Name of the registration adjustment product. Round 1 of Registration Import adds one " +
-          "OrderItem (REGADJ-{Registration ID}, UnitPrice = Adjustment as signed in the file, e.g. -575 on a " +
+          "OrderItem (REG-ADJ-{Registration ID}, UnitPrice = Adjustment as signed in the file, e.g. -575 on a " +
           "waived registration) to each Draft Order with a non-zero Adjustment, so the Order total matches what " +
           "the student owed. Needs an active PricebookEntry in the order price book.",
+      }),
+      "Course Additional Fee Product": configVar({
+        stableKey: "rcfe2026-1115-4c07-8c20-1b2c3d4e5f17",
+        dataType: "string",
+        default: "Course Additional Fees",
+        description:
+          "Product2.Name of the general course fee product (decided 2026-11-13). Registration Item Import adds " +
+          "one OrderItem (ENR-FEE-{Enrollment ID}, UnitPrice = Fee, Quantity 1) beside each course line whose " +
+          "enrollment has Fee > 0, e.g. 15 for ART 132. The product's own price is not used. Needs an active " +
+          "PricebookEntry in the order price book; without one, no fee lines are created and the fee stays " +
+          "inside the discount adjustment.",
       }),
       "Course Drop Product": configVar({
         stableKey: "rdrp2026-1109-4c05-8c20-1b2c3d4e5f15",
@@ -359,7 +370,7 @@ export const configPages = {
         default: "Course Drop",
         description:
           "Product2.Name used for a drop line when the prior registration does not have exactly one " +
-          "matching course line. Round 2 of Registration Import adds DROP-{Registration ID} " +
+          "matching course line. Round 2 of Registration Import adds REG-DROP-{Registration ID} " +
           "(UnitPrice = Courses_Subtotal) to drop Orders with no enrollment line, before activating them. " +
           "Needs an active PricebookEntry in the order price book.",
       }),

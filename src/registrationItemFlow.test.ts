@@ -6,8 +6,10 @@ import {
   EXCLUDED_STATUSES,
   INCLUDE_ADJUSTMENT_ROWS,
   INCLUDE_DROP_ROWS,
+  mapToCourseFeeItem,
   mapToOrderItem,
   mapToOrderItemAdjustment,
+  newCourseFeeStats,
   newAdjustmentStats,
   newSkips,
   normalizeAddDrop,
@@ -305,7 +307,7 @@ describe("Discount adjustment line (option A: Amount = Extension − Tuition)", 
       });
       const adj = mapToOrderItemAdjustment(raw, stats, logger);
       expect(adj).toEqual({
-        External_ID_4D__c: `ADJ-${id}`,
+        External_ID_4D__c: `ENR-ADJ-${id}`,
         "OrderItem.External_ID_4D__c": `ENR-${id}`,
         Name: "Discount",
         Amount: amount,
@@ -383,5 +385,79 @@ describe("Discount adjustment line (option A: Amount = Extension − Tuition)", 
       logger,
     );
     expect(stats.positiveAmount).toBe(1);
+  });
+});
+
+describe("Course fee line (ENR-FEE-, decided 2026-11-13)", () => {
+  // Real row: enrollment 930195, ART 132, registration 592420276.
+  const art132 = (o: RawEnrollmentRow = {}): RawEnrollmentRow =>
+    row({
+      ID: "930195",
+      Registration_ID: "20046",
+      Student_ID: "90992606",
+      Course_ID: "20081_DAR 200",
+      Tuition: "590",
+      TA_Discount: "0",
+      Fee: "15",
+      Extension: "605",
+      ...o,
+    });
+
+  it("adds a fee line at Fee beside the course line, and no discount adjustment", () => {
+    const raw = art132();
+    const course = mapToOrderItem(raw, caches(), newSkips(), logger)!;
+    const stats = newCourseFeeStats();
+    const fee = mapToCourseFeeItem(raw, course, "01uFEE", stats);
+    expect(fee).toEqual({
+      External_ID_4D__c: "ENR-FEE-930195",
+      "Order.External_ID_4D__c": "REG-20046",
+      PricebookEntryId: "01uFEE",
+      UnitPrice: 15,
+      Quantity: 1,
+      Type: "Order Product",
+      "Course_Offering__r.External_ID_4D__c": "20081_DAR 200",
+      "Student__r.Student_ID_4D__c": "90992606",
+    });
+    expect(stats.feeLines).toBe(1);
+    const adjStats = newAdjustmentStats();
+    expect(
+      mapToOrderItemAdjustment(raw, adjStats, logger, null, 15),
+    ).toBeNull();
+    expect(adjStats.discountMismatch).toBe(0);
+    // course 590 + fee 15 = Extension 605
+    expect((course.UnitPrice as number) + (fee!.UnitPrice as number)).toBe(605);
+  });
+
+  it("keeps a real discount in the adjustment when there is also a fee", () => {
+    const raw = art132({ TA_Discount: "-59", Extension: "546" });
+    const adjStats = newAdjustmentStats();
+    const adj = mapToOrderItemAdjustment(raw, adjStats, logger, null, 15);
+    expect(adj?.Amount).toBe(-59);
+    expect(adjStats.discountMismatch).toBe(0);
+  });
+
+  it("no fee line for Fee 0 or blank", () => {
+    for (const f of ["0", ""]) {
+      const raw = art132({ Fee: f, Extension: "590" });
+      const course = mapToOrderItem(raw, caches(), newSkips(), logger)!;
+      expect(mapToCourseFeeItem(raw, course, "01uFEE", newCourseFeeStats())).toBeNull();
+    }
+  });
+
+  it("negative Fee or no fee product: no fee line, fee stays in the adjustment", () => {
+    const neg = art132({ Fee: "-15", Tuition: "-590", Extension: "-605" });
+    const negCourse = mapToOrderItem(neg, caches(), newSkips(), logger)!;
+    const stats = newCourseFeeStats();
+    expect(mapToCourseFeeItem(neg, negCourse, "01uFEE", stats)).toBeNull();
+    expect(stats.negativeFee).toBe(1);
+
+    const raw = art132();
+    const course = mapToOrderItem(raw, caches(), newSkips(), logger)!;
+    expect(mapToCourseFeeItem(raw, course, undefined, stats)).toBeNull();
+    expect(stats.noFeeProduct).toBe(1);
+    // Without a fee line the adjustment still carries the 15, so the total is 605.
+    expect(
+      mapToOrderItemAdjustment(raw, newAdjustmentStats(), logger, null, 0)?.Amount,
+    ).toBe(15);
   });
 });

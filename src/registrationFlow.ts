@@ -23,10 +23,10 @@
  *            shared with Purchase Import). Draft Orders without items stay
  *            Draft and are logged; Activated Orders are never re-sent.
  *   Extra lines (2026-11-05 / 2026-11-09), all on the Order's price book:
- *     FEE-{id}  round 1, UnitPrice = Reg_Fee ("Registration Fee Product")
- *     STAP-{id} round 1, UnitPrice = Discount_Amt (signed) when the discount
+ *     REG-FEE-{id}  round 1, UnitPrice = Reg_Fee ("Registration Fee Product")
+ *     REG-STAP-{id} round 1, UnitPrice = Discount_Amt (signed) when the discount
  *               type is STAP Benefit ("STAP Product")
- *     DROP-{id} round 2, before activation, UnitPrice = Courses_Subtotal on a
+ *     REG-DROP-{id} round 2, before activation, UnitPrice = Courses_Subtotal on a
  *               drop Order (Prior_Registration_ID set) with no ENR- line;
  *               product = the prior registration's course line, else
  *               "Course Drop Product". So drop Orders get a line and activate.
@@ -877,8 +877,8 @@ const SF_ORDER_ITEM = "OrderItem";
 /** Text config var: Product2.Name of the registration fee product. */
 export const REGISTRATION_FEE_PRODUCT_CONFIG_VAR = "Registration Fee Product";
 export const DEFAULT_REGISTRATION_FEE_PRODUCT = "Registration Fee";
-/** OrderItem key prefix for the fee line: FEE-{Registration.ID}. */
-export const REGISTRATION_FEE_EXT_PREFIX = "FEE-";
+/** OrderItem key prefix for the fee line: REG-FEE-{Registration.ID}. */
+export const REGISTRATION_FEE_EXT_PREFIX = "REG-FEE-";
 
 /**
  * Builds the fee OrderItem for one mapped Order, or null when there is no
@@ -936,16 +936,16 @@ export const PRIOR_REGISTRATION_FIELD = "Prior_Registration__c";
 /** Text config var: Product2.Name of the STAP benefit product. */
 export const STAP_PRODUCT_CONFIG_VAR = "STAP Product";
 export const DEFAULT_STAP_PRODUCT = "STAP";
-/** OrderItem key prefix for the STAP line: STAP-{Registration.ID}. */
-export const STAP_EXT_PREFIX = "STAP-";
+/** OrderItem key prefix for the STAP line: REG-STAP-{Registration.ID}. */
+export const STAP_EXT_PREFIX = "REG-STAP-";
 /** TA_Discount_Type__c value that gets a STAP line. */
 export const STAP_DISCOUNT_TYPE = "STAP Benefit";
 
 /** Text config var: fallback product for a drop line with no single prior course. */
 export const COURSE_DROP_PRODUCT_CONFIG_VAR = "Course Drop Product";
 export const DEFAULT_COURSE_DROP_PRODUCT = "Course Drop";
-/** OrderItem key prefix for the drop line: DROP-{Registration.ID}. */
-export const DROP_EXT_PREFIX = "DROP-";
+/** OrderItem key prefix for the drop line: REG-DROP-{Registration.ID}. */
+export const DROP_EXT_PREFIX = "REG-DROP-";
 
 function registrationIdOf(order: SfRecord): string {
   const extId = order[EXT_ID_FIELD] as string;
@@ -1022,8 +1022,8 @@ export function mapToStapItem(
 export const REGISTRATION_ADJUSTMENT_PRODUCT_CONFIG_VAR =
   "Registration Adjustment Product";
 export const DEFAULT_REGISTRATION_ADJUSTMENT_PRODUCT = "Adjustment";
-/** OrderItem key prefix for the adjustment line: REGADJ-{Registration.ID}. */
-export const REGISTRATION_ADJUSTMENT_EXT_PREFIX = "REGADJ-";
+/** OrderItem key prefix for the adjustment line: REG-ADJ-{Registration.ID}. */
+export const REGISTRATION_ADJUSTMENT_EXT_PREFIX = "REG-ADJ-";
 
 /**
  * Adjustment line for one mapped Order: UnitPrice = Adjustment as signed in
@@ -1875,7 +1875,7 @@ export const registrationImport = flow({
     }
 
     // ── Phase 2b: Registration fee OrderItem (round 1 only) ──────────────────
-    // One FEE-{id} line per Order that just loaded as Draft and has a
+    // One REG-FEE-{id} line per Order that just loaded as Draft and has a
     // non-zero Reg_Fee. Skipped in round 2: line items cannot be added to an
     // Activated Order, and round 1 already created them.
     const feeProductName =
