@@ -48,3 +48,7 @@ resolution, DATA-CLOUD-01).
 **Revisit if:**
 Stanford introduces a persona that must be modelled as an organisation, or Education Cloud standard
 objects cannot represent a required academic entity.
+
+## Update 2026-11-13 — superseded
+
+A later decision replaces this one: ADR-014 (2026-11-13-role-indicators-on-the-person-account-checkboxes-leaning-ove.md). Recorded automatically by Orchestrate; the text above is kept as it was written.

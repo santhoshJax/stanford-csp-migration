@@ -1,8 +1,8 @@
-# Goals — Stanford-Data-Migration-QuarterBefore2013-Build
+# Goals — Code Review
 
 > What we are solving, how we will know it worked, and what the constraints are.
 
-**Last reviewed:** 2026-10-16
+**Last reviewed:** 2026-11-11
 
 ## The problem
 
@@ -39,3 +39,24 @@
 | Question | Blocking? | Owner | Raised |
 |---|---|---|---|
 | | | | |
+
+## 2026-11-12 — Stanford-Inter-data-Mismatch-Review-Meet
+
+- Trevor Shields runs a full UAT Contact-to-4D comparison as the data validation basis, replacing the 1,800-login sample
+- Jason Cook keeps broader field validation ongoing until go-live and treats production correctness as the priority
+- Julia Cannon pushes CSP for email copy because the Marketing Cloud build target is the 27th
+
+_Added automatically by Orchestrate when the turn finished._
+
+## 2026-11-13 — Design the Solution
+
+- Deliver the security and structural Apex review fixes on release/qa-baseline-2026-11-02 in the devmain org, through a Build session that makes no new design decisions
+
+_Added automatically by Orchestrate when the turn finished._
+
+## 2026-11-15 — Stanford-Data-Migration-Registration-Enhancements- Build
+
+- Complete Marketing Cloud email creation by the start of UAT, targeting 30 November
+- Fix roughly 2,700 student email mismatches before registration loads, and load Registration Orders as Draft first
+
+_Added automatically by Orchestrate when the turn finished._

@@ -41,55 +41,60 @@
 <!-- orchestrate:session-state:start -->
 <!-- Written by Orchestrate at the end of each session. Edits inside this block are
      replaced next session; anything OUTSIDE it is yours and is never touched. -->
-### Engagement state — 2026-11-11
-**Status:** at risk — Purchase transaction ID mapping settled; code committed but not yet published to Prismatic. 17 Trevor questions remain open.
+### Engagement state — 2026-11-15
+**Status:** blocked — ━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━ • Code committed: yes (branch stanford-csp-o…
 
 **Done this session**
-- Settled transaction ID field mapping: CC_Transaction_ID → Order.OrderReferenceNumber (question 8 resolved)
-- Committed and pushed Purchase change to stanford-csp-orchestrate branch (commit d905c5e)
-- Verified 193/198 tests pass; 5 Student Import failures pre-existing
+- ━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━ • Code committed: yes (branch stanford-csp-orchestrate) • Pushed to GitHub: yes • Validated (sf deploy validate): NOT verified • Deployed to org…
 
 **Open items**
-- Publish branch to Prismatic: run npm run import and move UAT instance to new version
-- Org check: Confirm Check_Amount__c on Order and External_ID_4D__c on Product2/PricebookEntry exist and are writable
-- Org check: Verify no duplicate product names (case-insensitive) exist in UAT
-- Org check: Confirm StanfordContinuingStudies Price Book exists in UAT instance settings
-- Verify Student load has completed in UAT (Purchase needs Student_ID_4D__c)
-- Test Purchase round 1 re-run on one order to confirm update vs. insert behavior before full reload
-- Send Trevor 17 must-answer questions (discount type mappings, STAP/drop/payment handling, check number field type, order type field, final order state, purchase/payments cutoff date, payment field names, refund setup, payment method creati…
+- Accept ADR-011 (trigger framework) and ADR-012 (sharing and object/field security standard)
+- Delete branch feature/storefront-url-labels (needs someone with write access)
+- Send CSP copy request and set return date
+- Trevor to answer 17 open questions before UAT load
+- Verify whether Salesforce sends an order email by checking the org
+- Verify ticket numbers against Ashwani's pending list
+- Check Somnath's emails for white footer
+- Decide whether to keep Nov 30 timeline wording
 
 **Decisions**
-- Purchase cutoff is fixed 2024-10-06, not rolling two-year window
-- PricebookEntry external ID key format: STD-{ID} for Standard, {ID} for StanfordContinuingStudies
+- Purchase cutoff fixed at 2024-10-06
+- Purchase Item loads only if parent order loaded
+- PricebookEntry external ID: STD-{ID} for Standard, {ID} for StanfordContinuingStudies
 - Keep site API names; change display name and URL path only
-- Move hardcoded portal URLs to CSP_Storefront_Base_URL label
-- Split ParticipantId into ParticipantContactId and ParticipantAccountId
-- Use real API names from org describe; ParticipationStatus replaces placeholder Status
-- CSV uses real 003 Contact IDs and 001 Account IDs; update existing records
-- File prices overwrite hand-edited prices in Salesforce
+- Portal URLs come from server-side resolver keyed on site network name (supersedes CSP_Storefront_Base_URL label approach)
+- APP_CSP_Refund_Processor assigned to Rajesh Yeddula and Satabhisa Roy in PR 1 window; CSP staff can be added later via permission set
+- All four staff classes removed from CSP_Checkout_Guest_Access in PR 1
+- ParticipantId split into ParticipantContactId and ParticipantAccountId
 
 **Blockers**
-- Code not yet published to Prismatic; UAT still runs old version (GatewayDate bare date, not ISO 8601; transaction ID in wrong field)
-- Org access needed to verify three pre-deploy checks (field existence, product name duplicates, price book setting)
-- Trevor must answer 17 remaining open questions before UAT load can proceed
+- Marketing Cloud email creation blocked on remaining CSP copy
+- Email mis-mapping root cause unconfirmed; production correctness at risk
+- Code not yet published to Prismatic; UAT still on old version
+- Org access needed for pre-deploy checks
+- ADR-011 and ADR-012 unaccepted; PR 3 and PRs 4a–4d wait on them
+- Conflicting accounts on whether Salesforce currently sends order confirmation email (not verified in org)
+- Role indicator choice depends on CSP answers (checkboxes vs Constituent Roles) and may require ADR-001 update
 
 **Next**
-- Run npm run import to build and publish branch as new Prismatic integration version
-- Move UAT instance to the new Prismatic version
-- Test Purchase round 1 re-run on one order to confirm update vs. insert behavior
-- Run three org checks in UAT (field writability, product name duplicates, price book setting)
-- Confirm Student load completed in UAT
-- Send Trevor 17 must-answer questions formatted with Answer column
+- Accept ADR-011 and ADR-012
+- Start Build session for PR 1, beginning with read-only check of DynamicLink records in stanford-qa
+- Send CSP copy request and set return date (Julia)
+- Julia to request approved sender addresses from Stanford
+- Santhosh to fix Contact/User load mismapping after Trevor's comparison sheets
+- Run npm run import to publish and move UAT
+- Send Person Account reply after reviewing placeholders and internal-reasoning wording
+- Put role-indicator questions (switch-off rule, official-status rule) to CSP and get the Data Model deck reviewed
 
-**Checked live on 2026-11-11:** the repository
-### Last session — 2026-11-11
+**Checked live on 2026-11-15:** the repository
+### Last session — 2026-11-15
 | | |
 |---|---|
 | Type | BUILD |
 | Outcome | COMPLETED |
 | Branch | `stanford-csp-orchestrate` |
-| Name | Stanford-Data-Migration-Purchase-Related-build |
-| Session | `2cb154f7-df0b-4f6d-b07b-4304c80b818e` |
+| Name | Stanford-Data-Migration-Registration-Enhancements- Build |
+| Session | `be60d849-b984-488e-85da-da28ad9ff44a` |
 **In its own words (excerpt):**
 ━━ Build status (auto-checked from tool results — deploy = sf CLI exit, not runtime effect) ━━
 • Code committed: yes (branch stanford-csp-orchestrate)
@@ -99,13 +104,18 @@
 Next: open/refresh the PR → review → merge to main → run a Deploy session to ship. This work is NOT live yet.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-I've committed and pushed the change to `stanford-csp-orchestrate` as commit `d905c5e`, and GitHub shows it as the branch's latest commit. I didn't open a new PR, so it shows up in PR #1 along with the earlier Purchase commits.
+The new line keys and the course fee line are built, tested and pushed to `stanford-csp-orchestrate` as commit `ef89a6c`. Nothing has been loaded into an org yet, because no org is attached to this session.
 
-**What changed:** Purchase now loads `CC_Transaction_ID` into `Order.OrderReferenceNumber`, the same field Registration uses. It no longer writes `Payment_Transaction_Id__c`. If the source value is blank, the field is left out.
+## Keys now
 
-**Tests:** 193 of 198 pass, including the 2 new ones for this mapping, and the type check passes. The 5 failures are the same Student Import tests that were failing before; this change didn't cause them.
-
-**This settles question 8** on the Trevor list (whic
+| Line | Built from | Key | Example |
+|---|---|---|---|
+| Course (tuition) | Enrollment | `ENR-{Enr.ID}` (unchanged) | `ENR-930195` at 590 |
+| Course fee (new) | Enrollment | `ENR-FEE-{Enr.ID}` | `ENR-FEE-930195` at 15 |
+| Course discount (adjustment record) | Enrollment | `ENR-ADJ-{Enr.ID}` | `ENR-ADJ-948272` at −50 |
+| Registration fee | Registration | `REG-FEE-{Reg.ID}` | `REG-FEE-592420276` at 35 |
+| STAP | Registration | `REG-STAP-{Reg.ID}` | `REG-STAP-592420276` at −640 |
+| Registrat
 
 _[summary truncated — see the session record for the full text]_
 <!-- orchestrate:session-state:end -->

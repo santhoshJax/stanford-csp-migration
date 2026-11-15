@@ -3,7 +3,7 @@
 > The things that will bite the next person. **Append-only — this file only grows.**
 > [`handoff.md`](handoff.md) is *now*; this is *forever*.
 
-**Last reviewed:** 2026-10-16
+**Last reviewed:** 2026-11-11
 
 ## How to write one
 
@@ -40,5 +40,3 @@ that it is real.
      three days, a deploy window, a person who must be in the room. -->
 
 -
-
-- **CardPaymentMethod.GatewayDate is a DateTime field, not a Date.** Sending a bare `2024-10-14` fails the Bulk load with "INVALID_FIELD … is not a valid value for the type xsd:dateTime:GatewayDate", while Orders and PaymentGroups in the same run load fine. Send date-only source values as midnight UTC (`2024-10-14T00:00:00.000Z`). *Hit 2026-11-11 in UAT, Purchase round 1; fixed in commit 84d809f on stanford-csp-orchestrate.*
