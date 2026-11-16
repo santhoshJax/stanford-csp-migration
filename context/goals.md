@@ -60,3 +60,23 @@ _Added automatically by Orchestrate when the turn finished._
 - Fix roughly 2,700 student email mismatches before registration loads, and load Registration Orders as Draft first
 
 _Added automatically by Orchestrate when the turn finished._
+
+## 2026-11-15 — Stanford-Data-Migration-Registration-Enhancements- Build
+
+- Migrate 2 years of quarter and transactional data and 5 years of course data for the CSP program, with scope set by the stated cutoffs
+
+_Added automatically by Orchestrate when the turn finished._
+
+## 2026-11-16 — Stanford CSP - MONDAY GREETING GENERATOR — 2026-11-13
+
+- Continue UAT prep this week, flagging blocked or unclear items early in the week
+- Complete the last week of training on Marketing Cloud, Tableau Next and the Google Sheet Connector
+- Raise any needs requiring Julia Cannon by Thursday 11/19, since she is out from Friday 11/20 through the following week
+
+_Added automatically by Orchestrate when the turn finished._
+
+## 2026-11-16 — Stanford-Data-Migration-Registration-Enhancements- Build
+
+- Registration cutoff corrected to 23 Sep 2024 with term matching for Fall 2024 and later courses; the other flows are parked for later review.
+
+_Added automatically by Orchestrate when the turn finished._

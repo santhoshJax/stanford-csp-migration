@@ -40,7 +40,11 @@ _Kept up to date by Orchestrate from the sessions (last 2026-11-12). Edit it and
 - [`context/gotchas.md`](context/gotchas.md) — what will bite you
 - [`context/history.md`](context/history.md) — shipped, parked and abandoned work
 - [`context/sessions/README.md`](context/sessions/README.md) — one record per session: what each did, decided and left open
-- Decisions in [`context/decisions/`](context/decisions/) (17, newest first):
+- Decisions in [`context/decisions/`](context/decisions/) (21, newest first):
+  - [Registration 2-year scope: sign-up date OR Fall 2024+ term; each commerce flow keeps its own cutoff (superseded)](context/decisions/2026-11-16-registration-scope-date-or-term.md)
+  - [ADR-021 — Registration 2-year scope: sign-up date OR Fall 2024+ term; each commerce flow keeps its own cutoff](context/decisions/2026-11-16-registration-2-year-scope-sign-up-date-or-fall-2024-term-eac.md)
+  - [ADR-019 — Hold the full registration data load until student email mismatches are fixed](context/decisions/2026-11-16-hold-the-full-registration-data-load-until-student-email-mis.md)
+  - [ADR-018 — Use fixed date and term cutoffs for the 2-year and 5-year data migration scope](context/decisions/2026-11-15-use-fixed-date-and-term-cutoffs-for-the-2-year-and-5-year-da.md)
   - [OrderItem keys use a {source}-{type}-{id} scheme](context/decisions/2026-11-15-orderitem-source-type-key-scheme.md)
   - [ADR-017 — Keep the course tuition line key as ENR-{Enrollment.ID}](context/decisions/2026-11-15-keep-the-course-tuition-line-key-as-enr-enrollment-id.md)
   - [ADR-014 — Role indicators on the Person Account: checkboxes leaning over Constituent Roles](context/decisions/2026-11-13-role-indicators-on-the-person-account-checkboxes-leaning-ove.md)
@@ -49,7 +53,7 @@ _Kept up to date by Orchestrate from the sessions (last 2026-11-12). Edit it and
   - [Enrollment Fee loads as its own OrderItem ("Course Additional Fees")](context/decisions/2026-11-13-enrollment-fee-separate-order-item.md)
   - [ADR-009 — Update affected UAT users in place rather than recreating them](context/decisions/2026-11-12-update-affected-uat-users-in-place-rather-than-recreating-th.md)
   - [Remove StripeGCRefundAction from the CSP_Checkout_Guest_Access permission set](context/decisions/2026-11-12-remove-stripegcrefundaction-from-guest-permission-set.md)
-  - [ADR-007 — Purchase and Purchase Item load orders from 6 October 2024 onward](context/decisions/2026-11-12-purchase-and-purchase-item-load-orders-from-6-october-2024-o.md)
+  - [ADR-007 — Purchase and Purchase Item load orders from 6 October 2024 onward (superseded)](context/decisions/2026-11-12-purchase-and-purchase-item-load-orders-from-6-october-2024-o.md)
   - [ADR-010 — Production load order: Person Accounts first, then Users](context/decisions/2026-11-12-production-load-order-person-accounts-first-then-users.md)
   - [ADR-008 — Email is masked in UAT and users loaded inactive until migration validated](context/decisions/2026-11-12-email-is-masked-in-uat-and-users-loaded-inactive-until-migra.md)
   - [ADR-006 — Oracle Financials is the ledger; Salesforce holds course- and student-level financial detail](context/decisions/2026-04-adr-006-oracle-ledger-salesforce-transactional-detail.md)

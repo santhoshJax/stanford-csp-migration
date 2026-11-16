@@ -1,6 +1,6 @@
 # ADR-007 — Purchase and Purchase Item load orders from 6 October 2024 onward
 
-**Date:** 2026-11-12 · **Status:** Accepted
+**Date:** 2026-11-12 · **Status:** Superseded by ADR-018 (2026-11-15-use-fixed-date-and-term-cutoffs-for-the-2-year-and-5-year-da.md)
 **Deciders:** Santhosh Kumar Aleti · **Supersedes:** none
 
 ## Context
