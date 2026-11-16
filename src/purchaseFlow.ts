@@ -72,7 +72,7 @@
  *   - Order.EffectiveDate (← Purchase_Date): required on Order. A row with no
  *     parseable Purchase_Date is out of scope.
  *   - 2-year scope: no cutoff column exists on this tab. Purchase_Date >=
- *     COMMERCE_TWO_YEAR_CUTOFF is assumed.
+ *     TWO_YEAR_CUTOFF (2024-09-23, the non-quarter rule) is assumed.
  */
 
 import { flow, type Connection } from "@prismatic-io/spectral";
@@ -86,7 +86,6 @@ import {
 } from "./utils";
 import { createPerObjectResultsSheet } from "./reportResults";
 import {
-  COMMERCE_TWO_YEAR_CUTOFF,
   EXT_ID_FIELD,
   type SfRecord,
   buildStudentEmailCache,
@@ -108,6 +107,11 @@ import {
   stripDotZero,
   upsertInBatches,
 } from "./commerceShared";
+
+// 2-year scope — UPDATED 2026-11-16 (Santhosh): non-quarter tables load
+// records from 9/23/2024 onward, no end date. A fixed date kept in this file
+// (same convention as the other flows), applied to Purchase_Date.
+export const TWO_YEAR_CUTOFF = "2024-09-23";
 
 const SF_CARD_PAYMENT_METHOD = "CardPaymentMethod";
 const SF_ORDER = "Order";
@@ -489,7 +493,7 @@ export const purchaseImport = flow({
         knownHeaders,
         (row: RawPurchaseRow) => {
           const purchaseDate = toDate(row.Purchase_Date);
-          if (!purchaseDate || purchaseDate < COMMERCE_TWO_YEAR_CUTOFF) {
+          if (!purchaseDate || purchaseDate < TWO_YEAR_CUTOFF) {
             filteredOut++;
             return;
           }

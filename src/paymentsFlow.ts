@@ -72,7 +72,7 @@
  *   - Date_Time_New is YYYYMMDDHHMMSS (stored as-is, no UTC offset — same as
  *     the Waiver flow). Rows with no parseable value are out of scope.
  *   - 2-year scope: no cutoff column on this tab; Date_Time_New >=
- *     COMMERCE_TWO_YEAR_CUTOFF is assumed.
+ *     TWO_YEAR_CUTOFF (2024-09-23, the non-quarter rule) is assumed.
  *   - Type="Capture", Status="Processed", ProcessingMode="External": workbook
  *     defaults + the required ProcessingMode learned from Registration's real
  *     runs (that field also needs FLS on the migration permission set).
@@ -85,7 +85,6 @@ import { flow, type Connection } from "@prismatic-io/spectral";
 import { str, getAccessToken, getSfInstanceUrl } from "./utils";
 import { createPerObjectResultsSheet } from "./reportResults";
 import {
-  COMMERCE_TWO_YEAR_CUTOFF,
   EXT_ID_FIELD,
   type SfRecord,
   invokeNextWindow,
@@ -101,6 +100,11 @@ import {
   stripDotZero,
   upsertInBatches,
 } from "./commerceShared";
+
+// 2-year scope — UPDATED 2026-11-16 (Santhosh): non-quarter tables load
+// records from 9/23/2024 onward, no end date. A fixed date kept in this file
+// (same convention as the other flows), applied to Date_Time_New.
+export const TWO_YEAR_CUTOFF = "2024-09-23";
 import { PURCHASE_EXT_PREFIX } from "./purchaseFlow";
 
 const SF_PAYMENT = "Payment";
@@ -197,7 +201,7 @@ export function mapToPayment(
   if (!id) return null;
 
   const dateTime = parseDateTime4D(raw.Date_Time_New);
-  if (!dateTime || dateTime.slice(0, 10) < COMMERCE_TWO_YEAR_CUTOFF) {
+  if (!dateTime || dateTime.slice(0, 10) < TWO_YEAR_CUTOFF) {
     skips.outOfScope++;
     return null;
   }

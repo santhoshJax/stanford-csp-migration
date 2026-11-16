@@ -256,14 +256,11 @@
  *     `sf sobject describe` — exact spelling confirmed matching — then
  *     added to VALID_TA_DISCOUNT_TYPES below. Every Discount_Type value
  *     seen in the source data so far now resolves to a valid option.
- *   - "Let's do the last 2 years and the date to go off of is the
- *     Registration_Date" — RESOLVED, implemented as TWO_YEAR_CUTOFF
- *     (currently "2024-10-06", ~2 years back from when this was decided —
- *     a fixed date, not dynamically computed from the run date, same
- *     convention as Transcript Request's TWO_YEAR_CUTOFF). Confirm this
- *     exact cutoff date is what was intended. Rows with a blank or
- *     unparseable Registration_Date are treated as out-of-scope, not given
- *     the benefit of the doubt — same precedent as Transcript Request.
+ *   - 2-year scope — UPDATED 2026-11-16: Registration_Date on or after
+ *     TWO_YEAR_CUTOFF ("2024-09-23"), OR any Enrollment of the registration
+ *     on a Fall 2024 or later course (FIRST_TERM_IN_SCOPE). See the
+ *     constants below. Rows with a blank or unparseable Registration_Date
+ *     are treated as out-of-scope, same precedent as Transcript Request.
  *   - "Go ahead and set them all as Draft as the default values to start
  *     and then we can rerun them as Activated" — CONFIRMS the existing
  *     Status="Draft" default is correct. Also tells us a FUTURE flow (not
@@ -357,6 +354,7 @@ import {
   REGISTRATION_EXT_PREFIX,
   registrationExtId,
   resolveConfiguredPricebooks,
+  streamTsvWindow,
 } from "./commerceShared";
 import { ACTIVATED_ORDER_STATUS, planOrderActivation } from "./purchaseFlow";
 
@@ -373,13 +371,46 @@ const SF_REFUND = "Refund";
 // exactly one Bulk API batch per object.
 const MAX_ROWS = 25_000;
 
-// 2-year scope filter per architect (2026-10-06): "Let's do the last 2
-// years and the date to go off of is the Registration_Date" — same pattern
-// as Transcript Request's TWO_YEAR_CUTOFF (a fixed date, not dynamically
-// computed from the run date, so the migration scope stays stable across
-// re-runs). Set to ~2 years back from the date this was decided; confirm
-// with architect if a different exact cutoff was intended.
-const TWO_YEAR_CUTOFF = "2024-10-06";
+// 2-year scope filter — UPDATED 2026-11-16 (Santhosh): a registration is in
+// scope when EITHER
+//   (a) Registration_Date is on or after TWO_YEAR_CUTOFF (the non-quarter
+//       rule: "9/23/2024 and later"), OR
+//   (b) at least one of its Enrollment rows is on a course in term
+//       FIRST_TERM_IN_SCOPE or later (the quarter rule: "Fall 2024 and
+//       later"), so early sign-ups for Fall 2024 courses still get an Order
+//       that their Enrollment / course line can attach to.
+// Kept as fixed constants in this file (not computed from the run date, and
+// not shared with other flows) so the scope is stable across re-runs.
+// Rows with a blank / unparseable Registration_Date stay out of scope.
+export const TWO_YEAR_CUTOFF = "2024-09-23";
+
+// 4D quarter number of Fall 2024: {academic year}{digit}, fa=1 wi=2 sp=3 su=4.
+// The first 5 characters of Enrollment.Course_ID (e.g. "20241_BUS 62").
+// No upper limit — every later term is in scope.
+export const FIRST_TERM_IN_SCOPE = "20241";
+
+// Performance guard for rule (b): only registrations dated on or after this
+// day are checked against the Enrollment file. Nobody signs up for a Fall
+// 2024 course ~9 months ahead, and without the guard every window of
+// pre-2024 history would re-read the whole Enrollment file for nothing.
+// Lower it if early sign-ups before this date turn up.
+export const TERM_MATCH_EARLIEST_DATE = "2024-01-01";
+
+/** How the date part of the scope rule treats one Registration_Date. */
+export function classifyRegistrationDate(
+  registrationDate: string | null | undefined,
+): "in" | "checkTerm" | "out" {
+  if (!registrationDate) return "out";
+  if (registrationDate >= TWO_YEAR_CUTOFF) return "in";
+  if (registrationDate >= TERM_MATCH_EARLIEST_DATE) return "checkTerm";
+  return "out";
+}
+
+/** True when an Enrollment.Course_ID is on a Fall 2024 or later course. */
+export function isInScopeTermCourseId(courseId: string | undefined): boolean {
+  const term = str(courseId).trim().slice(0, 5);
+  return /^\d{5}$/.test(term) && term >= FIRST_TERM_IN_SCOPE;
+}
 
 const TEST_MODE = true; // when true: process one window only, then stop (no self-invoke)
 const TEST_LIMIT = 50; // additionally cap records (per object) within that one window
@@ -1167,7 +1198,9 @@ interface WindowStreamResult {
   orders: SfRecord[];
   payments: SfRecord[];
   rowsInWindow: number;
-  filteredOut: number; // rows skipped by the 2-year Registration_Date scope filter
+  filteredOut: number; // rows skipped by the 2-year scope filter (date part)
+  /** Rows dated before TWO_YEAR_CUTOFF that pass only if a Fall 2024+ enrollment exists. */
+  termCandidates: RawRegistrationRow[];
   hasMore: boolean;
   nextByteOffset: number;
   parsedHeaders: string[];
@@ -1233,6 +1266,38 @@ async function loadCourseLines(
   return map;
 }
 
+/**
+ * Rule (b) of the 2-year scope: which of `candidateIds` (raw Registration
+ * IDs dated before TWO_YEAR_CUTOFF) have at least one Enrollment row on a
+ * Fall 2024 or later course. Reads the whole Enrollment TSV once, keeping
+ * only matching ids, so memory stays at the size of the candidate set.
+ */
+export async function loadRegistrationIdsWithInScopeTerm(
+  enrollmentFileId: string,
+  accessToken: string,
+  candidateIds: Set<string>,
+): Promise<{ matched: Set<string>; enrollmentRows: number }> {
+  const matched = new Set<string>();
+  const result = await streamTsvWindow(
+    enrollmentFileId,
+    accessToken,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    [],
+    (row) => {
+      const registrationId = stripDotZero(row.Registration_ID);
+      if (
+        registrationId &&
+        candidateIds.has(registrationId) &&
+        isInScopeTermCourseId(row.Course_ID)
+      ) {
+        matched.add(registrationId);
+      }
+    },
+  );
+  return { matched, enrollmentRows: result.rowsInWindow };
+}
+
 async function streamAndMapWindow(
   fileId: string,
   accessToken: string,
@@ -1287,6 +1352,7 @@ async function streamAndMapWindow(
     const unknownCardTypes = new Map<string, number>();
     const orders: SfRecord[] = [];
     const payments: SfRecord[] = [];
+    const termCandidates: RawRegistrationRow[] = [];
     let rowsInWindow = 0;
     let filteredOut = 0;
     let aborted = false;
@@ -1345,12 +1411,17 @@ async function streamAndMapWindow(
         }
         rowsInWindow++;
 
-        // 2-year scope filter — per architect, Registration_Date is the
-        // field to go off of; a blank/unparseable date is treated as
-        // out-of-scope rather than given the benefit of the doubt (same
-        // precedent as Transcript Request's TWO_YEAR_CUTOFF filter).
-        const registrationDate = toDate(row.Registration_Date);
-        if (!registrationDate || registrationDate < TWO_YEAR_CUTOFF) {
+        // 2-year scope filter (see TWO_YEAR_CUTOFF): dated on/after the
+        // cutoff → in; dated before it but on/after TERM_MATCH_EARLIEST_DATE
+        // → held back until the Enrollment file says whether it has a
+        // Fall 2024+ course; anything else (incl. blank date) → out.
+        const scope = classifyRegistrationDate(toDate(row.Registration_Date));
+        if (scope === "checkTerm") {
+          termCandidates.push(row);
+          lastCompletedCursor = rowEndByte;
+          return;
+        }
+        if (scope === "out") {
           filteredOut++;
           lastCompletedCursor = rowEndByte;
           return;
@@ -1376,6 +1447,7 @@ async function streamAndMapWindow(
           payments,
           rowsInWindow,
           filteredOut,
+          termCandidates,
           hasMore: aborted,
           nextByteOffset: lastCompletedCursor,
           parsedHeaders: headers,
@@ -1579,9 +1651,9 @@ export const registrationImport = flow({
     );
 
     let { cardPaymentMethods, orders, payments } = windowResult;
+    let { filteredOut } = windowResult;
     const {
       rowsInWindow,
-      filteredOut,
       hasMore,
       nextByteOffset,
       parsedHeaders,
@@ -1590,10 +1662,59 @@ export const registrationImport = flow({
     logger.info(
       `[Registration Import] Window ${windowNumber} stream complete — ` +
         `rows=${rowsInWindow}, filteredOut(2yr scope)=${filteredOut}, ` +
+        `heldForTermCheck=${windowResult.termCandidates.length}, ` +
         `hasMore=${hasMore}, nextByte=${nextByteOffset}, ` +
         `cardPaymentMethods=${cardPaymentMethods.length}, orders=${orders.length}, ` +
         `payments=${payments.length}`,
     );
+
+    // ── 2-year scope rule (b): early sign-ups with a Fall 2024+ course ──────
+    let termMatched = 0;
+    if (windowResult.termCandidates.length > 0) {
+      const enrollmentFileId = String(
+        configVars["Enrollment File ID"] ?? "",
+      ).trim();
+      if (!enrollmentFileId) {
+        throw new Error(
+          `${windowResult.termCandidates.length} registration(s) in this window are dated before ` +
+            `${TWO_YEAR_CUTOFF} and need the Enrollment file to decide their scope, ` +
+            "but the Enrollment File ID config var is empty.",
+        );
+      }
+      const candidateIds = new Set(
+        windowResult.termCandidates.map((r) => stripDotZero(r.ID)),
+      );
+      logger.info(
+        `[Registration Import] Window ${windowNumber}: ${candidateIds.size} registration(s) dated ` +
+          `${TERM_MATCH_EARLIEST_DATE}–${TWO_YEAR_CUTOFF} (exclusive) — reading the Enrollment file ` +
+          `for Fall 2024+ courses (term ${FIRST_TERM_IN_SCOPE} or later)…`,
+      );
+      const { matched, enrollmentRows } = await loadRegistrationIdsWithInScopeTerm(
+        enrollmentFileId,
+        gdToken,
+        candidateIds,
+      );
+      const unknownCardTypes = new Map<string, number>();
+      for (const row of windowResult.termCandidates) {
+        if (!matched.has(stripDotZero(row.ID))) {
+          filteredOut++;
+          continue;
+        }
+        termMatched++;
+        const cpm = mapToCardPaymentMethod(row, unknownCardTypes);
+        if (cpm) cardPaymentMethods.push(cpm);
+        const order = mapToOrder(row, logger, orderBook.id);
+        if (order) orders.push(order);
+        const payment = mapToPayment(row, logger);
+        if (payment) payments.push(payment);
+      }
+      logUnknownCardTypes("Registration Import", unknownCardTypes, logger);
+      logger.info(
+        `[Registration Import] Window ${windowNumber}: Enrollment rows read=${enrollmentRows}, ` +
+          `early sign-ups kept for a Fall 2024+ course=${termMatched}, ` +
+          `dropped=${windowResult.termCandidates.length - termMatched}`,
+      );
+    }
 
     // ── Payments come from Payments Import, not from CC_Amt (decided 2026-11-08) ──
     if (!ORDER_FLOWS_CREATE_PAYMENTS) {

@@ -62,17 +62,6 @@ export function registrationExtId(id: string): string {
 }
 export const BULK_BATCH_SIZE = 50_000;
 
-/**
- * 2-year scope cutoff. Same fixed date Registration uses (architect decision,
- * 2026-10-06) so every commerce object is cut at the same point and child
- * records (Payments, Purchase Items) line up with the parents that were
- * actually loaded. NOTE: the new workbook tabs (Purchase, Purchase Item,
- * Purchase Inventory, Payments) have no "Field to Determine 2-Year Cutoff"
- * column — applying this to Purchase_Date / Date_Time_New is an assumption
- * to confirm with the architect.
- */
-export const COMMERCE_TWO_YEAR_CUTOFF = "2024-10-06";
-
 // ── Value helpers ─────────────────────────────────────────────────────────────
 
 /** Strips trailing ".0" (4D Longint-to-Text export artifact). */

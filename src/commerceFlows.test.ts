@@ -3,10 +3,16 @@
  * (Purchase Inventory, Purchase, Purchase Item, Payments). No network.
  */
 import {
+  TWO_YEAR_CUTOFF as REG_TWO_YEAR_CUTOFF,
+  classifyRegistrationDate,
+  isInScopeTermCourseId,
+} from "./registrationFlow";
+import { TWO_YEAR_CUTOFF as PURCHASE_TWO_YEAR_CUTOFF } from "./purchaseFlow";
+import { TWO_YEAR_CUTOFF as PAYMENTS_TWO_YEAR_CUTOFF } from "./paymentsFlow";
+import {
   parseDateTime4D,
   parseExpiry,
   mapCardType,
-  COMMERCE_TWO_YEAR_CUTOFF,
   pricebooksInLoadOrder,
   orderPricebook,
   registrationExtId,
@@ -459,7 +465,6 @@ describe("Payments → Payment / Refund", () => {
       Amount: 25,
       Type: "Applied",
     });
-    expect(COMMERCE_TWO_YEAR_CUTOFF).toBe("2024-10-06");
   });
 });
 
@@ -978,5 +983,33 @@ describe("Registration Import — Order balance and discount type (decided 2026-
     ]) {
       expect(order({ Discount_Type: v }).TA_Discount_Type__c).toBe(v);
     }
+  });
+});
+
+describe("Registration 2-year scope (date OR Fall 2024+ term)", () => {
+  it("classifies Registration_Date against 2024-09-23 and the term-check guard", () => {
+    expect(REG_TWO_YEAR_CUTOFF).toBe("2024-09-23");
+    expect(classifyRegistrationDate("2024-09-23")).toBe("in");
+    expect(classifyRegistrationDate("2026-01-05")).toBe("in");
+    expect(classifyRegistrationDate("2024-09-22")).toBe("checkTerm");
+    expect(classifyRegistrationDate("2024-01-01")).toBe("checkTerm");
+    expect(classifyRegistrationDate("2023-12-31")).toBe("out");
+    expect(classifyRegistrationDate(null)).toBe("out");
+    expect(classifyRegistrationDate("")).toBe("out");
+  });
+
+  it("treats Fall 2024 (20241) and every later term as in scope", () => {
+    expect(isInScopeTermCourseId("20241_BUS 62")).toBe(true);
+    expect(isInScopeTermCourseId("20254_ART 132")).toBe(true);
+    expect(isInScopeTermCourseId("20261_DAR 200")).toBe(true); // no upper limit
+    expect(isInScopeTermCourseId("20234_BUS 62")).toBe(false); // Summer 2024
+    expect(isInScopeTermCourseId("")).toBe(false);
+    expect(isInScopeTermCourseId(undefined)).toBe(false);
+    expect(isInScopeTermCourseId("ABC")).toBe(false);
+  });
+
+  it("Purchase and Payments each carry their own 2024-09-23 cutoff", () => {
+    expect(PURCHASE_TWO_YEAR_CUTOFF).toBe("2024-09-23");
+    expect(PAYMENTS_TWO_YEAR_CUTOFF).toBe("2024-09-23");
   });
 });
