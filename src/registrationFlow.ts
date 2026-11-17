@@ -1770,16 +1770,20 @@ export const registrationImport = flow({
       payments = payments.slice(TEST_SKIP, TEST_SKIP + TEST_LIMIT);
       refunds.splice(TEST_LIMIT);
       logger.info(
-        `[Registration Import] TEST MODE: skipped first ${TEST_SKIP}, limited to next ${TEST_LIMIT} records per object, and won't invoke the next window.`,
+        `[Registration Import] TEST MODE: skipped first ${TEST_SKIP}, limited to next ${TEST_LIMIT} records per object; ` +
+          "won't invoke the next window unless this one has nothing left to send.",
       );
     }
 
     // ── Upsert this window's records (skipped entirely if the window was empty) ──
-    if (
+    // In TEST_MODE the chain only stops after a window that actually sends
+    // something: the file is oldest-first, so the early windows are entirely
+    // outside the 2-year scope and stopping on one of them tests nothing.
+    const windowIsEmpty =
       cardPaymentMethods.length === 0 &&
       orders.length === 0 &&
-      payments.length === 0
-    ) {
+      payments.length === 0;
+    if (windowIsEmpty) {
       logger.info(
         `[Registration Import] Window ${windowNumber}: no records to upsert.`,
       );
@@ -2372,15 +2376,18 @@ export const registrationImport = flow({
     );
 
     // ── Invoke next window if more rows remain ───────────────────────────────
-    if (TEST_MODE && hasMore) {
+    if (TEST_MODE && hasMore && !windowIsEmpty) {
       logger.info(
         "[Registration Import] TEST MODE: more rows remain, but stopping here " +
           "— set TEST_MODE = false to process the full file.",
       );
     } else if (hasMore) {
       logger.info(
-        `[Registration Import] More rows remain — invoking window ${windowNumber + 1} ` +
-          `at byte ${nextByteOffset}…`,
+        TEST_MODE
+          ? `[Registration Import] TEST MODE: nothing in scope to send in window ${windowNumber} — ` +
+              `moving on to window ${windowNumber + 1} at byte ${nextByteOffset}…`
+          : `[Registration Import] More rows remain — invoking window ${windowNumber + 1} ` +
+              `at byte ${nextByteOffset}…`,
       );
       await (
         context as unknown as {
