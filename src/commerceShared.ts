@@ -201,6 +201,61 @@ export async function sfQueryAll<T>(
   return all;
 }
 
+// ── CardPaymentMethod create-only fields ─────────────────────────────────────
+
+/**
+ * CardPaymentMethod fields Salesforce sets on create but never lets you
+ * change (describe: createable=true, updateable=false). Sending any of them
+ * for a record that already exists fails the whole row with
+ * INVALID_FIELD_FOR_INSERT_UPDATE, so a re-run over loaded cards fails.
+ */
+export const CARD_PAYMENT_METHOD_CREATE_ONLY_FIELDS = [
+  "CardType",
+  "CardCategory",
+  "CardLastFour",
+  "ProcessingMode",
+];
+
+/**
+ * Removes CARD_PAYMENT_METHOD_CREATE_ONLY_FIELDS from the records whose
+ * External_ID_4D__c already exists in Salesforce, so the upsert updates
+ * them instead of failing. New records keep every field. Returns how many
+ * existing records were found.
+ */
+export async function dropCreateOnlyFieldsForExistingCards(
+  base: string,
+  token: string,
+  records: SfRecord[],
+): Promise<number> {
+  const extIds = [
+    ...new Set(
+      records
+        .map((r) => r[EXT_ID_FIELD])
+        .filter((v): v is string => typeof v === "string" && v !== ""),
+    ),
+  ];
+  const existing = new Set<string>();
+  for (let i = 0; i < extIds.length; i += ORDER_QUERY_ID_CHUNK) {
+    const list = extIds
+      .slice(i, i + ORDER_QUERY_ID_CHUNK)
+      .map((id) => `'${id.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`)
+      .join(",");
+    const rows = await sfQueryAll<{ External_ID_4D__c: string }>(
+      base,
+      token,
+      `SELECT ${EXT_ID_FIELD} FROM CardPaymentMethod WHERE ${EXT_ID_FIELD} IN (${list})`,
+    );
+    for (const row of rows) existing.add(row.External_ID_4D__c);
+  }
+  for (const record of records) {
+    if (!existing.has(record[EXT_ID_FIELD] as string)) continue;
+    for (const field of CARD_PAYMENT_METHOD_CREATE_ONLY_FIELDS) {
+      delete record[field];
+    }
+  }
+  return existing.size;
+}
+
 /** What Salesforce already holds for one Order (looked up by External_ID_4D__c). */
 export interface OrderState {
   id: string;

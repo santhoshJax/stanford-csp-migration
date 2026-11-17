@@ -106,6 +106,8 @@ import {
   streamTsvWindow,
   stripDotZero,
   upsertInBatches,
+  dropCreateOnlyFieldsForExistingCards,
+  CARD_PAYMENT_METHOD_CREATE_ONLY_FIELDS,
 } from "./commerceShared";
 
 // 2-year scope — UPDATED 2026-11-16 (Santhosh): non-quarter tables load
@@ -571,6 +573,19 @@ export const purchaseImport = flow({
     }
 
     // ── Phase 1: CardPaymentMethod ───────────────────────────────────────────
+    if (cardPaymentMethods.length > 0) {
+      const existingCards = await dropCreateOnlyFieldsForExistingCards(
+        sfBase,
+        sfToken,
+        cardPaymentMethods,
+      );
+      if (existingCards > 0) {
+        logger.info(
+          `[Purchase Import][CardPaymentMethod] ${existingCards} already in Salesforce — ` +
+            `updating them without ${CARD_PAYMENT_METHOD_CREATE_ONLY_FIELDS.join(", ")} (create-only fields)`,
+        );
+      }
+    }
     const cpm =
       cardPaymentMethods.length > 0
         ? await upsertInBatches(

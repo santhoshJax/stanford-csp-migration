@@ -355,6 +355,8 @@ import {
   registrationExtId,
   resolveConfiguredPricebooks,
   streamTsvWindow,
+  dropCreateOnlyFieldsForExistingCards,
+  CARD_PAYMENT_METHOD_CREATE_ONLY_FIELDS,
 } from "./commerceShared";
 import { ACTIVATED_ORDER_STATUS, planOrderActivation } from "./purchaseFlow";
 
@@ -1801,6 +1803,17 @@ export const registrationImport = flow({
     let cpmFailedCsv = "";
 
     if (cardPaymentMethods.length > 0) {
+      const existingCards = await dropCreateOnlyFieldsForExistingCards(
+        sfBase,
+        sfToken,
+        cardPaymentMethods,
+      );
+      if (existingCards > 0) {
+        logger.info(
+          `[Registration Import][CardPaymentMethod] ${existingCards} already in Salesforce — ` +
+            `updating them without ${CARD_PAYMENT_METHOD_CREATE_ONLY_FIELDS.join(", ")} (create-only fields)`,
+        );
+      }
       logger.info(
         `[Registration Import] Upserting ${cardPaymentMethods.length} CardPaymentMethod record(s)…`,
       );
