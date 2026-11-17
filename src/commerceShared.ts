@@ -558,6 +558,8 @@ export interface WindowCursor {
   byteOffset: number;
   knownHeaders: string[];
   windowNumber: number;
+  /** Results spreadsheet of this run, once a window has created it. */
+  resultsSheetId?: string;
 }
 
 /** Reads the byte-offset cursor from the trigger payload (same shape as Registration). */
@@ -577,6 +579,10 @@ export function readWindowCursor(params: {
       typeof triggerBody?.windowNumber === "number"
         ? triggerBody.windowNumber
         : 1,
+    resultsSheetId:
+      typeof triggerBody?.resultsSheetId === "string"
+        ? triggerBody.resultsSheetId
+        : undefined,
   };
 }
 
@@ -587,6 +593,7 @@ export async function invokeNextWindow(
     byteOffset: number;
     headers: string[];
     windowNumber: number;
+    resultsSheetId?: string;
   },
 ): Promise<void> {
   await (

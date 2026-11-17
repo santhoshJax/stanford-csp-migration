@@ -85,11 +85,17 @@
  * Skipped rows: every row not sent (and why) is written to a "Skipped" tab on
  * the results sheet — the Enrollment source columns plus "Skip Reason".
  *
- * Windowed execution / TEST_MODE: same model as Registration; TEST_MODE is ON.
+ * Windowed execution / TEST_MODE: same model as Registration; TEST_MODE is OFF.
+ * One results spreadsheet per run (created by the first window with
+ * something to report, then passed along). "Order not loaded" rows on
+ * courses before FIRST_TERM_IN_SCOPE are old history outside the 2-year
+ * scope: counted in the log, but not listed on the Skipped tab (over 500k
+ * rows would exceed the spreadsheet's cell limit and hide the real skips).
  */
 
 import { flow, type Connection } from "@prismatic-io/spectral";
 import { str, getAccessToken, getSfInstanceUrl } from "./utils";
+import { isInScopeTermCourseId } from "./registrationFlow";
 import {
   buildSkippedTab,
   createPerObjectResultsSheet,
@@ -133,7 +139,7 @@ export const DEFAULT_COURSE_FEE_PRODUCT = "Course Additional Fees";
 const CENT_TOLERANCE = 0.005;
 
 const MAX_ROWS = 25_000;
-const TEST_MODE = true;
+const TEST_MODE = false;
 const TEST_LIMIT = 50;
 const TEST_SKIP = 0;
 
@@ -491,7 +497,9 @@ export const registrationItemImport = flow({
 
   onExecution: async (context, params) => {
     const { logger, configVars } = context;
-    const { byteOffset, knownHeaders, windowNumber } = readWindowCursor(params);
+    const { byteOffset, knownHeaders, windowNumber, resultsSheetId } =
+      readWindowCursor(params);
+    let nextResultsSheetId = resultsSheetId;
 
     logger.info(
       `[${FLOW_NAME}] Starting window ${windowNumber} at byte ${byteOffset}…`,
@@ -563,7 +571,9 @@ export const registrationItemImport = flow({
     const feeEntryId: string | undefined = feeEntries[0]?.Id;
     logger.info(
       `[${FLOW_NAME}] Course fee product "${feeProductName}": ` +
-        (feeEntryId ? "active entry found" : `NO active entry in "${orderBook.name}"`),
+        (feeEntryId
+          ? "active entry found"
+          : `NO active entry in "${orderBook.name}"`),
     );
 
     // ── Stream this window ───────────────────────────────────────────────────
@@ -740,35 +750,63 @@ export const registrationItemImport = flow({
           )
         : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
 
-    try {
-      const sheet = await createPerObjectResultsSheet({
-        flowName: FLOW_NAME,
-        objects: [
-          {
-            objectName: SF_ORDER_ITEM,
-            successfulCsv: result.successfulCsv,
-            failedCsv: result.failedCsv,
-          },
-          {
-            objectName: `${SF_ORDER_ITEM} (course fee)`,
-            successfulCsv: feeResult.successfulCsv,
-            failedCsv: feeResult.failedCsv,
-          },
-          {
-            objectName: SF_ORDER_ITEM_ADJUSTMENT,
-            successfulCsv: adjustmentResult.successfulCsv,
-            failedCsv: adjustmentResult.failedCsv,
-          },
-        ],
-        skipped: buildSkippedTab(parsedHeaders, skips.records),
-        accessToken: gdToken,
-        folderId: failedFolderId,
-      });
-      logger.info(`[${FLOW_NAME}] Results sheet: ${sheet.url}`);
-    } catch (err) {
-      logger.warn(
-        `[${FLOW_NAME}] Could not write results sheet: ${String(err)}`,
+    // Skipped tab: leave out old-history rows (see header comment).
+    const reportedSkips = skips.records.filter(
+      (s) =>
+        !(
+          s.reason.startsWith("Order not loaded") &&
+          !isInScopeTermCourseId(s.row.Course_ID)
+        ),
+    );
+    const oldHistorySkips = skips.records.length - reportedSkips.length;
+    if (oldHistorySkips > 0) {
+      logger.info(
+        `[${FLOW_NAME}] ${oldHistorySkips} "Order not loaded" row(s) on pre-Fall-2024 courses ` +
+          "(outside the 2-year scope) — counted, not listed on the Skipped tab.",
       );
+    }
+    const windowHasResults =
+      items.length > 0 ||
+      feeItems.length > 0 ||
+      adjustments.length > 0 ||
+      reportedSkips.length > 0;
+    if (!windowHasResults) {
+      logger.info(
+        `[${FLOW_NAME}] Window ${windowNumber}: nothing sent or to report — results sheet not written.`,
+      );
+    } else {
+      try {
+        const sheet = await createPerObjectResultsSheet({
+          flowName: FLOW_NAME,
+          objects: [
+            {
+              objectName: SF_ORDER_ITEM,
+              successfulCsv: result.successfulCsv,
+              failedCsv: result.failedCsv,
+            },
+            {
+              objectName: `${SF_ORDER_ITEM} (course fee)`,
+              successfulCsv: feeResult.successfulCsv,
+              failedCsv: feeResult.failedCsv,
+            },
+            {
+              objectName: SF_ORDER_ITEM_ADJUSTMENT,
+              successfulCsv: adjustmentResult.successfulCsv,
+              failedCsv: adjustmentResult.failedCsv,
+            },
+          ],
+          skipped: buildSkippedTab(parsedHeaders, reportedSkips),
+          accessToken: gdToken,
+          folderId: failedFolderId,
+          spreadsheetId: resultsSheetId,
+        });
+        nextResultsSheetId = sheet.spreadsheetId;
+        logger.info(`[${FLOW_NAME}] Results sheet: ${sheet.url}`);
+      } catch (err) {
+        logger.warn(
+          `[${FLOW_NAME}] Could not write results sheet: ${String(err)}`,
+        );
+      }
     }
 
     logger.info(
@@ -789,6 +827,7 @@ export const registrationItemImport = flow({
         byteOffset: nextByteOffset,
         headers: parsedHeaders,
         windowNumber: windowNumber + 1,
+        resultsSheetId: nextResultsSheetId,
       });
     } else {
       logger.info(
