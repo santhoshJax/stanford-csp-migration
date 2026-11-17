@@ -78,6 +78,38 @@ const ALWAYS_APPLY_FIELDS = new Set([
 
 const CORRECTION_TAB = "Student";
 
+// Some correction sheets (e.g. the broader "address + other errors" sheet)
+// carry one row per flagged record with every CORRECTION_FIELDS column
+// present, but only ONE of them is the actual intended fix — the others are
+// just that record's pre-correction reference values, not overrides. Which
+// column is the real fix is named by that row's "Error Message" category, so
+// when that column is present on the sheet, only the field(s) it names are
+// applied from that row; every other CORRECTION_FIELDS column is ignored for
+// that row regardless of what value sits in it. Sheets with no "Error
+// Message" column (e.g. the address-only sheet) are unaffected — every
+// present field keeps being applied as before.
+const ERROR_MESSAGE_COLUMN = "Error Message";
+const ERROR_MESSAGE_FIELD_MAP: Record<string, string[]> = {
+  "MailingState issue": [
+    "PersonMailingStreet",
+    "PersonMailingCity",
+    "PersonMailingState",
+    "PersonMailingCountry",
+    "PersonMailingPostalCode",
+  ],
+  "MailingCountry issue": [
+    "PersonMailingStreet",
+    "PersonMailingCity",
+    "PersonMailingState",
+    "PersonMailingCountry",
+    "PersonMailingPostalCode",
+  ],
+  "University Id Issue": ["University_ID__pc"],
+  "Birthdate Issue": ["PersonBirthdate"],
+  "Discount Verification Date Issue": ["Discount_Verification_Date__pc"],
+  "Person Email issue": ["PersonEmail"],
+};
+
 // ── Raw TSV record ─────────────────────────────────────────────────────────────
 
 interface RawStudentRecord {
@@ -361,6 +393,12 @@ function mapToAccount(raw: RawStudentRecord): Partial<SalesforceAccount> {
  * Reads a Google Sheet and returns a Map<rawId, {tsvField: correctedValue}>.
  * Only fields listed in `CORRECTION_FIELDS` are captured.
  * Blank cells in the sheet are skipped (existing TSV value is kept).
+ *
+ * When the sheet has an "Error Message" column, each row is additionally
+ * scoped to only the field(s) named by ERROR_MESSAGE_FIELD_MAP for that
+ * row's category — see the comment above that map for why. A row whose
+ * category isn't recognized (including blank) contributes no fields at all,
+ * rather than falling back to applying everything present on the row.
  */
 async function loadCorrectionSheet(
   spreadsheetId: string,
@@ -378,12 +416,19 @@ async function loadCorrectionSheet(
   const headers = rows[0].map((h) => h.trim());
   const idIdx = headers.indexOf("ID");
   if (idIdx === -1) return map;
+  const errorMessageIdx = headers.indexOf(ERROR_MESSAGE_COLUMN);
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     const id = (row[idIdx] ?? "").trim();
     if (!id) continue;
+    let allowedFields: string[] | null = null;
+    if (errorMessageIdx !== -1) {
+      const category = (row[errorMessageIdx] ?? "").trim();
+      allowedFields = ERROR_MESSAGE_FIELD_MAP[category] ?? [];
+    }
     const corrections: Record<string, string> = {};
     for (const field of correctionFields) {
+      if (allowedFields && !allowedFields.includes(field)) continue;
       const ci = headers.indexOf(field);
       if (ci === -1) continue;
       const val = (row[ci] ?? "").trim();
