@@ -414,7 +414,7 @@ export function isInScopeTermCourseId(courseId: string | undefined): boolean {
   return /^\d{5}$/.test(term) && term >= FIRST_TERM_IN_SCOPE;
 }
 
-const TEST_MODE = true; // when true: process one window only, then stop (no self-invoke)
+const TEST_MODE = false; // when true: stop after the first window that sends records (no further self-invoke)
 const TEST_LIMIT = 50; // additionally cap records (per object) within that one window
 // Skips the first N mapped rows before applying TEST_LIMIT — lets a test run
 // target fresh, never-before-touched registrations instead of re-hitting
