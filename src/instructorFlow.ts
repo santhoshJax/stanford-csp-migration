@@ -36,6 +36,7 @@ import {
   normalizeStateName,
   normalizeUniversityId,
   cleanEmail,
+  maskEmailForEnvironment,
   getAccessToken,
   getSfInstanceUrl,
   runBulkJob,
@@ -471,6 +472,7 @@ async function streamAndParseInstructorTsv(
   correctionMap: Map<string, Record<string, string>>,
   correctionFields: string[],
   correctionEnabled: boolean,
+  emailMaskingSuffix: string,
 ): Promise<InstructorStreamResult> {
   const reqHeaders: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
@@ -656,12 +658,25 @@ async function streamAndParseInstructorTsv(
           }
         }
 
+        if (account.PersonEmail) {
+          account.PersonEmail = maskEmailForEnvironment(
+            account.PersonEmail,
+            emailMaskingSuffix,
+          );
+        }
+
         const extId = record.ID.trim();
         if (!firstId) firstId = extId;
         lastId = extId;
         accounts.push(account);
 
         const employment = mapToPersonEmployment(record);
+        if (employment?.Email_for_Students__c) {
+          employment.Email_for_Students__c = maskEmailForEnvironment(
+            employment.Email_for_Students__c,
+            emailMaskingSuffix,
+          );
+        }
         if (employment) employments.push(employment);
 
         lastCompletedCursor = rowEndByte;
@@ -752,6 +767,9 @@ export const instructorImport = flow({
       | undefined;
     const correctionEnabled =
       String(configVars["Instructor Correction Enabled"]) === "true";
+    const emailMaskingEnabled =
+      String(configVars["Email Masking Suffix .uat"]) === "true";
+    const emailMaskingSuffix = emailMaskingEnabled ? ".uat" : "";
 
     if (!fileId) throw new Error("Instructor File ID config var is empty.");
 
@@ -818,6 +836,7 @@ export const instructorImport = flow({
       correctionMap,
       CORRECTION_FIELDS,
       correctionEnabled,
+      emailMaskingSuffix,
     );
     logger.info(
       `[Instructor Import] Parsed ${accounts.length} accounts, ${employments.length} employment records` +

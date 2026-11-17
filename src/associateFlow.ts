@@ -31,6 +31,7 @@ import {
   normalizeStateName,
   normalizeUniversityId,
   cleanEmail,
+  maskEmailForEnvironment,
   getAccessToken,
   getSfInstanceUrl,
   runBulkJob,
@@ -429,6 +430,7 @@ async function streamAndParseTsv(
   correctionMap: Map<string, Record<string, string>>,
   correctionFields: string[],
   correctionEnabled: boolean,
+  emailMaskingSuffix: string,
 ): Promise<StreamResult> {
   const reqHeaders: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
@@ -606,6 +608,13 @@ async function streamAndParseTsv(
           }
         }
 
+        if (account.PersonEmail) {
+          account.PersonEmail = maskEmailForEnvironment(
+            account.PersonEmail,
+            emailMaskingSuffix,
+          );
+        }
+
         const extId = record.ID.trim();
         if (!firstId) firstId = extId;
         lastId = extId;
@@ -701,6 +710,9 @@ export const associateImport = flow({
       | undefined;
     const correctionEnabled =
       String(configVars["Associate Correction Enabled"]) === "true";
+    const emailMaskingEnabled =
+      String(configVars["Email Masking Suffix .uat"]) === "true";
+    const emailMaskingSuffix = emailMaskingEnabled ? ".uat" : "";
 
     if (!fileId) throw new Error("Associate File ID config var is empty.");
 
@@ -766,6 +778,7 @@ export const associateImport = flow({
       correctionMap,
       CORRECTION_FIELDS,
       correctionEnabled,
+      emailMaskingSuffix,
     );
     logger.info(
       `[Associate Import] Parsed ${accounts.length} accounts, ${personEmployments.length} employment records` +

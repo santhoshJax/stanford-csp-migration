@@ -25,6 +25,7 @@ import {
   // toSalesforceCountryCode, // replaced by normalizeCountryName (text field approach)
   // toSalesforceStateCode,   // no longer needed — state sent as-is
   cleanEmail,
+  maskEmailForEnvironment,
   getAccessToken,
   getSfInstanceUrl,
   runBulkJob,
@@ -408,6 +409,7 @@ async function streamAndParseTsv(
   correctionMap: Map<string, Record<string, string>>,
   CORRECTION_FIELDS: string[],
   correctionEnabled: boolean,
+  emailMaskingSuffix: string,
 ): Promise<StreamResult> {
   const reqHeaders: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
@@ -652,6 +654,13 @@ async function streamAndParseTsv(
             }
           }
         }
+        if (account.PersonEmail) {
+          account.PersonEmail = maskEmailForEnvironment(
+            account.PersonEmail,
+            emailMaskingSuffix,
+          );
+        }
+
         const extId = `person${record.ID.trim()}`;
         if (!firstId) firstId = extId;
         lastId = extId;
@@ -744,6 +753,9 @@ export const studentImport = flow({
       | undefined;
     const correctionEnabled =
       String(configVars["Student Correction Enabled"]) === "true";
+    const emailMaskingEnabled =
+      String(configVars["Email Masking Suffix .uat"]) === "true";
+    const emailMaskingSuffix = emailMaskingEnabled ? ".uat" : "";
 
     if (!fileId) throw new Error("Student File ID config var is empty.");
 
@@ -825,6 +837,7 @@ export const studentImport = flow({
       correctionMap,
       CORRECTION_FIELDS,
       correctionEnabled,
+      emailMaskingSuffix,
     );
     logger.info(
       `[Student Import] Parsed ${contacts.length} contacts (hasMore=${hasMore}, nextByte=${nextByteOffset})`,

@@ -125,6 +125,13 @@ export const configPages = {
         description:
           "Google Sheets spreadsheet ID of the correction sheet used by Student, Instructor, and Associate Import when their correction mode is enabled. Leave blank when no correction is running. Must contain a 'Student', 'Instructor', and/or 'Associate' tab with an 'ID' column plus columns for each corrected field. Course corrections use the separate Course Correction Sheet ID on the Course Configuration page.",
       }),
+      "Email Masking Suffix .uat": configVar({
+        stableKey: "ems00112-2334-4556-7788-aabbccddeeff",
+        dataType: "boolean",
+        default: "false",
+        description:
+          "When true, Student, Instructor, and Associate Import append \".uat\" to every imported email address, so this org never receives a real, deliverable email. Set to false in production. Safe to re-run — an address that already ends with \".uat\" is not double-suffixed.",
+      }),
     },
   }),
 

@@ -236,6 +236,26 @@ export function cleanEmail(v: string | undefined): string {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : "";
 }
 
+/**
+ * Appends an environment suffix (e.g. ".uat") to a cleaned email address, so
+ * non-production orgs never receive a real, deliverable address. Blank/unset
+ * suffix is a no-op — production runs with no suffix configured send the
+ * real address unchanged. Idempotent: an email that already ends with the
+ * suffix (e.g. re-running an import) is left as-is rather than double-suffixed.
+ */
+export function maskEmailForEnvironment(
+  email: string,
+  suffix: string | undefined,
+): string {
+  if (!email) return email;
+  const trimmed = (suffix ?? "").trim();
+  if (!trimmed) return email;
+  const normalizedSuffix = trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
+  return email.toLowerCase().endsWith(normalizedSuffix.toLowerCase())
+    ? email
+    : `${email}${normalizedSuffix}`;
+}
+
 /** Returns true when the raw source string has a recognisable value (non-blank). */
 export function hasValue(v: string | undefined): boolean {
   return (v ?? "").trim().length > 0;
