@@ -762,7 +762,9 @@ export const instructorImport = flow({
     // ── 2a. Correction sheet config ────────────────────────────────────────────
     const correctionSheetId = correctionEnabled
       ? String(
-          (configVars as Record<string, unknown>)["Correction Sheet ID"] ?? "",
+          (configVars as Record<string, unknown>)[
+            "Student/Instructor/Associate Correction Sheet ID"
+          ] ?? "",
         ).trim()
       : "";
 

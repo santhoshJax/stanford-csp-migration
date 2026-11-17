@@ -73,6 +73,23 @@ export function normaliseCatalogNotes(v: string | undefined | null): string | nu
   return v.replace(/_4DNL_/g, "\n").trim();
 }
 
+/**
+ * Strip HTML tags and cap the result to a max length, for plain Text fields
+ * (unlike normaliseCatalogNotes above, which deliberately keeps HTML since
+ * its targets are Rich Text Area fields). Some source titles contain inline
+ * formatting tags (e.g. <span style="font-style:italic">) that push an
+ * otherwise-short title past a 255-char Text field limit — stripping the
+ * tags removes that bloat; the length cap is a safety net for any title
+ * still too long after stripping.
+ */
+export function stripHtmlForTextField(
+  v: string | undefined | null,
+  maxLength = 255,
+): string {
+  const s = (v ?? "").replace(/<[^>]*>/g, "").trim();
+  return s.slice(0, maxLength);
+}
+
 // ── Notes merge ───────────────────────────────────────────────────────────────
 
 export function mergeNotes(
@@ -255,9 +272,16 @@ export function parseCourseTime(s: string | undefined | null): {
     }
   }
 
+  // Salesforce Time fields require the full ISO form "HH:mm:ss.SSSZ" — a bare
+  // "HH:mm:ss" is accepted by the API but is mishandled by the platform's own
+  // end-after-start check, rejecting valid ranges (confirmed directly against
+  // Stanford_UAT: the exact same literal value succeeds with ".000Z" appended
+  // and fails without it).
+  const start = startRaw ? parseTime12h(startRaw) : null;
+  const end = endRaw ? parseTime12h(endRaw) : null;
   return {
-    startTime: startRaw ? parseTime12h(startRaw) : null,
-    endTime: endRaw ? parseTime12h(endRaw) : null,
+    startTime: start ? `${start}.000Z` : null,
+    endTime: end ? `${end}.000Z` : null,
   };
 }
 
@@ -302,4 +326,120 @@ export function extractSectionSuffix(code: string): string | null {
   const h = code.trim().match(/-(\d+[A-Z]*)$/i);
   if (h) return h[1].toUpperCase();
   return null;
+}
+
+// ── Shared "Price Books" config var ───────────────────────────────────────────
+//
+// Parsing and validation of the "Price Books" config var, used by Purchase
+// Inventory / Purchase / Purchase Item / Registration / Registration Item
+// (see commerceShared.ts). The course import flows no longer create Product2 or
+// PricebookEntry records — Salesforce org automation creates them from each
+// CourseOffering (decided 2026-11-04).
+//   - The Standard Price Book is always included, even when it is not listed,
+//     because Salesforce rejects a custom-book entry until the Product has a
+//     Standard entry.
+//   - At most ONE custom book: Orders use a single order price book.
+
+/**
+ * Splits the "Price Books" config var into distinct, trimmed names. Matching
+ * is case-insensitive (as SOQL `Name IN` is), so "a, A" is one name.
+ */
+export function parsePriceBookNames(v: string | undefined | null): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const part of String(v ?? "").split(",")) {
+    const name = part.trim();
+    if (!name || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    names.push(name);
+  }
+  return names;
+}
+
+export interface PricebookRecord {
+  Id: string;
+  Name: string;
+  IsStandard: boolean;
+  IsActive: boolean;
+}
+
+export interface ResolvedPriceBooks {
+  standard: PricebookRecord;
+  /** The one custom book, or null when only Standard is configured. */
+  custom: PricebookRecord | null;
+  /** True when Standard was not in the config var and was added anyway. */
+  standardAdded: boolean;
+  /** Non-fatal notes for the run log. */
+  warnings: string[];
+}
+
+/**
+ * Checks the configured names against the Pricebook2 records found in the org
+ * (the query returns every listed name plus the Standard book). Throws before
+ * any row is written when:
+ *   - a listed name has no Pricebook2, or that Pricebook2 is inactive
+ *   - more than one custom (non-Standard) book is listed
+ *   - the org has no Standard Price Book
+ */
+export function resolvePriceBooks(
+  configuredNames: string[],
+  found: PricebookRecord[],
+): ResolvedPriceBooks {
+  const standard = found.find((b) => b.IsStandard);
+  if (!standard) {
+    throw new Error(
+      "[Price Books] No Standard Price Book found (Pricebook2.IsStandard = true).",
+    );
+  }
+  const byName = new Map(found.map((b) => [b.Name.trim().toLowerCase(), b]));
+  const missing: string[] = [];
+  const inactive: string[] = [];
+  const customs: PricebookRecord[] = [];
+  let standardListed = false;
+  for (const name of configuredNames) {
+    const book = byName.get(name.toLowerCase());
+    if (!book) {
+      missing.push(name);
+      continue;
+    }
+    if (!book.IsActive) inactive.push(name);
+    if (book.IsStandard) standardListed = true;
+    else if (!customs.some((c) => c.Id === book.Id)) customs.push(book);
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `[Price Books] Not found in Salesforce: ${missing.map((m) => `"${m}"`).join(", ")}. ` +
+        "Check the spelling in the Price Books config var, or create the price book first.",
+    );
+  }
+  if (inactive.length > 0) {
+    throw new Error(
+      `[Price Books] Inactive in Salesforce: ${inactive.map((m) => `"${m}"`).join(", ")}. ` +
+        "Activate the price book, or remove it from the Price Books config var.",
+    );
+  }
+  if (customs.length > 1) {
+    throw new Error(
+      `[Price Books] Only one custom price book is supported, but ${customs.length} are listed: ` +
+        `${customs.map((c) => `"${c.Name}"`).join(", ")}. ` +
+        "Orders use a single order price book, so list only one custom book.",
+    );
+  }
+  const warnings: string[] = [];
+  if (!standardListed) {
+    warnings.push(
+      `"${standard.Name}" is not in the Price Books config var — added anyway, because custom price book entries need a Standard entry first.`,
+    );
+  }
+  if (!standard.IsActive) {
+    warnings.push(
+      `"${standard.Name}" is inactive — entries are still created in it, but orders cannot use an inactive price book.`,
+    );
+  }
+  return {
+    standard,
+    custom: customs[0] ?? null,
+    standardAdded: !standardListed,
+    warnings,
+  };
 }

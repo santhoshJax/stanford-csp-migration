@@ -4,10 +4,16 @@
  * Streams the Transcript_Request TSV from Google Drive, applies the 2-year
  * scope filter (Request_Date >= 2024-07-07), and:
  *   1. Queries Salesforce for Person Accounts matching each Student_ID via
- *      Student_ID_4D__c. Records with no matching Person Account are skipped.
+ *      Student_ID_4D__c (returns Account Id + PersonContactId + names).
  *   2. Bulk-upserts CSP_Transcript_Request__c (parent) via Bulk API 2.0.
+ *      - Student__c (Account lookup) = matched Person Account Id.
+ *      - Contact__c (Contact lookup) = that Person Account's PersonContactId.
  *      - First/Last name come from the matched Person Account.
- *      - Account__c lookup field set via Account__r.Student_ID_4D__c.
+ *      - Rows with NO matching Person Account are still sent: the raw
+ *        Student_ID goes into Student__c so Salesforce rejects the record and
+ *        it appears in the results-sheet error CSV (team decision 2026-10-27).
+ *      - Account__c and Student_ID__c were deleted from the object and are
+ *        no longer mapped.
  *   3. Bulk-upserts Transcript_Request_Item__c child records via a second
  *      Bulk API 2.0 job (one record per non-empty Entry_1–5 value).
  *
@@ -244,15 +250,19 @@ async function streamRawRows(
 //
 // Matches on Student_ID_4D__c. Returns a map keyed by that field value so
 // we can look up names and confirm account existence in O(1) per row.
-// Rows with no match are skipped — not imported.
+// Rows with no match are still submitted and rejected by Salesforce.
 
 interface AccountInfo {
+  accountId: string;
+  contactId: string;
   firstName: string;
   lastName: string;
 }
 
 interface SoqlAccountPage {
   records: Array<{
+    Id: string;
+    PersonContactId: string | null;
     Student_ID_4D__c: string | null;
     FirstName: string | null;
     LastName: string | null;
@@ -273,7 +283,7 @@ async function fetchAccountMap(
     const batch    = studentIds.slice(i, i + SOQL_BATCH_SIZE);
     const inClause = batch.map((id) => `'${id}'`).join(",");
     const q =
-      `SELECT Student_ID_4D__c,FirstName,LastName FROM Account ` +
+      `SELECT Id,PersonContactId,Student_ID_4D__c,FirstName,LastName FROM Account ` +
       `WHERE IsPersonAccount = true AND Student_ID_4D__c IN (${inClause})`;
 
     let nextUrl: string | undefined =
@@ -289,6 +299,8 @@ async function fetchAccountMap(
       for (const rec of resp.data.records) {
         if (rec.Student_ID_4D__c) {
           map.set(rec.Student_ID_4D__c, {
+            accountId: rec.Id,
+            contactId: rec.PersonContactId ?? "",
             firstName: rec.FirstName ?? "",
             lastName:  rec.LastName  ?? "",
           });
@@ -323,15 +335,22 @@ function mapToTranscriptRecord(
   };
 
   // ── Person Account link + name ────────────────────────────────────────────
-  // Account__c lookup set via external ID — SF fails the record if not found,
-  // which surfaces it in the results sheet error CSV.
-  record["Account__r.Student_ID_4D__c"] = studentId;
+  // Student__c (Account) = matched Person Account Id.
+  // Contact__c (Contact) = that Person Account's PersonContactId.
+  // No match → the raw Student_ID is sent in Student__c on purpose: it is not
+  // a valid Id, so Salesforce rejects the record and it lands in the results
+  // sheet error CSV with the Student_ID visible in the error text.
+  if (account) {
+    record.Student__c = account.accountId;
+    if (account.contactId) record.Contact__c = account.contactId;
+  } else if (studentId) {
+    record.Student__c = studentId;
+  }
   // Names come from the matched Account; omitted if account not in SF yet.
   if (account?.firstName) record.First_Name__c = account.firstName;
   if (account?.lastName)  record.Last_Name__c  = account.lastName;
 
   // ── Direct maps ───────────────────────────────────────────────────────────
-  if (studentId) record.Student_ID__c = studentId;
 
   const email = cleanEmail(raw.Email_Address);
   if (email) record.Email_Address__c = email;
@@ -449,8 +468,9 @@ function buildRecords(
 
   for (const { raw, parentId, studentId, requestDate, sentDate, qtyTotal } of rows) {
     // Account may or may not exist — always submit the record.
-    // If Student_ID_4D__c has no match in SF, the Bulk API will fail that
-    // record and it will appear in the results sheet error CSV.
+    // If Student_ID_4D__c has no match in SF, the raw Student_ID is sent in
+    // Student__c, the Bulk API fails that record and it appears in the
+    // results sheet error CSV.
     const account = accountMap.get(studentId);
 
     sfRecords.push(
@@ -529,8 +549,9 @@ export const transcriptRequestImport = flow({
   stableKey: "tr112233-4455-4c67-8891-aabbccddeeff",
   description:
     "Streams the Transcript_Request TSV from Google Drive, filters to the " +
-    "2-year window (Request_Date >= 2024-07-07), skips records with no " +
-    "matching Person Account (matched via Student_ID_4D__c), then " +
+    "2-year window (Request_Date >= 2024-07-07), links each record to its " +
+    "Person Account (Student__c) and Person Contact (Contact__c) matched via " +
+    "Student_ID_4D__c (unmatched records are sent and rejected by SF), then " +
     "bulk-upserts CSP_Transcript_Request__c (name + Account link from " +
     "Account) and Transcript_Request_Item__c child records via Bulk API 2.0.",
 
@@ -582,6 +603,15 @@ export const transcriptRequestImport = flow({
     logger.info(
       `[Transcript Request Import] ${accountMap.size} matching Person Account(s) found.`,
     );
+    const unmatchedIds = uniqueStudentIds.filter((id) => !accountMap.has(id));
+    if (unmatchedIds.length > 0) {
+      logger.warn(
+        `[Transcript Request Import] ${unmatchedIds.length} Student ID(s) have no ` +
+          `Person Account — these records will be sent and rejected by Salesforce: ` +
+          unmatchedIds.slice(0, 50).join(", ") +
+          (unmatchedIds.length > 50 ? ", …" : ""),
+      );
+    }
 
     // ── Step 3: Build SF records (all submitted; unmatched accounts fail in SF) ─
     const { sfRecords, itemRecords } = buildRecords(rows, accountMap);
@@ -696,5 +726,8 @@ export const transcriptRequestImport = flow({
     };
   },
 });
+
+// Exported for unit tests.
+export { buildRecords, mapToTranscriptRecord };
 
 export default [transcriptRequestImport];

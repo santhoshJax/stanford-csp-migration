@@ -711,7 +711,9 @@ export const associateImport = flow({
     // ── 2b. Load correction sheet if enabled ───────────────────────────────────
     const correctionSheetId = correctionEnabled
       ? String(
-          (configVars as Record<string, unknown>)["Correction Sheet ID"] ?? "",
+          (configVars as Record<string, unknown>)[
+            "Student/Instructor/Associate Correction Sheet ID"
+          ] ?? "",
         ).trim()
       : "";
 
