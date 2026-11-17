@@ -1579,6 +1579,14 @@ export const registrationImport = flow({
       typeof triggerBody?.windowNumber === "number"
         ? triggerBody.windowNumber
         : 1;
+    // One results spreadsheet per run: created by the first window that sends
+    // records, then passed along so later windows add to it (same as Student
+    // and Course Import - 2 Year).
+    const resultsSheetId =
+      typeof triggerBody?.resultsSheetId === "string"
+        ? triggerBody.resultsSheetId
+        : undefined;
+    let nextResultsSheetId = resultsSheetId;
 
     logger.info(
       `[Registration Import] Starting window ${windowNumber} at byte ${byteOffset}…`,
@@ -1652,12 +1660,8 @@ export const registrationImport = flow({
 
     let { cardPaymentMethods, orders, payments } = windowResult;
     let { filteredOut } = windowResult;
-    const {
-      rowsInWindow,
-      hasMore,
-      nextByteOffset,
-      parsedHeaders,
-    } = windowResult;
+    const { rowsInWindow, hasMore, nextByteOffset, parsedHeaders } =
+      windowResult;
 
     logger.info(
       `[Registration Import] Window ${windowNumber} stream complete — ` +
@@ -1689,11 +1693,12 @@ export const registrationImport = flow({
           `${TERM_MATCH_EARLIEST_DATE}–${TWO_YEAR_CUTOFF} (exclusive) — reading the Enrollment file ` +
           `for Fall 2024+ courses (term ${FIRST_TERM_IN_SCOPE} or later)…`,
       );
-      const { matched, enrollmentRows } = await loadRegistrationIdsWithInScopeTerm(
-        enrollmentFileId,
-        gdToken,
-        candidateIds,
-      );
+      const { matched, enrollmentRows } =
+        await loadRegistrationIdsWithInScopeTerm(
+          enrollmentFileId,
+          gdToken,
+          candidateIds,
+        );
       const unknownCardTypes = new Map<string, number>();
       for (const row of windowResult.termCandidates) {
         if (!matched.has(stripDotZero(row.ID))) {
@@ -2115,8 +2120,9 @@ export const registrationImport = flow({
 
     // ── Phase 2d: Registration adjustment OrderItem (round 1 only) ───────────
     const adjustmentProductName =
-      String(configVars[REGISTRATION_ADJUSTMENT_PRODUCT_CONFIG_VAR] ?? "").trim() ||
-      DEFAULT_REGISTRATION_ADJUSTMENT_PRODUCT;
+      String(
+        configVars[REGISTRATION_ADJUSTMENT_PRODUCT_CONFIG_VAR] ?? "",
+      ).trim() || DEFAULT_REGISTRATION_ADJUSTMENT_PRODUCT;
     const adjustmentItems: SfRecord[] = [];
     let adjustmentResult = {
       processed: 0,
@@ -2149,7 +2155,10 @@ export const registrationImport = flow({
           );
         } else {
           for (const order of withAdjustment) {
-            const item = mapToRegistrationAdjustmentItem(order, adjustmentEntryId);
+            const item = mapToRegistrationAdjustmentItem(
+              order,
+              adjustmentEntryId,
+            );
             if (item) adjustmentItems.push(item);
           }
           logger.info(
@@ -2292,69 +2301,87 @@ export const registrationImport = flow({
           )
         : { processed: 0, failed: 0, successfulCsv: "", failedCsv: "" };
 
-    // ── Results sheet ─────────────────────────────────────────────────────────
-    try {
-      const sheet = await createPerObjectResultsSheet({
-        flowName: "Registration Import",
-        objects: [
-          {
-            objectName: SF_CARD_PAYMENT_METHOD,
-            successfulCsv: cpmSuccessfulCsv,
-            failedCsv: cpmFailedCsv,
-          },
-          {
-            objectName: SF_ORDER,
-            successfulCsv: orderSuccessfulCsv,
-            failedCsv: orderFailedCsv,
-          },
-          {
-            objectName: `${SF_ORDER_ITEM} (Registration Fee)`,
-            successfulCsv: feeResult.successfulCsv,
-            failedCsv: feeResult.failedCsv,
-          },
-          {
-            objectName: `${SF_ORDER_ITEM} (STAP)`,
-            successfulCsv: stapResult.successfulCsv,
-            failedCsv: stapResult.failedCsv,
-          },
-          {
-            objectName: `${SF_ORDER_ITEM} (Adjustment)`,
-            successfulCsv: adjustmentResult.successfulCsv,
-            failedCsv: adjustmentResult.failedCsv,
-          },
-          {
-            objectName: `${SF_ORDER_ITEM} (Drop)`,
-            successfulCsv: dropResult.successfulCsv,
-            failedCsv: dropResult.failedCsv,
-          },
-          {
-            objectName: SF_PAYMENT_GROUP,
-            successfulCsv: pgSuccessfulCsv,
-            failedCsv: pgFailedCsv,
-          },
-          ...(ORDER_FLOWS_CREATE_PAYMENTS
-            ? [
-                {
-                  objectName: SF_PAYMENT,
-                  successfulCsv: paymentSuccessfulCsv,
-                  failedCsv: paymentFailedCsv,
-                },
-                {
-                  objectName: SF_REFUND,
-                  successfulCsv: refundResult.successfulCsv,
-                  failedCsv: refundResult.failedCsv,
-                },
-              ]
-            : []),
-        ],
-        accessToken: gdToken,
-        folderId: failedFolderId,
-      });
-      logger.info(`[Registration Import] Results sheet: ${sheet.url}`);
-    } catch (err) {
-      logger.warn(
-        `[Registration Import] Could not write results sheet: ${String(err)}`,
+    // ── Results sheet (skipped when this window sent nothing) ────────────────
+    const windowSentRecords =
+      cardPaymentMethods.length > 0 ||
+      plan.toUpsert.length > 0 ||
+      feeItems.length > 0 ||
+      stapItems.length > 0 ||
+      adjustmentItems.length > 0 ||
+      dropItems.length > 0 ||
+      paymentGroups.length > 0 ||
+      payments.length > 0 ||
+      refunds.length > 0;
+    if (!windowSentRecords) {
+      logger.info(
+        `[Registration Import] Window ${windowNumber}: nothing sent — results sheet not written.`,
       );
+    } else {
+      try {
+        const sheet = await createPerObjectResultsSheet({
+          flowName: "Registration Import",
+          objects: [
+            {
+              objectName: SF_CARD_PAYMENT_METHOD,
+              successfulCsv: cpmSuccessfulCsv,
+              failedCsv: cpmFailedCsv,
+            },
+            {
+              objectName: SF_ORDER,
+              successfulCsv: orderSuccessfulCsv,
+              failedCsv: orderFailedCsv,
+            },
+            {
+              objectName: `${SF_ORDER_ITEM} (Registration Fee)`,
+              successfulCsv: feeResult.successfulCsv,
+              failedCsv: feeResult.failedCsv,
+            },
+            {
+              objectName: `${SF_ORDER_ITEM} (STAP)`,
+              successfulCsv: stapResult.successfulCsv,
+              failedCsv: stapResult.failedCsv,
+            },
+            {
+              objectName: `${SF_ORDER_ITEM} (Adjustment)`,
+              successfulCsv: adjustmentResult.successfulCsv,
+              failedCsv: adjustmentResult.failedCsv,
+            },
+            {
+              objectName: `${SF_ORDER_ITEM} (Drop)`,
+              successfulCsv: dropResult.successfulCsv,
+              failedCsv: dropResult.failedCsv,
+            },
+            {
+              objectName: SF_PAYMENT_GROUP,
+              successfulCsv: pgSuccessfulCsv,
+              failedCsv: pgFailedCsv,
+            },
+            ...(ORDER_FLOWS_CREATE_PAYMENTS
+              ? [
+                  {
+                    objectName: SF_PAYMENT,
+                    successfulCsv: paymentSuccessfulCsv,
+                    failedCsv: paymentFailedCsv,
+                  },
+                  {
+                    objectName: SF_REFUND,
+                    successfulCsv: refundResult.successfulCsv,
+                    failedCsv: refundResult.failedCsv,
+                  },
+                ]
+              : []),
+          ],
+          accessToken: gdToken,
+          folderId: failedFolderId,
+          spreadsheetId: resultsSheetId,
+        });
+        nextResultsSheetId = sheet.spreadsheetId;
+        logger.info(`[Registration Import] Results sheet: ${sheet.url}`);
+      } catch (err) {
+        logger.warn(
+          `[Registration Import] Could not write results sheet: ${String(err)}`,
+        );
+      }
     }
 
     // ── Summary ───────────────────────────────────────────────────────────────
@@ -2397,6 +2424,7 @@ export const registrationImport = flow({
         byteOffset: nextByteOffset,
         headers: parsedHeaders,
         windowNumber: windowNumber + 1,
+        resultsSheetId: nextResultsSheetId,
       });
     } else {
       logger.info(
