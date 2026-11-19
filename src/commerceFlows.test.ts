@@ -49,8 +49,13 @@ import {
 import {
   mapToPayment,
   newPaymentSkips,
-  mapToRefund,
-  mapToRefundLinePayment,
+  applyRefundLink,
+  findRefundPayment,
+  planDraftLoad,
+  toProcessedUpdate,
+  toPicklistValue,
+  PAYMENT_SUB_TYPE_VALUES,
+  PAYMENT_TYPE_VALUES,
 } from "./paymentsFlow";
 
 const logger = { warn: jest.fn() };
@@ -368,30 +373,95 @@ describe("Payments → Payment / Refund", () => {
     Student_ID: "90471855",
     Registration_ID: "560585",
     Transcript_Request_ID: "0",
+    Payment_Type: "CC",
     Payment_Sub_Type: "STAP",
     Payment_Source: "HOP",
     Transaction_No: "3872081732170178147362",
     Sales_Amount: "510",
+    Refund_Amount: "0",
     Date_Time_New: "20260102030405",
-    Refund_Amount: "25",
+    Freeze: "True",
   };
-  it("maps through the PaymentGroup, sets STAP_Amount__c and a refund amount", () => {
-    const skips = newPaymentSkips();
-    const m = mapToPayment(row, groups, skips, logger, "load");
+  it("maps a payment row through the PaymentGroup with type, sub type, freeze and STAP", () => {
+    const m = mapToPayment(row, groups, newPaymentSkips(), logger, "load");
+    expect(m?.refund).toBeUndefined();
     expect(m?.payment).toMatchObject({
       External_ID_4D__c: "PAY-1",
       "PaymentGroup.External_ID_4D__c": "REG-560585",
-      STAP_Amount__c: 510,
-      Payment_Source__c: "HOP",
+      "Account.Student_ID_4D__c": "90471855",
+      Type: "Capture",
+      Status: "Draft",
+      ProcessingMode: "External",
       Amount: 510,
+      Date: "2026-01-02T03:04:05.000Z",
+      GatewayRefNumber: "3872081732170178147362",
+      Payment_Source__c: "HOP",
+      Payment_Type__c: "CC",
+      Payment_Sub_Type__c: "STAP",
+      Freeze__c: true,
+      STAP_Amount__c: 510,
     });
     expect(m?.payment).not.toHaveProperty(
       "Transcript_Request__r.External_ID_4D__c",
     );
-    expect(m?.refundAmount).toBe(25);
-    expect(mapToRefund(m!.payment, 25)).toMatchObject({
+  });
+  it("matches picklist values without case and leaves unknown values blank", () => {
+    expect(toPicklistValue("AMEX", PAYMENT_SUB_TYPE_VALUES)).toBe("AmEx");
+    expect(toPicklistValue(" check ", PAYMENT_TYPE_VALUES)).toBe("Check");
+    expect(toPicklistValue("", PAYMENT_TYPE_VALUES)).toBeUndefined();
+    const s = newPaymentSkips();
+    const m = mapToPayment(
+      { ...row, Payment_Sub_Type: "Bitcoin" },
+      groups,
+      s,
+      logger,
+      "load",
+    );
+    expect(m?.payment).not.toHaveProperty("Payment_Sub_Type__c");
+    expect(m?.payment).not.toHaveProperty("STAP_Amount__c");
+    expect(s.unknownPicklistValue).toBe(1);
+  });
+  it("maps a refund row (Sales_Amount 0) to a Refund on the drop registration's group", () => {
+    const m = mapToPayment(
+      {
+        ...row,
+        ID: "4",
+        Sales_Amount: "0",
+        Refund_Amount: "300",
+        Reason: "Dropped",
+      },
+      groups,
+      newPaymentSkips(),
+      logger,
+      "load",
+    );
+    expect(m?.payment).toBeUndefined();
+    expect(m?.registrationId).toBe("560585");
+    expect(m?.refund).toEqual({
+      External_ID_4D__c: "PAY-4",
+      Status: "Draft",
+      ProcessingMode: "External",
+      Date: "2026-01-02T03:04:05.000Z",
+      "Account.Student_ID_4D__c": "90471855",
       "PaymentGroup.External_ID_4D__c": "REG-560585",
+      GatewayRefNumber: "3872081732170178147362",
+      Comments: "Dropped",
+      Amount: 300,
+      Type: "NonReferenced",
     });
+  });
+  it("skips rows with no amount at all", () => {
+    const s = newPaymentSkips();
+    expect(
+      mapToPayment(
+        { ...row, Sales_Amount: "0", Refund_Amount: "0" },
+        groups,
+        s,
+        logger,
+        "load",
+      ),
+    ).toBeNull();
+    expect(s.zeroAmount).toBe(1);
   });
   it("does not match a PaymentGroup keyed with the raw (unprefixed) Registration id", () => {
     const s = newPaymentSkips();
@@ -399,18 +469,24 @@ describe("Payments → Payment / Refund", () => {
     expect(m?.payment).not.toHaveProperty("PaymentGroup.External_ID_4D__c");
     expect(s.registrationPaymentGroupMissing).toBe(1);
   });
-  it("applies scope, missing-group, and skip-mode rules", () => {
+  it("loads a row before the cutoff only when its Order is in Salesforce", () => {
+    const old = { ...row, Date_Time_New: "20240801000000" };
     const s1 = newPaymentSkips();
     expect(
-      mapToPayment(
-        { ...row, Date_Time_New: "20200101000000" },
-        groups,
-        s1,
-        logger,
-        "load",
-      ),
+      mapToPayment(old, groups, s1, logger, "load")?.payment,
+    ).toMatchObject({ "PaymentGroup.External_ID_4D__c": "REG-560585" });
+    expect(s1.loadedBeforeCutoff).toBe(1);
+    const s2 = newPaymentSkips();
+    expect(mapToPayment(old, new Set(), s2, logger, "load")).toBeNull();
+    expect(s2.outOfScope).toBe(1);
+    expect(s2.registrationPaymentGroupMissing).toBe(0);
+    const s3 = newPaymentSkips();
+    expect(
+      mapToPayment({ ...row, Date_Time_New: "" }, groups, s3, logger, "load"),
     ).toBeNull();
-    expect(s1.outOfScope).toBe(1);
+    expect(s3.outOfScope).toBe(1);
+  });
+  it("loads an in-scope row without the link when its registration is not in Salesforce; skip mode drops it", () => {
     const s2 = newPaymentSkips();
     const unlinked = mapToPayment(
       { ...row, Registration_ID: "1" },
@@ -419,7 +495,6 @@ describe("Payments → Payment / Refund", () => {
       logger,
       "load",
     );
-    // Registration not in Salesforce: payment still loads, without the link.
     expect(unlinked?.payment).toMatchObject({
       External_ID_4D__c: "PAY-1",
       Amount: 510,
@@ -433,37 +508,104 @@ describe("Payments → Payment / Refund", () => {
     expect(mapToPayment(row, groups, s3, logger, "skip")).toBeNull();
     expect(s3.skippedRegistrationLinked).toBe(1);
   });
-  it("loads a non-registration payment in skip mode and builds a Referenced refund", () => {
-    const s = newPaymentSkips();
-    const m = mapToPayment(
-      { ...row, Registration_ID: "0" },
-      groups,
-      s,
-      logger,
-      "skip",
+});
+
+describe("Payments → refund linked to the prior registration's payment (2026-11-19)", () => {
+  const refundRow = (registrationId: string) => ({
+    registrationId,
+    refund: {
+      External_ID_4D__c: "PAY-253439",
+      Amount: 152,
+      Type: "NonReferenced",
+    },
+  });
+  // Drop 592386482 was made from 592384472 (Order.Prior_Registration__c).
+  const priors = new Map([["REG-592386482", "REG-592384472"]]);
+  it("links to the only payment on the prior registration", () => {
+    const found = findRefundPayment(
+      refundRow("592386482"),
+      priors,
+      new Map([["REG-592384472", ["PAY-251853"]]]),
     );
-    expect(m?.payment).not.toHaveProperty("PaymentGroup.External_ID_4D__c");
-    const refund = mapToRefund(m!.payment, 25);
-    expect(refund).toMatchObject({
-      External_ID_4D__c: "PAY-1",
-      Type: "Referenced",
-      Status: "Processed",
-      ProcessingMode: "External",
-      Amount: 25,
-      "Account.Student_ID_4D__c": "90471855",
-      Date: "2026-01-02T03:04:05.000Z",
-    });
-    // Refund has no PaymentId — the link is a RefundLinePayment.
-    expect(refund).not.toHaveProperty("PaymentId");
-    expect(refund).not.toHaveProperty("PaymentGroup.External_ID_4D__c");
+    expect(found).toEqual({ paymentExtId: "PAY-251853" });
     expect(
-      mapToRefundLinePayment("0nr000000000001", "0pa000000000001", 25),
+      applyRefundLink(refundRow("592386482").refund, "PAY-251853"),
     ).toEqual({
-      attributes: { type: "RefundLinePayment" },
-      RefundId: "0nr000000000001",
-      PaymentId: "0pa000000000001",
-      Amount: 25,
-      Type: "Applied",
+      External_ID_4D__c: "PAY-253439",
+      Amount: 152,
+      Type: "Referenced",
+      "Payment__r.External_ID_4D__c": "PAY-251853",
+    });
+  });
+  it("leaves the refund NonReferenced when there is no single payment to point to", () => {
+    expect(
+      findRefundPayment(
+        refundRow("592386482"),
+        priors,
+        new Map([["REG-592384472", ["PAY-1", "PAY-2"]]]),
+      ),
+    ).toEqual({ miss: "priorHasSeveralPayments" });
+    expect(
+      findRefundPayment(refundRow("592386482"), priors, new Map()),
+    ).toEqual({ miss: "priorHasNoPayment" });
+    expect(findRefundPayment(refundRow("999"), priors, new Map())).toEqual({
+      miss: "noPriorRegistration",
+    });
+    expect(findRefundPayment(refundRow(""), priors, new Map())).toEqual({
+      miss: "noRegistration",
+    });
+    const unlinked = applyRefundLink(
+      {
+        ...refundRow("592386482").refund,
+        Type: "Referenced",
+        "Payment__r.External_ID_4D__c": "PAY-1",
+      },
+      undefined,
+    );
+    expect(unlinked.Type).toBe("NonReferenced");
+    expect(unlinked).not.toHaveProperty("Payment__r.External_ID_4D__c");
+  });
+  it("uses the row's own payment when one row carries both amounts", () => {
+    expect(
+      findRefundPayment(
+        {
+          ...refundRow("592386482"),
+          payment: { External_ID_4D__c: "PAY-253439" },
+        },
+        priors,
+        new Map(),
+      ),
+    ).toEqual({ paymentExtId: "PAY-253439" });
+  });
+});
+
+describe("Payments → two rounds: Draft load, then Processed (2026-11-19)", () => {
+  const rec = (id: string) => ({
+    External_ID_4D__c: id,
+    Status: "Draft",
+    ProcessingMode: "External",
+    Amount: 10,
+  });
+  it("sends new records as mapped, existing Draft without ProcessingMode, and never re-sends Processed / Canceled", () => {
+    const plan = planDraftLoad(
+      [rec("PAY-1"), rec("PAY-2"), rec("PAY-3"), rec("PAY-4")],
+      new Map([
+        ["PAY-2", "Draft"],
+        ["PAY-3", "Processed"],
+        ["PAY-4", "Canceled"],
+      ]),
+    );
+    expect(plan.send).toEqual([
+      rec("PAY-1"),
+      { External_ID_4D__c: "PAY-2", Status: "Draft", Amount: 10 },
+    ]);
+    expect(plan.existingDraft).toBe(1);
+    expect(plan.alreadyFinal).toBe(2);
+  });
+  it("round 2 sends only the key and Status = Processed", () => {
+    expect(toProcessedUpdate("PAY-7")).toEqual({
+      External_ID_4D__c: "PAY-7",
+      Status: "Processed",
     });
   });
 });
@@ -883,7 +1025,7 @@ describe("Payments source (decided 2026-11-08)", () => {
       logger,
       "load",
     );
-    expect(m?.payment["PaymentGroup.External_ID_4D__c"]).toBe("PUR-12");
+    expect(m?.payment?.["PaymentGroup.External_ID_4D__c"]).toBe("PUR-12");
   });
   it("links a Transcript_Request_ID only when the request is in Salesforce", () => {
     const transcripts = new Set(["5001"]);
@@ -896,7 +1038,7 @@ describe("Payments source (decided 2026-11-08)", () => {
       "load",
       transcripts,
     );
-    expect(linked?.payment["Transcript_Request__r.External_ID_4D__c"]).toBe(
+    expect(linked?.payment?.["Transcript_Request__r.External_ID_4D__c"]).toBe(
       "5001",
     );
     const orphan = mapToPayment(
@@ -925,7 +1067,7 @@ describe("Payments source (decided 2026-11-08)", () => {
       logger,
       "load",
     );
-    expect(m?.payment["PaymentGroup.External_ID_4D__c"]).toBe("REG-560585");
+    expect(m?.payment?.["PaymentGroup.External_ID_4D__c"]).toBe("REG-560585");
     expect(s.bothRegistrationAndPurchase).toBe(1);
   });
   it("loads a payment with no Registration or Purchase (e.g. transcript fee) on the Account only", () => {

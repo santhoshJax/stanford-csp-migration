@@ -423,6 +423,17 @@ export const configPages = {
           "Migrates Payment and Refund records (External IDs prefixed PAY-). " +
           "Must run after Student and Registration Import.",
       }),
+      "Process Payments": configVar({
+        stableKey: "ppro2026-1119-4c05-8c20-1b2c3d4e5f19",
+        dataType: "boolean",
+        default: "false",
+        description:
+          "Round 2 of Payments Import. Leave false for the first run: Payments and " +
+          "Refunds are loaded as Draft (Draft records can still be deleted and " +
+          "reloaded). After checking them, set true and run Payments Import again: " +
+          "every Draft PAY- Payment and Refund is changed to Processed. Processed " +
+          "records cannot be deleted or changed back to Draft.",
+      }),
       "Alert File ID": configVar({
         stableKey: "al001122-3344-4556-7788-aabbccddeeff",
         dataType: "string",
