@@ -317,8 +317,9 @@
  *     Check_Amt instead of CC_Amt? Code unchanged pending their answer.
  *   - Windowed execution (new): rebuilds the ~190k-row Student email cache
  *     on every window rather than once for the whole file, since each
- *     execution is otherwise stateless. MAX_ROWS=25,000 keeps this to a few
- *     dozen rebuilds for the full file rather than hundreds — if the real
+ *     execution is otherwise stateless. MAX_ROWS=5,000 (was 25,000, lowered
+ *     2026-11-19 for the 15-minute execution limit) means ~100 windows for
+ *     the full file; windows with nothing in scope take a second or two — if the real
  *     row count turns out much larger than expected, or the cache rebuild
  *     cost becomes a real problem, worth revisiting (e.g. a wider MAX_ROWS,
  *     or caching the email lookup somewhere windows can share).
@@ -370,8 +371,13 @@ const SF_PAYMENT = "Payment";
 const SF_REFUND = "Refund";
 // Rows per execution window (see "Windowed execution" note in the header
 // comment). Bounded well under BULK_BATCH_SIZE so each window submits
-// exactly one Bulk API batch per object.
-const MAX_ROWS = 25_000;
+// exactly one Bulk API batch per object. 5,000 (was 25,000, changed
+// 2026-11-19): a re-run of the busiest 25,000-row window (17,220 Orders,
+// all already in Salesforce) went past Prismatic's 15-minute execution
+// limit, because updating existing records is much slower than creating
+// them. Recent rows are all in scope, so 5,000 rows ≈ 5,000 Orders per
+// execution, which leaves room for round 2 (activation) as well.
+const MAX_ROWS = 5_000;
 
 // 2-year scope filter — UPDATED 2026-11-16 (Santhosh): a registration is in
 // scope when EITHER
