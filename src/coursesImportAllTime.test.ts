@@ -177,3 +177,23 @@ describe("applyCourseCorrection", () => {
     expect(co).toEqual({ StartDate: "a" });
   });
 });
+
+describe("parseTuition (Course.Tuition → Tuition_Amount__c)", () => {
+  // Imported here so the course import tests cover the shared parser.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { parseTuition, parseFloatVal } = require("./courseUtils");
+  it("keeps 0 so a free course still gets a $0 price", () => {
+    expect(parseTuition("0")).toBe(0);
+    expect(parseTuition("0.0")).toBe(0);
+    expect(parseTuition("$0")).toBe(0);
+    // the general parser still treats 0 as blank for other fields
+    expect(parseFloatVal("0")).toBeNull();
+  });
+  it("reads normal amounts and leaves blank as blank", () => {
+    expect(parseTuition("425")).toBe(425);
+    expect(parseTuition("$1,275.50")).toBe(1275.5);
+    expect(parseTuition("")).toBeNull();
+    expect(parseTuition(undefined)).toBeNull();
+    expect(parseTuition("abc")).toBeNull();
+  });
+});

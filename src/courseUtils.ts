@@ -303,6 +303,21 @@ export function parseFloatVal(v: string | undefined | null): number | null {
   return isNaN(n) ? null : n;
 }
 
+/**
+ * Course.Tuition → CourseOffering.Tuition_Amount__c (Direct Map). Unlike
+ * parseFloatVal, 0 is kept: a free course needs Tuition_Amount__c = 0, because
+ * the org's CourseOfferingProductBuilder only creates the course's
+ * PricebookEntry when Tuition_Amount__c is not blank, and Registration Item
+ * Import skips enrollment lines whose course has no price (2026-11-24: 856
+ * courses with Tuition 0, e.g. 20234_SPA 101). Blank stays blank.
+ */
+export function parseTuition(v: string | undefined | null): number | null {
+  const s = String(v ?? "").replace(/[$,]/g, "").trim();
+  if (!s) return null;
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
 // ── LearningCourse dedup ──────────────────────────────────────────────────────
 
 export function stripSectionSuffix(code: string): string {

@@ -72,6 +72,7 @@ import {
   normaliseFormat,
   parseIntVal,
   parseFloatVal,
+  parseTuition,
   stripSectionSuffix,
   extractSectionSuffix,
   formatFromSuffix,
@@ -854,7 +855,9 @@ export const coursesImportAllTime = flow({
         // via API, same as Tier 1 and Tier 2.
         setInt("EnrollmentCapacity", row.Max_Enrollment);
         setFloat("Units__c", row.Units);
-        setFloat("Tuition_Amount__c", row.Tuition);
+        // Tuition 0 is kept (free course), see parseTuition.
+        const tuition = parseTuition(row.Tuition);
+        if (tuition !== null) co.Tuition_Amount__c = tuition;
         setFloat("Additional_Fee__c", row.Additional_Fee);
         const droppedSpecialPct = parseFloatVal(row.Dropped_Special_Percent);
         if (droppedSpecialPct !== null && droppedSpecialPct <= 100)

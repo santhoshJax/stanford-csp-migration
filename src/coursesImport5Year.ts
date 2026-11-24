@@ -46,6 +46,7 @@ import {
   parseCourseTime,
   parseIntVal,
   parseFloatVal,
+  parseTuition,
   stripSectionSuffix,
   extractSectionSuffix,
   formatFromSuffix,
@@ -1076,7 +1077,9 @@ export const coursesImport5Year = flow({
         }
         setFloat("Units__c", row.Units);
         setFloat("Additional_Fee__c", row.Additional_Fee);
-        setFloat("Tuition_Amount__c", row.Tuition);
+        // Tuition 0 is kept (free course), see parseTuition.
+        const tuition = parseTuition(row.Tuition);
+        if (tuition !== null) co.Tuition_Amount__c = tuition;
         const staffNotes = str(row.Staff_Notes);
         if (staffNotes) co.Staff_Notes__c = staffNotes;
         setBool("Limited_Enrollment__c", row.Limited_Enrollment);
