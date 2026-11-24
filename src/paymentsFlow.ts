@@ -86,7 +86,11 @@
  *   Payment_Source  → Payment.Payment_Source__c
  *   Transaction_No  → GatewayRefNumber   (Payment and Refund)
  *   Sales_Amount    → Payment.Amount; also STAP_Amount__c when Sub Type = STAP
- *   Refund_Amount   → Refund.Amount
+ *   Refund_Amount   → Refund.Amount; for a STAP refund (Sub Type = STAP)
+ *                     STAP_Refund_Amount__c instead, with Amount 0 (required)
+ *                     and STAP_Refund_Status__c "Completed". Card_Amount__c is
+ *                     not mapped (the app reads it only for group orders,
+ *                     and no migrated order is paid by more than one student).
  *   Date_Time_New   → Date (Payment and Refund), YYYYMMDDHHMMSS, stored as-is
  *   Reason          → Comments (Payment and Refund)
  *   Net_Amount      → Do Not Map
@@ -169,6 +173,15 @@ export const PAYMENT_SUB_TYPE_VALUES = [
   "CSP Gift Fund",
   "SHC-SOM",
 ];
+
+/** Refund fields for a STAP refund (workbook, updated 2026-11-21). */
+export const STAP_REFUND_AMOUNT_FIELD = "STAP_Refund_Amount__c";
+export const STAP_REFUND_STATUS_FIELD = "STAP_Refund_Status__c";
+/**
+ * Migrated STAP refunds were settled in 4D. "In Progress" would put them in
+ * Student Services' STAP reconciliation queue (StapRefundQueueController).
+ */
+export const STAP_REFUND_STATUS = "Completed";
 
 export const REFUND_TYPE_REFERENCED = "Referenced";
 export const REFUND_TYPE_NON_REFERENCED = "NonReferenced";
@@ -397,11 +410,23 @@ export function mapToPayment(
         `[Payments Import] Payments ${id} has a negative Refund_Amount (${refundRaw}) — using the absolute value`,
       );
     }
-    result.refund = {
+    const refundAmount = Math.abs(refundRaw);
+    const refund: SfRecord = {
       ...common,
-      Amount: Math.abs(refundRaw),
+      Amount: refundAmount,
       Type: REFUND_TYPE_NON_REFERENCED,
     };
+    // Workbook (updated 2026-11-21): a STAP refund's amount goes in
+    // STAP_Refund_Amount__c, not Amount. Amount is required on Refund, so it
+    // is 0 (nothing in the CSP app reads Refund.Amount).
+    if (
+      toPicklistValue(raw.Payment_Sub_Type, PAYMENT_SUB_TYPE_VALUES) === "STAP"
+    ) {
+      refund.Amount = 0;
+      refund[STAP_REFUND_AMOUNT_FIELD] = refundAmount;
+      refund[STAP_REFUND_STATUS_FIELD] = STAP_REFUND_STATUS;
+    }
+    result.refund = refund;
   }
 
   return result;

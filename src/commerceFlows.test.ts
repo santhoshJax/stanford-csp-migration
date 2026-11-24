@@ -426,6 +426,7 @@ describe("Payments → Payment / Refund", () => {
       {
         ...row,
         ID: "4",
+        Payment_Sub_Type: "Visa",
         Sales_Amount: "0",
         Refund_Amount: "300",
         Reason: "Dropped",
@@ -449,6 +450,22 @@ describe("Payments → Payment / Refund", () => {
       Amount: 300,
       Type: "NonReferenced",
     });
+  });
+  it("puts a STAP refund's amount in STAP_Refund_Amount__c, with Amount 0 and status Completed", () => {
+    const m = mapToPayment(
+      { ...row, ID: "295230", Sales_Amount: "0", Refund_Amount: "510" },
+      groups,
+      newPaymentSkips(),
+      logger,
+      "load",
+    );
+    expect(m?.refund).toMatchObject({
+      External_ID_4D__c: "PAY-295230",
+      Amount: 0,
+      STAP_Refund_Amount__c: 510,
+      STAP_Refund_Status__c: "Completed",
+    });
+    expect(m?.refund).not.toHaveProperty("Card_Amount__c");
   });
   it("skips rows with no amount at all", () => {
     const s = newPaymentSkips();
